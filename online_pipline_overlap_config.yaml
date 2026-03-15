@@ -1,0 +1,73 @@
+# overlap 版本在线说话人分离默认配置。
+
+# 模型与运行环境。
+# 推理设备；可设为 auto / cpu / cuda:0。
+device: auto
+# speaker encoder 类型；当前 overlap 流水线只支持 eres2netv2。
+model_type: eres2netv2
+# 本地 speaker encoder checkpoint 路径；留空时会自动从 ModelScope 下载默认 ERes2NetV2。
+model_path: #./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt
+# pyannote segmentation 模型名称。
+segmentation_model: pyannote/segmentation-3.0
+# Hugging Face 模型缓存目录。
+hf_cache_dir: ./pretrained/huggingface
+
+# 音频与上下文调度。
+# 目标时刻左侧历史上下文长度；建议与右侧总和保持在 10s 左右。
+context_left_duration: 5.0
+# 目标时刻右侧未来上下文长度；建议与左侧总和保持在 10s 左右。
+context_right_duration: 5.0
+# 在线推进步长；越小越细，越大越省算力。
+step: 0.5
+
+# segmentation 与目标 speaker 选择。
+# segmentation 判定 local speaker 为活跃的阈值。
+tau_active: 0.50
+# 目标时间附近至少有一个 speaker 达到该累计活跃时长，当前帧才认为真的有人说话。
+target_primary_min_duration: 0.15
+# 次要/重叠 speaker 在目标时间附近的最小累计活跃时长；用于保留短重叠语音。
+target_overlap_min_duration: 0.08
+# 允许维护的最大全局 speaker 数量。
+max_speakers: 50
+
+# observation 构造与 embedding 提取。
+# 允许提取 embedding 的最短片段时长；调低可提升短重叠片段召回。
+min_segment_duration_for_embedding: 0.30
+# 允许提取 embedding 的最长片段时长；过长片段会按中心裁剪。
+max_segment_duration_for_embedding: 2.5
+# 候选 observation 中心距离目标时刻允许偏移的最大范围。
+max_segment_shift_from_center: 5.0
+# 批量提取 segment embedding 时的 batch size。
+segment_batch_size: 8
+
+# 全局 speaker 匹配与更新。
+# 当前 observation 与已有全局 speaker 都不够像时，更倾向新建 speaker 的阈值。
+delta_new: 0.35
+# observation 匹配已有全局 speaker 的主阈值；过低易误贴，过高易碎裂。
+global_match_threshold: 0.45
+# 全局 speaker 触发自动合并的相似度阈值；overlap 场景建议更保守。
+merge_threshold: 0.65
+# centroid 早期使用简单平均的样本窗口大小。
+sma_window: 10
+# 连续两次用于更新 centroid 的片段允许的最大重合度。
+update_segment_overlap_threshold: 0.50
+
+# streaming RTTM 输出控制。
+# RTTM 写出时允许保留的最短稳定片段时长；只影响输出，不影响 observation 选择。
+min_segment_duration: 0.35
+# 单个目标时刻最多输出几个 speaker；overlap 实验脚本当前使用 3。
+max_frame_speakers: 3
+# 稳定前缀至少累计多久才刷盘；调大可减少 RTTM 碎片，但会增加写出延迟。
+streaming_flush_interval: 20.0
+# 同一 speaker 相邻两段自动合并时允许的最大间隔。
+streaming_merge_gap: 0.75
+# 是否启用“短 speaker 延迟写出”；开启后，累计说话时长不足阈值的 speaker 先不落 RTTM。
+delay_short_speaker_output: true
+# 启用延迟写出时，speaker 累计说话时长至少达到多少秒才开始补写此前缓存的 RTTM。
+speaker_min_total_duration_to_emit: 5.0
+
+# 调试与额外导出。
+# 是否保存每个窗口的 segmentation 概率矩阵。
+save_segmentation_scores: false
+# 是否输出窗口级调试信息。
+debug: false
