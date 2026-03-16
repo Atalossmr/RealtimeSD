@@ -1,14 +1,14 @@
 # RealtimeSD
 
-基于 `pyannote/segmentation-3.0` 和 `ERes2NetV2` 的在线说话人分离实验仓库，重点面向 overlap diarization 场景。
+基于 [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) 和 [`3D-Speaker/ERes2NetV2`](https://github.com/modelscope/3D-Speaker) 的实时说话人分离流水线，重点面向重叠音频处理场景，是以下流程的简单工程实现。
+
+![流程图](docs/pipline.drawio.png)
 
 ## 主要内容
 
 - 在线 speaker diarization 流水线入口：`pipline.py`
-- overlap 实验配置：`online_pipline_overlap_config.yaml`
+- 配置：`config.yaml`
 - 运行脚本：`run.sh`、`test_der.sh`
-- DER 评估工具：`compute_der.py`
-- 详细设计说明：`online_pipline_overlap_notes.md`
 - 流水线实现说明：`pipline/README.md`
 
 ## 环境要求
@@ -116,19 +116,6 @@ RUN_NAME=baseline \
 bash test_der.sh ./examples
 ```
 
-`REF_RTTM` 现在支持两种形式：
-
-- 单个 RTTM 文件
-- RTTM 目录
-
-脚本会自动把它传给 `compute_der.py`，由工具判断当前是单文件评估还是批量评估。
-
-脚本层面也有一个容易混淆的点：
-
-- `DEBUG=1` 会同时传 `--debug --verbose`
-- 只开 `--verbose` 主要是把日志级别提升到 `DEBUG`
-- 真正的窗口级结构化调试输出由 `--debug` 控制
-
 常用环境变量：
 
 - `CONFIG_PATH`
@@ -171,7 +158,7 @@ python3 compute_der.py \
 
 ## 配置说明
 
-默认配置文件是 `online_pipline_overlap_config.yaml`，里面主要包含：
+默认配置文件是 `config.yaml`，里面主要包含：
 
 - 运行设备和模型路径
 - 左右上下文长度与在线步长

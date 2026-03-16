@@ -14,7 +14,7 @@ if [ -f ./.venv/bin/activate ]; then
 fi
 
 audio_input=${1:-./examples/}
-config_path=${CONFIG_PATH:-./online_pipline_overlap_config.yaml}
+config_path=${CONFIG_PATH:-./config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
@@ -28,7 +28,7 @@ run_name=${RUN_NAME:-default}
 test_name="pipline_exp"
 basic_dir="${output_root}/${test_name}"
 exp_dir="${basic_dir}/${run_name}"
-results_file="$basic_dir/grid_search_results.txt"
+results_file="$basic_dir/results.txt"
 
 rm -rf "$basic_dir"
 mkdir -p "$exp_dir"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DER 计算工具，支持单文件和批量 RTTM 评估。"""
+"""DER 计算工具，依赖 speakerlab/md-eval.pl，支持单文件和批量 RTTM 评估。"""
 
 from __future__ import annotations
 

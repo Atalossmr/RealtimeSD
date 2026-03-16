@@ -13,27 +13,27 @@ if [ -f ./.venv/bin/activate ]; then
     source ./.venv/bin/activate
 fi
 
-audio_input=${1:-./datasets/aishell4-test/L_R003S01C02.wav}
-config_path=${CONFIG_PATH:-./online_pipline_overlap_config.yaml}
+audio_input=${1:-./datasets/aishell4-test}
+config_path=${CONFIG_PATH:-./config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
-ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/rttm/L_R003S01C02.rttm}}
+ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/rttm}}
 debug_flag=${DEBUG:-0}
 save_scores_flag=${SAVE_SEGMENTATION_SCORES:-0}
 der_verbose_flag=${DER_VERBOSE:-1}
 output_root=${OUTPUT_ROOT:-./exp}
 run_name=${RUN_NAME:-default}
 
-test_name="online_native_eres2netv2_overlap"
+test_name="der_test"
 basic_dir="${output_root}/${test_name}"
 exp_dir="${basic_dir}/${run_name}"
-results_file="$basic_dir/grid_search_results.txt"
+results_file="$basic_dir/results.txt"
 
 rm -rf "$basic_dir"
 mkdir -p "$exp_dir"
 
-echo "Online native ERes2NetV2 overlap pipeline test" > "$results_file"
+echo "DER test" > "$results_file"
 echo "================================================" >> "$results_file"
 echo "audio_input: $audio_input" >> "$results_file"
 echo "config_path: $config_path" >> "$results_file"
@@ -51,7 +51,7 @@ fi
 echo "" >> "$results_file"
 
 echo "=========================================="
-echo "Testing overlap pipeline with YAML config"
+echo "Testing with YAML config"
 echo "audio_input=$audio_input"
 echo "config_path=$config_path"
 echo "output_dir=$exp_dir"
@@ -179,5 +179,5 @@ else
 fi
 
 echo ""
-echo "Overlap streaming RTTM generation completed! Results saved to $results_file"
+echo "Results saved to $results_file"
 echo "Outputs written to: $basic_dir"

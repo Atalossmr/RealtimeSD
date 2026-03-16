@@ -54,7 +54,7 @@ update_segment_overlap_threshold: 0.50
 
 # streaming RTTM 输出控制。
 # RTTM 写出时允许保留的最短稳定片段时长；只影响输出，不影响 observation 选择。
-min_segment_duration: 0.35
+min_segment_duration: 0.30
 # 单个目标时刻最多输出几个 speaker；overlap 实验脚本当前使用 3。
 max_frame_speakers: 3
 # 稳定前缀至少累计多久才刷盘；调大可减少 RTTM 碎片，但会增加写出延迟。

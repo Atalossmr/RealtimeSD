@@ -22,7 +22,7 @@
 - `clustering`：回答“这些 local speaker 分别是谁”
 - `streaming`：回答“怎样把这些决策写成更稳定的 RTTM 片段”
 
-## overlap 版相对原在线版本的关键变化
+## 重叠音频处理相关内容
 
 ### 1. 目标 speaker 选择不再只看单帧
 
@@ -43,7 +43,7 @@
 
 ### 2. 同窗多个 local speaker 使用 Hungarian 联合分配
 
-overlap 场景里，一个常见错误是两个同时活跃的 local speaker 都与同一个 global centroid 相似，逐个贪心匹配时就会被错误贴到同一个人。这里的做法是：
+重叠场景里，一个常见错误是两个同时活跃的 local speaker 都与同一个 global centroid 相似，逐个贪心匹配时就会被错误贴到同一个人。这里的做法是：
 
 - 对当前窗口所有 observation 与所有 global centroid 计算相似度
 - 构造 `cost = 1 - similarity` 的代价矩阵
@@ -58,7 +58,7 @@ overlap 场景里，一个常见错误是两个同时活跃的 local speaker 都
 
 ### 3. observation 构造仍然坚持“非重叠优先”
 
-虽然这是 overlap 版本，但它在 speaker 身份维护上仍然比较保守。每个 local slot 构造 observation 时，会优先从非重叠帧中找候选区间；如果找不到，才回退到全部活跃帧。回退得到的 observation 会被标记为 `overlap_fallback`，默认不参与正常强更新，以降低对 centroid 的污染风险。
+它在 speaker 身份维护上保持保守。每个 local slot 构造 observation 时，会优先从非重叠帧中找候选区间；如果找不到，才回退到全部活跃帧。回退得到的 observation 会被标记为 `overlap_fallback`，默认不参与正常强更新，以降低对 centroid 的污染风险。
 
 这个设计的出发点是：先保证系统“能输出两个人”，再谨慎决定“是否让重叠片段强力参与身份更新”。
 
@@ -79,7 +79,7 @@ overlap 场景里，一个常见错误是两个同时活跃的 local speaker 都
 
 ### 5. streaming RTTM 写出改成按 speaker 维护活跃 turn
 
-当前版本不再只维护一个全局待写段，而是按 speaker 分别维护 `active_turns`：
+按 speaker 分别维护 `active_turns`：
 
 - 同一时刻允许多个 turn 并行延展
 - 优先写稳定前缀，而不是每一帧立即落盘尾部

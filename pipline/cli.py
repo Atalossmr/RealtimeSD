@@ -11,7 +11,7 @@ from .constants import BASE_DIR
 from .schema import PipelineConfig
 
 
-DEFAULT_CONFIG_PATH = BASE_DIR / "online_pipline_overlap_config.yaml"
+DEFAULT_CONFIG_PATH = BASE_DIR / "config.yaml"
 
 
 def _parser_dest_set(parser: argparse.ArgumentParser) -> set[str]:
