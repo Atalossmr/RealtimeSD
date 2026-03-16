@@ -5,7 +5,7 @@
 device: auto
 # speaker encoder 类型；当前 overlap 流水线只支持 eres2netv2。
 model_type: eres2netv2
-# 本地 speaker encoder checkpoint 路径；留空时会自动从 ModelScope 下载默认 ERes2NetV2。
+# 本地 speaker encoder checkpoint 路径；留空时会自动从 ModelScope 下载预训练 ERes2NetV2。
 model_path: # ./pretrained/modelscope/iic/speech_eres2netv2_sv_zh-cn_16k-common/pretrained_eres2netv2.ckpt
 # pyannote segmentation 模型名称。
 segmentation_model: pyannote/segmentation-3.0

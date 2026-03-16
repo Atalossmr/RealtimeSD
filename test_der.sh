@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # 用法:
-#   bash test_single_online_overlap.sh [audio_input]
+#   bash test_der.sh [audio_input]
 #
 # 这个脚本专门测试 overlap 版本在线流水线。
 # 运行参数尽量以 `online_pipline_overlap_config.yaml` 为准，
@@ -13,17 +13,17 @@ if [ -f ./.venv/bin/activate ]; then
     source ./.venv/bin/activate
 fi
 
-audio_input=${1:-./datasets/aishell4-test/S_R004S04C01.wav}
+audio_input=${1:-./datasets/aishell4-test/L_R003S01C02.wav}
 config_path=${CONFIG_PATH:-./online_pipline_overlap_config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
-ref_rttm=${REF_RTTM:-./datasets/rttm/S_R004S04C01.rttm}
-ref_rttm_dir=${REF_RTTM_DIR:-}
+ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/rttm/L_R003S01C02.rttm}}
 debug_flag=${DEBUG:-0}
 save_scores_flag=${SAVE_SEGMENTATION_SCORES:-0}
+der_verbose_flag=${DER_VERBOSE:-1}
 output_root=${OUTPUT_ROOT:-./exp}
-run_name=${RUN_NAME:-config_default}
+run_name=${RUN_NAME:-default}
 
 test_name="online_native_eres2netv2_overlap"
 basic_dir="${output_root}/${test_name}"
@@ -44,6 +44,10 @@ if [ -n "$hf_cache_dir" ]; then
     echo "hf_cache_dir_override: $hf_cache_dir" >> "$results_file"
 fi
 echo "run_name: $run_name" >> "$results_file"
+echo "der_verbose: $der_verbose_flag" >> "$results_file"
+if [ -n "$ref_path" ]; then
+    echo "ref_path: $ref_path" >> "$results_file"
+fi
 echo "" >> "$results_file"
 
 echo "=========================================="
@@ -114,7 +118,7 @@ echo "Result: $run_name -> streaming_rttm_files=$rttm_count"
 echo ""
 echo "========== DER Results =========="
 
-if [ -n "$ref_rttm" ] || [ -d "$ref_rttm_dir" ]; then
+if [ -n "$ref_path" ]; then
     der_log="$exp_dir/der.log"
     der_summary="$exp_dir/der_summary.txt"
     : > "$der_log"
@@ -126,19 +130,17 @@ if [ -n "$ref_rttm" ] || [ -d "$ref_rttm_dir" ]; then
         echo "========== Computing DER for $run_name ==========" | tee -a "$der_log"
         der_cmd=(
             python3 compute_der.py
-            --sys-dir "$exp_dir"
+            --sys "$exp_dir"
+            --ref "$ref_path"
             --summary-file "$der_summary"
             --collar 0.0
             --ignore-overlap
             --sys-suffix .streaming.rttm
             --ref-suffix .rttm
-            --verbose
         )
 
-        if [ -n "$ref_rttm" ]; then
-            der_cmd+=(--ref "$ref_rttm")
-        else
-            der_cmd+=(--ref-dir "$ref_rttm_dir")
+        if [ "$der_verbose_flag" = "1" ]; then
+            der_cmd+=(--verbose)
         fi
 
         "${der_cmd[@]}" | tee -a "$der_log"
@@ -173,7 +175,7 @@ PY
         fi
     fi
 else
-    echo "DER skipped: REF_RTTM/REF_RTTM_DIR not set"
+    echo "DER skipped: REF_RTTM not set"
 fi
 
 echo ""

@@ -1,174 +1,297 @@
-# online_pipline_overlap
+# overlap 在线说话人分离流水线
 
-基于segmentation-3.0和EResNetV2的在线说话人分离流水线实现。
+这个目录实现的是仓库里专门面向重叠说话场景的在线 diarization 流水线。重点关注 overlap 场景里最容易出问题的几个环节：第二说话人被截掉、多个 local speaker 被错贴到同一个 global speaker、streaming RTTM 输出过碎，以及短促重叠语音在 observation 阶段就被过滤掉。
 
-它的目标是处理下面这些 overlap 场景问题：
+## 总体流程
 
-- 同一时刻输出多个 speaker；
-- 避免两个同时活跃的 local speaker 被贴到同一个 global speaker；
-- 减少 streaming RTTM 的碎片化输出；
-- 提高短重叠语音进入全局匹配流程的概率。
+处理一段音频时，主流程可以概括为：
 
-更完整的设计说明见仓库根目录：`online_pipline_overlap_notes.md`
+1. 读取音频、配置和模型
+2. 按 `step` 沿时间轴推进
+3. 围绕当前 `target_time` 截取固定左右上下文
+4. 对整个上下文运行 `pyannote/segmentation-3.0`
+5. 在 `target_time` 附近的小窗内统计各个 local slot 的累计活跃时长
+6. 只对真正持续活跃的 local slot 构造 observation
+7. 提取 speaker embedding，并映射到 global speaker
+8. 聚合当前目标时刻的 global speaker 证据
+9. 把决策转成稳定的 streaming RTTM 并持续写盘
 
-## 目录结构
+按职责可以把它分成三层：
 
-- `app.py`
-  - 应用入口编排。
-- `cli.py`
-  - CLI 参数与 YAML 配置融合。
-- `pipeline.py`
-  - 主流程串联。
-- `segmentation.py`
-  - target local speaker 选择与 observation 构造。
-- `clustering.py`
-  - global speaker 联合分配、更新与 merge。
-- `streaming.py`
-  - 流式 RTTM 写出。
-- `schema.py`
-  - 配置和数据结构定义。
-- `utils.py`
-  - 通用工具函数。
+- `segmentation`：回答“这一时刻附近有哪些 local speaker 在说话”
+- `clustering`：回答“这些 local speaker 分别是谁”
+- `streaming`：回答“怎样把这些决策写成更稳定的 RTTM 片段”
 
-## 依赖项
+## overlap 版相对原在线版本的关键变化
 
-`online_pipline_overlap` 不是一个完全独立的小包，它依赖仓库里的本地模块、外部 Python 包，以及两类模型权重。
+### 1. 目标 speaker 选择不再只看单帧
 
-### Python 包
+在 overlap 场景里，只靠单帧活跃度判断非常脆弱，因为第二说话人往往只在部分帧活跃，且得分容易闪烁。当前实现改成在 `target_time` 周围取一个与 `step` 对齐的小窗口，统计每个 local slot 的累计活跃时长。
 
-- `torch`
-  - 模型推理与张量计算。
-- `torchaudio`
-  - 音频加载、重采样，以及底层音频解码。
-- `numpy`
-  - 分数矩阵、时间轴和 embedding 后处理。
-- `scipy`
-  - 匈牙利算法分配（`linear_sum_assignment`）。
-- `pyyaml`
-  - 读取 YAML 配置。
-- `huggingface_hub`
-  - 下载和缓存 `pyannote/segmentation-3.0`。
-- `modelscope`
-  - 在未提供本地 ERes2NetV2 checkpoint 时，自动下载默认 speaker encoder。
-- `pyannote.audio`
-  - segmentation 模型加载、推理与 powerset 解码。
+核心逻辑是：
 
-如果你是从仓库根目录新建环境，至少需要先安装：
+- 先用 `target_overlap_min_duration` 过滤太短的候选
+- 再要求至少有一个候选达到 `target_primary_min_duration`
+- 满足后才认为这一时刻真的有人说话
 
-```bash
-pip install -r requirements.txt huggingface_hub pyannote.audio
-```
+这样做更适合保留短促重叠语音，也更能抵抗瞬时噪声。
 
-### 仓库内本地依赖
+对应代码主要在 `segmentation.py`：
 
-当前 overlap 流水线还直接依赖仓库里的 `speakerlab` 模块，包括：
+- `select_target_local_indices`
+- `summarize_target_local_activity`
 
-- `speakerlab.models.eres2net.ERes2NetV2`
-- `speakerlab.process.processor.FBank`
-- `speakerlab.utils.fileio.load_audio`
+### 2. 同窗多个 local speaker 使用 Hungarian 联合分配
 
-这也是为什么当前实现需要在完整的 `3D-Speaker` 仓库里运行，而不是只拷贝 `online_pipline_overlap/` 目录。
+overlap 场景里，一个常见错误是两个同时活跃的 local speaker 都与同一个 global centroid 相似，逐个贪心匹配时就会被错误贴到同一个人。这里的做法是：
 
-### 模型与权重
+- 对当前窗口所有 observation 与所有 global centroid 计算相似度
+- 构造 `cost = 1 - similarity` 的代价矩阵
+- 通过 Hungarian algorithm 一次性完成联合 assignment
 
-运行时需要两类模型：
+这样等价于在同一个时间窗里显式加入“多个同时活跃 local 不能映射到同一个 global speaker”的约束。
 
-- ERes2NetV2 speaker encoder checkpoint
-  - 可通过 `--model_path` 指定本地权重；若不提供，则会自动尝试从 ModelScope 下载默认的 `iic/speech_eres2netv2_sv_zh-cn_16k-common`。
-- `pyannote/segmentation-3.0`
-  - 用于在线 segmentation；如果本地缓存不存在，会自动从 Hugging Face 下载。
+相关代码在 `clustering.py`：
 
-默认情况下，segmentation 模型会缓存到：
+- `_build_assignment`
+- `push_window`
 
-- `./pretrained/huggingface`
+### 3. observation 构造仍然坚持“非重叠优先”
 
-默认情况下，自动下载的 ERes2NetV2 speaker encoder 会缓存到：
+虽然这是 overlap 版本，但它在 speaker 身份维护上仍然比较保守。每个 local slot 构造 observation 时，会优先从非重叠帧中找候选区间；如果找不到，才回退到全部活跃帧。回退得到的 observation 会被标记为 `overlap_fallback`，默认不参与正常强更新，以降低对 centroid 的污染风险。
 
-- `./pretrained/modelscope/iic/speech_eres2netv2_sv_zh-cn_16k-common/pretrained_eres2netv2.ckpt`
+这个设计的出发点是：先保证系统“能输出两个人”，再谨慎决定“是否让重叠片段强力参与身份更新”。
 
-示例 speaker encoder checkpoint 路径：
+相关代码在 `segmentation.py`：
 
-- `./pretrained/custom_eres2netv2_finetune/final_model.ckpt`
-- `./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt`
+- `_non_overlap_mask`
+- `_select_region_for_local`
 
-### Hugging Face 访问
+### 4. 最终输出按时间窗聚合，而不是按单帧瞬时分数截断
 
-如果 `pyannote/segmentation-3.0` 尚未缓存到本地，你通常需要：
+原始按单帧分数截断的策略在 overlap 场景下很容易把第二说话人裁掉。当前版本会先把目标时间附近的 local 证据聚合到 global speaker 维度，再综合活跃总时长、平均分数和目标帧得分，最后才按 `max_frame_speakers` 做截断。
 
-- 能访问 Hugging Face；
-- 已获得对应模型的访问权限；
-- 必要时通过 `--hf_token` 提供 token。
+这比“谁当前帧最高就保留谁”的策略稳定得多。
 
-### 输入与运行环境要求
+相关代码在 `pipeline.py`：
 
-- 输入音频支持：`.wav`、`.mp3`、`.flac`
-- 流水线内部统一按 `16kHz` 工作；必要时会自动重采样
-- `--output_dir` 必须可写
-- `--device` 可设为 `auto`、`cpu` 或 `cuda:0`
+- `_target_frame_speakers`
 
-如果你的环境里 `torchaudio` 没有可用的编解码后端，`.mp3` / `.flac` 读取可能会失败；这时优先把音频转成 `.wav` 再运行。
+### 5. streaming RTTM 写出改成按 speaker 维护活跃 turn
 
-## 运行入口
+当前版本不再只维护一个全局待写段，而是按 speaker 分别维护 `active_turns`：
 
-推荐使用仓库根目录下的兼容入口脚本：
+- 同一时刻允许多个 turn 并行延展
+- 优先写稳定前缀，而不是每一帧立即落盘尾部
+- 在 turn 结束或 `finalize()` 时再补尾段
 
-```bash
-python3 online_pipline_overlap.py \
-  --wav ./datasets/tingshen_6.wav \
-  --model_path ./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt \
-  --output_dir ./tmp/overlap_run \
-  --config ./online_pipline_overlap_config.yaml \
-  --device auto
-```
+这能明显减少 overlap RTTM 中的碎片化输出。
 
-等价入口为：
+相关代码在 `streaming.py`。
 
-```bash
-python3 -m online_pipline_overlap.app \
-  --wav ./datasets/tingshen_6.wav \
-  --model_path ./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt \
-  --output_dir ./tmp/overlap_run \
-  --config ./online_pipline_overlap_config.yaml \
-  --device auto
-```
+### 6. 支持可选的短 speaker 延迟写出和 RTTM speaker 重映射
 
-## 输入形式
+为了方便排查短暂误检 speaker，streaming 层支持一组可选行为：
+
+- 开启 `delay_short_speaker_output` 后，speaker 在累计说话时长达到 `speaker_min_total_duration_to_emit` 前不会写入 RTTM
+- 达到阈值后，会把之前缓存的 RTTM 片段一次性补写
+- 如果整段音频结束时仍未达标，则不写入 RTTM，但会把缓存片段按 RTTM 风格打印到日志
+
+在这个模式下，还会维护一份内部 speaker id 到 RTTM speaker id 的映射：
+
+- 只有真正写入 RTTM 的 speaker 才会分配 RTTM id
+- RTTM speaker id 按首次写出的顺序连续编号
+- 运行结束后会统一打印最终映射，方便对照内部聚类结果和最终 RTTM
+
+## 模块分工
+
+### `app.py`
+
+最薄的一层 CLI 编排入口，负责：
+
+- 解析参数
+- 合并 YAML 配置
+- 校验运行必需项
+- 初始化流水线并遍历输入音频
+
+入口函数是 `pipline.app:main`。
+
+### `cli.py`
+
+负责命令行参数与 YAML 配置融合：
+
+- 先读取 YAML
+- 再用显式 CLI 参数覆盖
+- 最后转换为运行时配置对象 `PipelineConfig`
+
+当前默认配置文件路径就是仓库根目录的 `online_pipline_overlap_config.yaml`。
+
+### `schema.py`
+
+定义主流程共享的数据结构，例如：
+
+- `PipelineConfig`
+- `SegmentObservation`
+- `BufferedDecisionWindow`
+- `ResolvedDecisionWindow`
+- `StreamingFrameDecision`
+
+### `segmentation.py`
+
+负责在目标时间附近筛选值得跟踪的 local speaker，并为这些 local speaker 构造 observation 与 embedding 证据。
+
+### `clustering.py`
+
+负责维护 global speaker centroid，并处理：
+
+- Hungarian 联合分配
+- speaker 新建
+- speaker 更新
+- speaker 合并
+- 调试信息记录
+
+### `streaming.py`
+
+负责把目标时刻的离散 speaker 决策写成更稳定的 RTTM turn。
+
+### `pipeline.py`
+
+负责把整个处理链路真正串起来，是运行时的主逻辑编排层。
+
+### `utils.py`
+
+负责通用工具逻辑，例如音频路径收集、日志初始化等。
+
+## 参数分层理解
+
+为了避免把不同阶段的参数混在一起，建议按下面几层来理解。
+
+### 1. 音频与在线调度
+
+- `context_left_duration`：目标时刻左侧历史上下文长度
+- `context_right_duration`：目标时刻右侧未来上下文长度
+- `step`：在线推进步长，也是输出决策的基本时间粒度
+
+这组参数决定系统“看多宽、走多快”。
+
+### 2. segmentation 与目标 speaker 选择
+
+- `tau_active`：local slot 判定为活跃的阈值
+- `target_primary_min_duration`：至少一个 local speaker 达到该累计活跃时长，当前时刻才认为真的有人说话
+- `target_overlap_min_duration`：次要或重叠 speaker 的最低累计活跃时长
+
+这组参数决定哪些 local speaker 值得进入后续流程。
+
+### 3. observation 构造与 embedding 提取
+
+- `min_segment_duration_for_embedding`：允许提 embedding 的最短片段时长
+- `max_segment_duration_for_embedding`：允许提 embedding 的最长片段时长
+- `max_segment_shift_from_center`：候选片段中心离 `target_time` 允许偏移的最大范围
+- `segment_batch_size`：批量提 embedding 的 batch size
+
+这组参数决定提供给全局匹配器的证据质量和长度范围。
+
+### 4. 全局 speaker 匹配与更新
+
+- `delta_new`：更倾向新建 speaker 的阈值
+- `max_speakers`：最多维护多少个 global speaker
+- `global_match_threshold`：observation 贴已有 speaker 的主阈值
+- `merge_threshold`：全局 speaker 自动合并阈值
+- `sma_window`：centroid 前期使用简单平均更新的窗口大小
+- `update_segment_overlap_threshold`：连续两次更新片段允许的最大重合度
+
+这组参数决定 speaker 身份如何延续、何时分裂、何时合并。
+
+### 5. streaming RTTM 输出控制
+
+- `min_segment_duration`：RTTM 写出允许的最短稳定片段时长
+- `max_frame_speakers`：单个目标时刻最多输出多少个 speaker
+- `streaming_flush_interval`：稳定前缀累计多久后真正写盘
+- `streaming_merge_gap`：同一 speaker 相邻片段可自动合并的最大间隔
+
+这里最容易混淆的是：
+
+- `min_segment_duration` 只控制 RTTM 写出
+- `min_segment_duration_for_embedding` 才控制 observation 是否允许提 embedding
+
+两者处在不同阶段，不应混用。
+
+## 当前 overlap 配置的工程取向
+
+仓库里的 `online_pipline_overlap_config.yaml` 对当前实现和脚本对应的是一套偏工程化、偏 overlap 召回的配置，主要取向包括：
+
+- `tau_active=0.50`：降低激活门槛，提升第二说话人召回
+- `target_primary_min_duration=0.15`：要求主说话人有最小持续性，减少噪声触发
+- `target_overlap_min_duration=0.08`：尽量保留短促重叠语音
+- `min_segment_duration_for_embedding=0.30`：让更短的 overlap 片段也能进入全局匹配
+- `global_match_threshold=0.55`：保持匹配相对开放，同时尽量避免明显误贴
+- `merge_threshold=0.70`：对 speaker merge 保持更保守的策略
+- `max_frame_speakers=3`：当前 YAML 允许单时刻最多输出 3 个 speaker
+- `streaming_flush_interval=20.0`：明显偏向减少 RTTM 碎片，而不是追求极低写出延迟
+
+这不是唯一合理的参数组合，但比较符合当前仓库中 overlap 实验的目的：优先观察 overlap 召回和输出稳定性。
+
+## 输入、输出与调试
+
+### 输入形式
 
 `--wav` 支持三种形式：
 
-1. 单个音频文件，如 `./datasets/demo.wav`
-2. 音频目录，如 `./datasets/eval_audio/`
-3. 文本清单文件，每行一个音频路径
+- 单个音频文件
+- 音频目录
+- 文本文件，每行一个音频路径
 
-当前支持的音频后缀：
+当前支持的音频后缀包括：
 
 - `.wav`
 - `.mp3`
 - `.flac`
 
-## 必需参数
+### 常规输出
 
-最少需要提供：
+每个输入音频默认会生成一个：
 
-- `--wav`
-  - 输入音频、目录或清单文件。
-- `--model_path`
-  - ERes2NetV2 checkpoint 路径；可选，不传时自动回退到 ModelScope 默认模型。
-- `--output_dir`
-  - 输出目录。
+- `*.streaming.rttm`
 
-推荐同时显式提供：
+输出文件 stem 与输入音频 stem 对齐。
 
-- `--config ./online_pipline_overlap_config.yaml`
+### 可选调试输出
 
-原因是当前 `cli.py` 里的默认配置路径仍是原版 `online_pipeline_config.yaml`，如果不显式指定，可能会读到非 overlap 配置。
+如果开启 `--save_segmentation_scores`，还会额外生成：
 
-## 推荐跑法
+- `*.segmentation_scores.jsonl`
 
-### 1. 直接跑单文件
+它记录每个在线窗口的 segmentation 概率矩阵和时间信息，适合观察窗口级行为。
+
+### 调试时优先看什么
+
+建议在排查 overlap 行为时打开：
 
 ```bash
-python3 online_pipline_overlap.py \
+python3 pipline.py --debug --verbose ...
+```
+
+推荐优先关注这些日志字段：
+
+- `target_local_activity`：目标时刻附近各 local slot 的累计活跃时长
+- `observations`：每个 local 是使用 `non_overlap` 还是 `overlap_fallback`
+- `assignment_cost_matrix`：local 与 global 的相似度/代价矩阵是否合理
+- `local_assignments`：多个 local 是否被成功分到不同 global
+- `frame_decision`：最终输出阶段是否真的保住了第二说话人
+
+如果遇到“明明有重叠但没输出第二人”，建议按这个顺序排查：
+
+1. `target_local_activity` 是否已经把第二个 local 过滤掉
+2. `build_observations` 是否没能为它构造出合法 observation
+3. Hungarian assignment 是否把它映射到异常的 global id
+4. 最终 `max_frame_speakers` 截断是否又把它裁掉
+
+## 运行方式
+
+仓库根目录当前实际入口是：
+
+```bash
+python3 pipline.py \
   --wav ./datasets/tingshen_6.wav \
   --model_path ./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt \
   --output_dir ./tmp/overlap_run \
@@ -176,178 +299,56 @@ python3 online_pipline_overlap.py \
   --device auto
 ```
 
-### 2. 跑整个目录
+如果你想直接复用仓库里维护的 overlap 实验参数，也可以使用根目录脚本，例如：
 
 ```bash
-python3 online_pipline_overlap.py \
-  --wav ./datasets/eval_audio \
-  --model_path ./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt \
-  --output_dir ./tmp/overlap_eval \
-  --config ./online_pipline_overlap_config.yaml \
-  --device auto
+bash run.sh ./datasets/tingshen_6.wav
 ```
 
-### 3. 用文本清单批量跑
+或者在提供参考 RTTM 时直接联动评估：
 
 ```bash
-python3 online_pipline_overlap.py \
-  --wav ./wav_list.txt \
-  --model_path ./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt \
-  --output_dir ./tmp/overlap_eval \
-  --config ./online_pipline_overlap_config.yaml \
-  --device auto
+REF_RTTM=./datasets/rttm \
+bash test_der.sh ./datasets/tingshen_6.wav
 ```
 
-## 常用参数
+它适合做 overlap 参数实验，因为会：
 
-### 上下文与调度
+- 固定一套 overlap 配置和运行入口
+- 记录实际命令
+- 汇总 RTTM 结果
+- 在提供参考 RTTM 时自动计算 DER
 
-- `--context_left_duration`
-- `--context_right_duration`
-- `--step`
+## 当前版本的边界
 
-### target speaker 选择
+这条流水线已经比普通在线版本更适合重叠输出，但它仍然不是完整的 overlap 联合建模系统。当前仍然保留着一些有意的保守设计：
 
-- `--tau_active`
-- `--target_primary_min_duration`
-- `--target_overlap_min_duration`
+- observation 构造依然优先非重叠区域
+- overlap fallback 证据不会像干净片段那样强更新 centroid
+- 目标 speaker 选择仍主要依赖累计活跃时长，而不是更复杂的置信度模型
+- 输出侧虽然支持多 speaker，但本质上仍是在线近似决策，而不是全局最优离线解
 
-### observation 与 embedding
+因此更准确的定位是：这是一个针对 overlap 场景做了专门增强的在线 diarization 流水线，而不是一个彻底为 overlap 重建的端到端研究系统。
 
-- `--min_segment_duration_for_embedding`
-- `--max_segment_duration_for_embedding`
-- `--max_segment_shift_from_center`
-- `--segment_batch_size`
+## 代码入口速查
 
-### 全局 speaker 匹配
+- CLI 入口：`../pipline.py`
+- 应用编排：`app.py`
+- 参数与配置：`cli.py`
+- 主流程：`pipeline.py`
+- observation 构造：`segmentation.py`
+- 全局 speaker 分配：`clustering.py`
+- RTTM 写出：`streaming.py`
+- 数据结构：`schema.py`
 
-- `--delta_new`
-- `--max_speakers`
-- `--global_match_threshold`
-- `--merge_threshold`
-- `--sma_window`
-- `--update_segment_overlap_threshold`
+另外，日志层面要注意一件事：
 
-### streaming RTTM 输出
+- `--verbose` 控制全局日志级别到 `DEBUG`
+- `--debug` 控制是否输出窗口级结构化调试信息
 
-- `--min_segment_duration`
-- `--max_frame_speakers`
-- `--streaming_flush_interval`
-- `--streaming_merge_gap`
-- `--delay_short_speaker_output`
-- `--speaker_min_total_duration_to_emit`
+通常排查 overlap 行为时，这两个开关需要一起开。
 
-注意：
-
-- `--min_segment_duration` 控制的是 RTTM 最短写出时长；
-- `--min_segment_duration_for_embedding` 控制的是 observation 是否允许提 embedding；
-- `--speaker_min_total_duration_to_emit` 只在开启 `--delay_short_speaker_output` 后生效；
-- 两者作用阶段不同，不要混用。
-
-如果开启 `--delay_short_speaker_output`，系统会先缓存某个 speaker 的 RTTM 片段；
-只有当该 speaker 的累计说话时长达到 `--speaker_min_total_duration_to_emit` 后，
-才会把这个 speaker 之前缓存的 RTTM 连同后续片段一起写出。
-
-在该模式下，RTTM 中输出的 speaker 编号会按照“首次真正写入 RTTM 的顺序”重新连续编号；
-运行结束时，日志里还会额外打印：
-
-- 已达标 speaker 的 `internal speaker -> RTTM speaker` 最终映射；
-- 仍未达标 speaker 的内部编号及其缓存的 RTTM 风格片段。
-
-## 输出内容
-
-每个输入音频默认会在 `--output_dir` 下生成：
-
-- `*.streaming.rttm`
-
-如果打开 `--save_segmentation_scores`，还会额外生成：
-
-- `*.segmentation_scores.jsonl`
-
-这个 JSONL 文件适合做窗口级诊断，里面记录了每个在线窗口的 segmentation 概率矩阵及时间信息。
-
-## 调试模式
-
-建议在排查 overlap 行为时加上：
-
-```bash
---debug --verbose
-```
-
-这会输出更详细的窗口级日志，便于观察：
-
-- target 时间附近各 local slot 的活跃时长；
-- observation 是 `non_overlap` 还是 `overlap_fallback`；
-- Hungarian assignment 的相似度 / cost 矩阵；
-- 最终一帧到底输出了哪些 global speaker。
-
-## 使用测试脚本
-
-如果你想直接复用仓库里当前维护的 overlap 实验参数，推荐用根目录脚本：
-
-```bash
-bash test_single_online_overlap.sh ./datasets/tingshen_6.wav
-```
-
-这个脚本会：
-
-- 默认使用 `online_pipline_overlap_config.yaml`；
-- 覆盖成当前实验 preset；
-- 记录实际命令和运行日志；
-- 在提供参考 RTTM 时自动汇总 DER。
-
-常见环境变量：
-
-- `MODEL_PATH`
-- `HF_TOKEN`
-- `HF_CACHE_DIR`
-- `CONFIG_PATH`
-- `OUTPUT_ROOT`
-- `DEBUG`
-- `SAVE_SEGMENTATION_SCORES`
-- `REF_RTTM`
-- `REF_RTTM_DIR`
-
-示例：
-
-```bash
-HF_TOKEN=your_token DEBUG=1 SAVE_SEGMENTATION_SCORES=1 \
-bash test_single_online_overlap.sh ./datasets/tingshen_6.wav
-```
-
-## 依赖说明
-
-运行这条流水线通常需要：
-
-- PyTorch / torchaudio
-- `pyannote/segmentation-3.0` 相关依赖
-- SciPy
-- 对应的 ERes2NetV2 checkpoint
-
-如果 `segmentation_model` 需要从 Hugging Face 下载，记得准备：
-
-- `HF_TOKEN`
-
-并可选设置缓存目录：
-
-- `--hf_cache_dir`
-
-如果 `--model_path` 不提供，运行时还需要：
-
-- 本地已安装 `modelscope` 及其依赖；
-- 能访问 ModelScope；
-- 默认会下载 `iic/speech_eres2netv2_sv_zh-cn_16k-common@v1.0.1`。
-
-## 当前限制
-
-这条流水线已经能更自然地支持 overlap 输出，但仍有一些有意保留的保守设计：
-
-- observation 优先来自非重叠区域；
-- overlap fallback 不做同等级强更新；
-- 目标 speaker 选择以累计活跃时长为主；
-- 更适合做工程型在线增强，而不是完整研究型 overlap 联合建模。
-
-如果你要调 overlap 效果，建议优先一起看这几组参数：
+如果你后续要继续调 overlap 效果，最值得联动观察的通常是这几组参数：
 
 1. `tau_active` + `target_primary_min_duration` + `target_overlap_min_duration`
 2. `min_segment_duration_for_embedding` + `max_segment_shift_from_center`

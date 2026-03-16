@@ -180,6 +180,25 @@ def _print_rttm_stats(title: str, rttm_path: str) -> None:
     print("")
 
 
+def _print_verbose_result(item: DerResult, index: int, total: int) -> None:
+    """打印单个样本的详细信息，兼容单文件和批量模式。"""
+
+    print("=" * 60)
+    print(f"详细结果 [{index}/{total}]: {item['filename']}")
+    print("=" * 60)
+    print(f"参考 RTTM: {item['ref_rttm']}")
+    print(f"系统 RTTM: {item['sys_rttm']}")
+    print("")
+    _print_rttm_stats("参考 RTTM 统计:", str(item["ref_rttm"]))
+    _print_rttm_stats("系统输出 RTTM 统计:", str(item["sys_rttm"]))
+    print("  DER 明细:")
+    print(f"    Missed Speech (MS):  {float(item['ms']):>6.2f}%")
+    print(f"    False Alarm (FA):    {float(item['fa']):>6.2f}%")
+    print(f"    Speaker Error (SER): {float(item['ser']):>6.2f}%")
+    print(f"    Total DER:           {float(item['der']):>6.2f}%")
+    print("")
+
+
 def _collect_sys_rttms(
     sys_rttm: Optional[str], sys_dir: Optional[str], sys_suffix: str
 ) -> list[str]:
@@ -201,6 +220,32 @@ def _collect_sys_rttms(
         str(path) for path in root.iterdir() if path.name.endswith(sys_suffix)
     )
     return files
+
+
+def _normalize_path_argument(
+    path_value: Optional[str],
+    dir_value: Optional[str],
+    *,
+    label: str,
+) -> tuple[Optional[str], Optional[str]]:
+    """统一处理 file/dir 两套参数，自动识别路径类型。"""
+
+    if path_value and dir_value:
+        raise ValueError(f"请只提供 --{label} 或 --{label}-dir，其中一个即可")
+
+    candidate = path_value or dir_value
+    if not candidate:
+        return None, None
+
+    if not os.path.exists(candidate):
+        raise FileNotFoundError(f"找不到 {label.upper()} 路径: {candidate}")
+
+    if os.path.isdir(candidate):
+        return None, candidate
+    if os.path.isfile(candidate):
+        return candidate, None
+
+    raise ValueError(f"无法识别 {label.upper()} 路径类型: {candidate}")
 
 
 def _match_reference(
@@ -318,10 +363,10 @@ def _write_summary(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="计算说话人分割 DER")
-    parser.add_argument("--ref", help="单个参考 RTTM 文件")
-    parser.add_argument("--ref-dir", help="参考 RTTM 目录，按文件名 stem 自动匹配")
-    parser.add_argument("--sys", help="单个系统输出 RTTM 文件")
-    parser.add_argument("--sys-dir", help="系统输出 RTTM 目录，批量评估")
+    parser.add_argument("--ref", help="参考 RTTM 路径，可传单个文件或目录")
+    parser.add_argument("--ref-dir", help="参考 RTTM 目录，兼容旧参数")
+    parser.add_argument("--sys", help="系统 RTTM 路径，可传单个文件或目录")
+    parser.add_argument("--sys-dir", help="系统 RTTM 目录，兼容旧参数")
     parser.add_argument(
         "--sys-suffix",
         default=".streaming.rttm",
@@ -344,23 +389,19 @@ def main() -> int:
     if not args.sys and not args.sys_dir:
         print("错误: 必须提供 --sys 或 --sys-dir")
         return 1
-    if args.ref and not os.path.exists(args.ref):
-        print(f"错误: 找不到参考 RTTM 文件: {args.ref}")
-        return 1
-    if args.ref_dir and not os.path.isdir(args.ref_dir):
-        print(f"错误: 找不到参考 RTTM 目录: {args.ref_dir}")
-        return 1
-
-    if args.verbose and args.ref and args.sys:
-        _print_rttm_stats("参考 RTTM 统计:", args.ref)
-        _print_rttm_stats("系统输出 RTTM 统计:", args.sys)
 
     try:
+        ref_rttm, ref_dir = _normalize_path_argument(
+            args.ref, args.ref_dir, label="ref"
+        )
+        sys_rttm, sys_dir = _normalize_path_argument(
+            args.sys, args.sys_dir, label="sys"
+        )
         results, skipped = compute_der_batch(
-            ref_rttm=args.ref,
-            ref_dir=args.ref_dir,
-            sys_rttm=args.sys,
-            sys_dir=args.sys_dir,
+            ref_rttm=ref_rttm,
+            ref_dir=ref_dir,
+            sys_rttm=sys_rttm,
+            sys_dir=sys_dir,
             collar=args.collar,
             ignore_overlap=args.ignore_overlap,
             sys_suffix=args.sys_suffix,
@@ -372,6 +413,10 @@ def main() -> int:
 
         traceback.print_exc()
         return 1
+
+    if args.verbose and results:
+        for index, item in enumerate(results, start=1):
+            _print_verbose_result(item, index, len(results))
 
     print("=" * 60)
     print(f"DER 评估结果 (collar = {args.collar}s)")
@@ -406,8 +451,8 @@ def main() -> int:
     if args.summary_file:
         _write_summary(args.summary_file, results, skipped)
         print(f"\n摘要已保存到: {args.summary_file}")
-    elif args.sys:
-        output_dir = os.path.dirname(args.sys)
+    elif sys_rttm:
+        output_dir = os.path.dirname(sys_rttm)
         if output_dir:
             result_file = os.path.join(output_dir, "der_result.txt")
             _write_summary(result_file, results, skipped)

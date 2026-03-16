@@ -229,7 +229,7 @@ class SegmentBuilder:
         当前策略是：
         1. 用 `step` 定义一个围绕 target_time 的统计窗口；
         2. 统计每个 local slot 在这个窗口中的活跃总时长；
-        3. 只保留活跃总时长超过阈值 `target_speaker_min_duration` 的说话人；
+        3. 只保留活跃总时长超过阈值 `target_overlap_min_duration` 的说话人；
         4. 再按活跃时长从大到小排序。
         """
 
