@@ -297,6 +297,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="把每个窗口的完整 segmentation 概率矩阵保存到输出目录",
     )
+    parser.add_argument(
+        "--show_rttm",
+        action="store_true",
+        help="在持续写入 output_dir 下 RTTM 文件的同时，把新生成的 RTTM 行同步输出到控制台",
+    )
     parser.add_argument("--debug", action="store_true", help="输出窗口级 debug 信息")
     parser.add_argument("--verbose", action="store_true", help="启用 DEBUG 级日志")
     return parser
@@ -354,6 +359,7 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         save_segmentation_scores=bool(
             _merged_value(args, "save_segmentation_scores", False)
         ),
+        show_rttm=bool(_merged_value(args, "show_rttm", False)),
         debug=bool(_merged_value(args, "debug", False)),
     )
     chunk_duration = _merged_value(args, "chunk_duration", None)

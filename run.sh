@@ -22,6 +22,7 @@ ref_rttm=${REF_RTTM:-}
 ref_rttm_dir=${REF_RTTM_DIR:-./datasets/rttm}
 debug_flag=${DEBUG:-0}
 save_scores_flag=${SAVE_SEGMENTATION_SCORES:-0}
+show_rttm_flag=${SHOW_RTTM:-0}
 output_root=${OUTPUT_ROOT:-./exp}
 run_name=${RUN_NAME:-default}
 
@@ -89,11 +90,15 @@ if [ "$save_scores_flag" = "1" ]; then
     cmd+=(--save_segmentation_scores)
 fi
 
+if [ "$show_rttm_flag" = "1" ]; then
+    cmd+=(--show_rttm)
+fi
+
 printf 'Command: ' | tee "$exp_dir/command.log"
 printf '%q ' "${cmd[@]}" | tee -a "$exp_dir/command.log"
 printf '\n' | tee -a "$exp_dir/command.log"
 
-"${cmd[@]}" > "$exp_dir/run.log" 2>&1
+"${cmd[@]}"
 
 rttm_count=$(python3 - <<'PY' "$exp_dir"
 import os
@@ -110,3 +115,4 @@ PY
 
 echo "$run_name -> streaming_rttm_files=$rttm_count | config=$config_path save_segmentation_scores=$save_scores_flag" >> "$results_file"
 echo "Result: $run_name -> streaming_rttm_files=$rttm_count"
+echo "Pipeline log: $exp_dir/run.log"

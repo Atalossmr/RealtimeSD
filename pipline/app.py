@@ -31,11 +31,15 @@ def main() -> None:
     raw_args = parser.parse_args()
     args = merge_args_with_config(parser, raw_args, sys.argv[1:])
     validate_runtime_args(args)
-    setup_logger(bool(getattr(args, "verbose", False)))
 
     config = config_from_args(args)
     audio_paths = collect_audio_paths(args.wav)
     os.makedirs(args.output_dir, exist_ok=True)
+    run_log_path = os.path.join(args.output_dir, "run.log")
+    setup_logger(bool(getattr(args, "verbose", False)), run_log_path)
+
+    logger.info("Run log is written to %s", run_log_path)
+    logger.info("Collected %d audio file(s) for processing", len(audio_paths))
 
     pipeline = NativeOnlineSpeakerDiarization(config, args.model_path)
     for audio_path in audio_paths:

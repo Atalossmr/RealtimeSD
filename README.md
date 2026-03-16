@@ -86,13 +86,25 @@ python3 pipline.py \
 
 如果需要窗口级结构化调试信息，记得再加 `--debug`。
 
+如果希望在运行时把新生成的 RTTM 行同步输出到控制台，可以再加：
+
+```bash
+python3 pipline.py \
+  --wav ./examples \
+  --output_dir ./exp/batch_demo \
+  --config ./online_pipline_overlap_config.yaml \
+  --show_rttm
+```
+
 ## 输出文件
 
 每个音频通常会在输出目录下生成：
 
 - `*.streaming.rttm`：流式分离结果
-- `run.log`：运行日志（使用脚本时）
+- `run.log`：运行日志（CLI 启动时强制写入 `output_dir`）
 - `command.log`：实际命令（使用脚本时）
+
+默认情况下，常规日志不会打印到终端，而是只写入 `run.log`；如果需要终端实时看到 RTTM，再开启 `--show_rttm` 或 `SHOW_RTTM=1`。
 
 如果开启 `--save_segmentation_scores`，还会生成：
 
@@ -108,11 +120,26 @@ python3 pipline.py \
 bash run.sh ./examples
 ```
 
+如果希望脚本运行时同步在控制台看到 RTTM 行：
+
+```bash
+SHOW_RTTM=1 bash run.sh ./examples
+```
+
 带 DER 评估的运行：
 
 ```bash
 REF_RTTM=./datasets/rttm \
 RUN_NAME=baseline \
+bash test_der.sh ./examples
+```
+
+同样支持：
+
+```bash
+REF_RTTM=./datasets/rttm \
+RUN_NAME=baseline \
+SHOW_RTTM=1 \
 bash test_der.sh ./examples
 ```
 
@@ -126,6 +153,7 @@ bash test_der.sh ./examples
 - `RUN_NAME`
 - `DEBUG`
 - `SAVE_SEGMENTATION_SCORES`
+- `SHOW_RTTM`
 - `REF_RTTM`
 - `DER_VERBOSE`
 

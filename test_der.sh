@@ -13,14 +13,15 @@ if [ -f ./.venv/bin/activate ]; then
     source ./.venv/bin/activate
 fi
 
-audio_input=${1:-./datasets/aishell4-test}
+audio_input=${1:-./datasets/aishell4-test/S_R004S04C01.wav}
 config_path=${CONFIG_PATH:-./config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
-ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/rttm}}
+ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/rttm/S_R004S04C01.rttm}}
 debug_flag=${DEBUG:-0}
 save_scores_flag=${SAVE_SEGMENTATION_SCORES:-0}
+show_rttm_flag=${SHOW_RTTM:-1}
 der_verbose_flag=${DER_VERBOSE:-1}
 output_root=${OUTPUT_ROOT:-./exp}
 run_name=${RUN_NAME:-default}
@@ -93,11 +94,15 @@ if [ "$save_scores_flag" = "1" ]; then
     cmd+=(--save_segmentation_scores)
 fi
 
+if [ "$show_rttm_flag" = "1" ]; then
+    cmd+=(--show_rttm)
+fi
+
 printf 'Command: ' | tee "$exp_dir/command.log"
 printf '%q ' "${cmd[@]}" | tee -a "$exp_dir/command.log"
 printf '\n' | tee -a "$exp_dir/command.log"
 
-"${cmd[@]}" > "$exp_dir/run.log" 2>&1
+"${cmd[@]}"
 
 rttm_count=$(python3 - <<'PY' "$exp_dir"
 import os
@@ -114,6 +119,7 @@ PY
 
 echo "$run_name -> streaming_rttm_files=$rttm_count | config=$config_path save_segmentation_scores=$save_scores_flag" >> "$results_file"
 echo "Result: $run_name -> streaming_rttm_files=$rttm_count"
+echo "Pipeline log: $exp_dir/run.log"
 
 echo ""
 echo "========== DER Results =========="

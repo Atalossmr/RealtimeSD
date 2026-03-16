@@ -112,6 +112,7 @@
 - 解析参数
 - 合并 YAML 配置
 - 校验运行必需项
+- 初始化 `output_dir/run.log` 日志文件
 - 初始化流水线并遍历输入音频
 
 入口函数是 `pipline.app:main`。
@@ -252,8 +253,13 @@
 每个输入音频默认会生成一个：
 
 - `*.streaming.rttm`
+- `run.log`
 
 输出文件 stem 与输入音频 stem 对齐。
+
+其中 `run.log` 由 CLI 在启动时强制创建在 `output_dir` 下，不再依赖 shell 重定向。
+
+默认情况下，常规 `INFO` / `DEBUG` 日志只写入 `run.log`，不会同步打印到控制台。
 
 ### 可选调试输出
 
@@ -262,6 +268,16 @@
 - `*.segmentation_scores.jsonl`
 
 它记录每个在线窗口的 segmentation 概率矩阵和时间信息，适合观察窗口级行为。
+
+### 控制台同步 RTTM
+
+如果希望在运行时一边持续写入 `*.streaming.rttm`，一边把新生成的 RTTM 行同步打印到控制台，可以开启：
+
+```bash
+python3 pipline.py --show_rttm ...
+```
+
+这个开关只影响控制台是否实时看到 RTTM 行，不影响 `output_dir/run.log` 和最终 RTTM 文件落盘。
 
 ### 调试时优先看什么
 
@@ -299,16 +315,32 @@ python3 pipline.py \
   --device auto
 ```
 
+运行后会固定在 `./tmp/overlap_run/run.log` 写入本次执行日志。
+
 如果你想直接复用仓库里维护的 overlap 实验参数，也可以使用根目录脚本，例如：
 
 ```bash
 bash run.sh ./datasets/tingshen_6.wav
 ```
 
+如果希望脚本运行时同步在控制台看到 RTTM 行：
+
+```bash
+SHOW_RTTM=1 bash run.sh ./datasets/tingshen_6.wav
+```
+
 或者在提供参考 RTTM 时直接联动评估：
 
 ```bash
 REF_RTTM=./datasets/rttm \
+bash test_der.sh ./datasets/tingshen_6.wav
+```
+
+同样也支持：
+
+```bash
+REF_RTTM=./datasets/rttm \
+SHOW_RTTM=1 \
 bash test_der.sh ./datasets/tingshen_6.wav
 ```
 
@@ -343,8 +375,10 @@ bash test_der.sh ./datasets/tingshen_6.wav
 
 另外，日志层面要注意一件事：
 
+- 运行日志总是写入 `output_dir/run.log`
 - `--verbose` 控制全局日志级别到 `DEBUG`
 - `--debug` 控制是否输出窗口级结构化调试信息
+- `--show_rttm` 控制是否把新写出的 RTTM 行同步输出到控制台
 
 通常排查 overlap 行为时，这两个开关需要一起开。
 

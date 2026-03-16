@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 
 import numpy as np
 
@@ -34,6 +35,7 @@ class StreamingRTTMWriter:
         merge_gap: float,
         delay_short_speaker_output: bool = False,
         speaker_min_total_duration_to_emit: float = 0.0,
+        show_rttm: bool = False,
     ):
         self.output_path = output_path
         self.uri = uri
@@ -44,6 +46,7 @@ class StreamingRTTMWriter:
         self.speaker_min_total_duration_to_emit = max(
             0.0, float(speaker_min_total_duration_to_emit)
         )
+        self.show_rttm = bool(show_rttm)
 
         # `active_turns` 以 speaker 为单位维护当前仍在延展的说话段。
         # overlap 场景里，它天然允许多个 speaker 同时处于活跃状态。
@@ -66,6 +69,19 @@ class StreamingRTTMWriter:
         with open(self.output_path, "w", encoding="utf-8") as file_obj:
             file_obj.write(f"# overlap streaming RTTM for {self.uri}\n")
 
+    def _format_rttm_line(
+        self, turn: SpeakerTurn, output_speaker_id: int | None = None
+    ) -> str:
+        duration = max(0.0, float(turn.end - turn.start))
+        speaker_id = int(turn.speaker_id)
+        final_speaker_id = (
+            speaker_id if output_speaker_id is None else int(output_speaker_id)
+        )
+        return (
+            f"SPEAKER {self.uri} 0 {turn.start:.3f} {duration:.3f} "
+            f"<NA> <NA> {final_speaker_id} <NA> <NA>"
+        )
+
     def _write_turn(self, turn: SpeakerTurn) -> None:
         """把一个已经足够稳定的说话段真正写入 RTTM。"""
 
@@ -79,10 +95,12 @@ class StreamingRTTMWriter:
                 self.rttm_speaker_ids[speaker_id] = self.next_rttm_speaker_id
                 self.next_rttm_speaker_id += 1
             output_speaker_id = self.rttm_speaker_ids[speaker_id]
+        line = self._format_rttm_line(turn, output_speaker_id)
         with open(self.output_path, "a", encoding="utf-8") as file_obj:
-            file_obj.write(
-                f"SPEAKER {self.uri} 0 {turn.start:.3f} {duration:.3f} <NA> <NA> {output_speaker_id} <NA> <NA>\n"
-            )
+            file_obj.write(f"{line}\n")
+        if self.show_rttm:
+            sys.stdout.write(f"{line}\n")
+            sys.stdout.flush()
         self.written_turns.append(turn)
 
     def _speaker_is_released(self, speaker_id: int) -> bool:
@@ -91,11 +109,7 @@ class StreamingRTTMWriter:
         return bool(self.speaker_release_state.get(int(speaker_id), False))
 
     def _turn_to_rttm_line(self, turn: SpeakerTurn) -> str:
-        duration = max(0.0, float(turn.end - turn.start))
-        return (
-            f"SPEAKER {self.uri} 0 {turn.start:.3f} {duration:.3f} "
-            f"<NA> <NA> {turn.speaker_id} <NA> <NA>"
-        )
+        return self._format_rttm_line(turn)
 
     def _release_speaker_if_ready(self, speaker_id: int) -> None:
         speaker_id = int(speaker_id)

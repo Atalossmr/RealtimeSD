@@ -484,6 +484,7 @@ class NativeOnlineSpeakerDiarization:
             self.config.streaming_merge_gap,
             self.config.delay_short_speaker_output,
             self.config.speaker_min_total_duration_to_emit,
+            self.config.show_rttm,
         )
         segmentation_dump = (
             Path(segmentation_dump_path) if segmentation_dump_path else None

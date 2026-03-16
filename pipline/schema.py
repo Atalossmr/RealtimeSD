@@ -14,8 +14,7 @@ from .constants import BASE_DIR
 class PipelineConfig:
     """整条在线链路的统一配置。
 
-    当前重构后的目标是“流程完整，但参数尽量少”。
-    因此这里只保留真正会影响主流程的参数：
+    参数包括以下方面：
     - 音频调度；
     - segmentation 活跃阈值；
     - 候选片段长度；
@@ -85,6 +84,7 @@ class PipelineConfig:
     speaker_min_total_duration_to_emit: float = 0.0
     output_dir_for_streaming: Optional[str] = None
     save_segmentation_scores: bool = False
+    show_rttm: bool = False
     debug: bool = False
 
 

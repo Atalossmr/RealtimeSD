@@ -1,10 +1,11 @@
-"""在线说话人分离的通用工具函数。"""
+"""在线说话人识别的通用工具函数。"""
 
 from __future__ import annotations
 
 import logging
 import os
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -14,17 +15,28 @@ import torchaudio
 logger = logging.getLogger(__name__)
 
 
-def setup_logger(verbose: bool) -> None:
+def setup_logger(verbose: bool, run_log_path: Optional[str] = None) -> None:
     """初始化日志系统。
 
-    这里故意保持全局 `basicConfig` 方式，原因是这个项目当前主要通过 CLI 单进程运行，
-    这种形式最直观，也方便 shell 脚本直接收集 stdout/stderr。
+    当前 CLI 约定会把运行日志强制写到 `output_dir/run.log`，
+    默认不再把常规日志输出到控制台；控制台只保留脚本自身输出，以及可选的 RTTM 流式输出。
     """
 
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
+    level = logging.DEBUG if verbose else logging.INFO
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.setLevel(level)
+
+    if run_log_path:
+        ensure_parent_dir(run_log_path)
+        file_handler = logging.FileHandler(run_log_path, mode="w", encoding="utf-8")
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+
+    logging.captureWarnings(True)
 
 
 def resolve_device(device: str) -> torch.device:
