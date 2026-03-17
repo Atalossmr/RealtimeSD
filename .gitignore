@@ -5,3 +5,4 @@ pretrained/
 .ruff_cache/
 __pycache__/
 datasets/
+tmp/

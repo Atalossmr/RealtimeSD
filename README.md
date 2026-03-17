@@ -1,15 +1,15 @@
 # RealtimeSD
 
-基于 [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) 和 [`3D-Speaker/ERes2NetV2`](https://github.com/modelscope/3D-Speaker) 的实时说话人分离流水线，重点面向重叠音频处理场景，是以下流程的简单工程实现。
+基于 [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) 和 [`3D-Speaker/ERes2NetV2`](https://github.com/modelscope/3D-Speaker) 的实时说话人分离管线，重点面向重叠音频处理场景，是以下流程的简单工程实现。
 
 ![流程图](docs/pipline.drawio.png)
 
 ## 主要内容
 
-- 在线 speaker diarization 流水线入口：`pipline.py`
+- 管线：`pipline.py`
 - 配置：`config.yaml`
 - 运行脚本：`run.sh`、`test_der.sh`
-- 流水线实现说明：`pipline/README.md`
+- 管线实现说明：`pipline/README.md`
 
 ## 环境要求
 
@@ -59,7 +59,7 @@ export HF_TOKEN=your_token
 python3 pipline.py \
   --wav ./examples/example.wav \
   --output_dir ./exp/demo \
-  --config ./online_pipline_overlap_config.yaml
+  --config ./config.yaml
 ```
 
 批量推理：
@@ -68,7 +68,7 @@ python3 pipline.py \
 python3 pipline.py \
   --wav ./examples \
   --output_dir ./exp/batch_demo \
-  --config ./online_pipline_overlap_config.yaml
+  --config ./config.yaml
 ```
 
 常用覆盖项：
@@ -77,7 +77,7 @@ python3 pipline.py \
 python3 pipline.py \
   --wav ./examples \
   --output_dir ./exp/batch_demo \
-  --config ./online_pipline_overlap_config.yaml \
+  --config ./config.yaml \
   --model_path ./pretrained/custom_eres2netv2_finetune/final_model.ckpt \
   --hf_cache_dir ./pretrained/huggingface \
   --device cuda:0 \
@@ -92,7 +92,7 @@ python3 pipline.py \
 python3 pipline.py \
   --wav ./examples \
   --output_dir ./exp/batch_demo \
-  --config ./online_pipline_overlap_config.yaml \
+  --config ./config.yaml \
   --show_rttm
 ```
 
@@ -100,11 +100,11 @@ python3 pipline.py \
 
 每个音频通常会在输出目录下生成：
 
-- `*.streaming.rttm`：流式分离结果
+- `*.streaming.rttm`：流式识别结果
 - `run.log`：运行日志（CLI 启动时强制写入 `output_dir`）
 - `command.log`：实际命令（使用脚本时）
 
-默认情况下，常规日志不会打印到终端，而是只写入 `run.log`；如果需要终端实时看到 RTTM，再开启 `--show_rttm` 或 `SHOW_RTTM=1`。
+日志会写入 `run.log`；如果需要终端实时看到 RTTM，请开启 `--show_rttm` 或使用 `SHOW_RTTM=1`。
 
 如果开启 `--save_segmentation_scores`，还会生成：
 
@@ -112,7 +112,7 @@ python3 pipline.py \
 
 ## 使用脚本
 
-推荐先用仓库自带脚本复现实验。
+推荐先用仓库自带脚本进行实验。
 
 直接运行：
 
@@ -143,7 +143,7 @@ SHOW_RTTM=1 \
 bash test_der.sh ./examples
 ```
 
-常用环境变量：
+环境变量：
 
 - `CONFIG_PATH`
 - `MODEL_PATH`
@@ -157,69 +157,30 @@ bash test_der.sh ./examples
 - `REF_RTTM`
 - `DER_VERBOSE`
 
-## DER 评估
-
-`compute_der.py` 支持单文件和批量模式，`--ref` / `--sys` 都可以直接传文件或目录。
-
-单文件：
-
-```bash
-python3 compute_der.py \
-  --ref ./datasets/rttm/L_R003S01C02.rttm \
-  --sys ./exp/demo/L_R003S01C02.streaming.rttm \
-  --collar 0.0 \
-  --ignore-overlap
-```
-
-批量：
-
-```bash
-python3 compute_der.py \
-  --ref ./datasets/rttm \
-  --sys ./exp/demo \
-  --sys-suffix .streaming.rttm \
-  --ref-suffix .rttm \
-  --collar 0.0 \
-  --ignore-overlap \
-  --verbose
-```
-
 ## 配置说明
 
 默认配置文件是 `config.yaml`，里面主要包含：
 
 - 运行设备和模型路径
-- 左右上下文长度与在线步长
+- 左右上下文长度与实时步长
 - segmentation 激活阈值
 - embedding 提取片段长度
 - speaker 匹配、合并与 streaming 输出参数
 
-当前 YAML 中一些和 overlap 更相关的默认值包括：
+常用参数：
+`elta_new: 0.40`
 
-- `tau_active=0.50`
-- `target_primary_min_duration=0.15`
-- `target_overlap_min_duration=0.08`
-- `min_segment_duration_for_embedding=0.30`
-- `global_match_threshold=0.55`
-- `merge_threshold=0.70`
-- `max_frame_speakers=3`
-- `streaming_flush_interval=20.0`
+`global_match_threshold: 0.50`
 
-建议优先调整这些参数：
+`merge_threshold: 0.7`
 
-- `tau_active`
-- `target_primary_min_duration`
-- `target_overlap_min_duration`
-- `min_segment_duration_for_embedding`
-- `delta_new`
-- `global_match_threshold`
-- `merge_threshold`
-- `max_frame_speakers`
-- `streaming_flush_interval`
+`sma_window: 3`
+
+`speaker_min_total_duration_to_emit: 5.00s`
 
 ## 仓库结构
 
-- `pipline/`：在线分离主实现
+- `pipline/`：实时分离主实现
 - `speakerlab/`：本地依赖的 speaker encoder 相关模块与 `md-eval.pl`
 - `compute_der.py`：DER 统计与批量评估
 - `run.sh`：基础运行脚本
@@ -229,5 +190,4 @@ python3 compute_der.py \
 ## 备注
 
 - 仓库当前偏实验性质，默认配置更适合中文、16kHz、流式 speaker diarization 场景
-- `examples/`、`datasets/`、`pretrained/` 中的内容依赖你的本地数据和模型准备情况
 - 更细的实现说明见 `pipline/README.md`

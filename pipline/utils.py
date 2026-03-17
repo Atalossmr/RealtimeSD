@@ -1,4 +1,4 @@
-"""在线说话人识别的通用工具函数。"""
+"""实时说话人识别的通用工具函数。"""
 
 from __future__ import annotations
 

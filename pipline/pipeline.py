@@ -1,4 +1,4 @@
-"""在线说话人分离主流程模块。"""
+"""实时说话人分离主流程模块。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 class NativeOnlineSpeakerDiarization:
-    """在线主控类。
+    """实时主控类。
 
     当前重构后的实现严格围绕流程图来组织：
     1. 读音频；
@@ -99,7 +99,7 @@ class NativeOnlineSpeakerDiarization:
         self._reset_clusterer()
 
     def _reset_clusterer(self) -> None:
-        """为新音频重置在线聚类状态。"""
+        """为新音频重置实时聚类状态。"""
 
         self.clusterer = IncrementalCentroidClusterer(
             delta_new=self.config.delta_new,
@@ -108,6 +108,8 @@ class NativeOnlineSpeakerDiarization:
             merge_threshold=self.config.merge_threshold,
             sma_window=self.config.sma_window,
             update_segment_overlap_threshold=self.config.update_segment_overlap_threshold,
+            weak_update_similarity_margin=self.config.weak_update_similarity_margin,
+            weak_update_weight_multiplier=self.config.weak_update_weight_multiplier,
         )
 
     def reset(self) -> None:
@@ -450,7 +452,7 @@ class NativeOnlineSpeakerDiarization:
         uri: Optional[str] = None,
         segmentation_dump_path: Optional[str] = None,
     ) -> None:
-        """按在线方式处理整段波形并持续写出 RTTM。
+        """按实时方式处理整段波形并持续写出 RTTM。
 
         注意：
         - 模型看到的是“目标帧附近的一整段上下文”；
@@ -500,7 +502,7 @@ class NativeOnlineSpeakerDiarization:
         def process_window(window_end_sample: int, force_flush: bool) -> None:
             nonlocal last_emitted_time
 
-            # `current_time` 表示当前在线推进位置。
+            # `current_time` 表示当前实时推进位置。
             current_time = (
                 min(window_end_sample, total_samples) / self.config.sample_rate
             )
@@ -650,7 +652,7 @@ class NativeOnlineSpeakerDiarization:
 
             last_emitted_time = max_emitted
 
-        # 先按正常在线模式处理所有窗口，再在结尾做一次强制 flush。
+        # 先按正常实时模式处理所有窗口，再在结尾做一次强制 flush。
         for window_end_sample in window_ends:
             process_window(window_end_sample, force_flush=False)
         process_window(total_samples, force_flush=True)

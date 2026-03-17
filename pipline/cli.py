@@ -99,7 +99,7 @@ def _merged_value(merged_args: argparse.Namespace, name: str, default):
 
 
 def validate_runtime_args(args: argparse.Namespace) -> None:
-    """校验运行在线脚本所必需的输入参数。"""
+    """校验运行实时脚本所必需的输入参数。"""
 
     missing: list[str] = []
     for field_name in ("wav", "output_dir"):
@@ -120,7 +120,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """
 
     parser = argparse.ArgumentParser(
-        description="基于 segmentation-3.0 和原生 ERes2NetV2 的在线说话人分离脚本"
+        description="基于 segmentation-3.0 和原生 ERes2NetV2 的实时说话人分离脚本"
     )
     parser.add_argument(
         "--wav",
@@ -168,7 +168,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="兼容旧参数；若设置，则表示总上下文时长，会平均拆到左右两侧",
     )
-    parser.add_argument("--step", type=float, default=0.5, help="在线推进步长，单位秒")
+    parser.add_argument("--step", type=float, default=0.5, help="实时推进步长，单位秒")
 
     parser.add_argument(
         "--tau_active", type=float, default=0.68, help="local speaker 活跃阈值"
@@ -262,6 +262,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.8,
         help="连续两次用于更新 centroid 的片段允许的最大重合度",
     )
+    parser.add_argument(
+        "--weak_update_similarity_margin",
+        type=float,
+        default=0.15,
+        help="overlap fallback 触发弱更新时，相对 `global_match_threshold` 还需额外超过的相似度裕量",
+    )
+    parser.add_argument(
+        "--weak_update_weight_multiplier",
+        type=float,
+        default=0.25,
+        help="overlap fallback 高置信度弱更新时使用的衰减权重倍率",
+    )
 
     parser.add_argument(
         "--max_frame_speakers",
@@ -345,6 +357,12 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         sma_window=max(1, int(_merged_value(args, "sma_window", 5))),
         update_segment_overlap_threshold=float(
             _merged_value(args, "update_segment_overlap_threshold", 0.8)
+        ),
+        weak_update_similarity_margin=float(
+            _merged_value(args, "weak_update_similarity_margin", 0.15)
+        ),
+        weak_update_weight_multiplier=float(
+            _merged_value(args, "weak_update_weight_multiplier", 0.25)
         ),
         max_frame_speakers=_merged_value(args, "max_frame_speakers", 2),
         streaming_flush_interval=_merged_value(args, "streaming_flush_interval", 2.0),

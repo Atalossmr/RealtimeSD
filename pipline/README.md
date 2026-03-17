@@ -1,6 +1,4 @@
-# overlap 在线说话人分离流水线
-
-这个目录实现的是仓库里专门面向重叠说话场景的在线 diarization 流水线。重点关注 overlap 场景里最容易出问题的几个环节：第二说话人被截掉、多个 local speaker 被错贴到同一个 global speaker、streaming RTTM 输出过碎，以及短促重叠语音在 observation 阶段就被过滤掉。
+# 实时说话人识别管线
 
 ## 总体流程
 
@@ -11,10 +9,9 @@
 3. 围绕当前 `target_time` 截取固定左右上下文
 4. 对整个上下文运行 `pyannote/segmentation-3.0`
 5. 在 `target_time` 附近的小窗内统计各个 local slot 的累计活跃时长
-6. 只对真正持续活跃的 local slot 构造 observation
-7. 提取 speaker embedding，并映射到 global speaker
-8. 聚合当前目标时刻的 global speaker 证据
-9. 把决策转成稳定的 streaming RTTM 并持续写盘
+6. 为活跃的 local slot 挑选 observation，并提取 speaker embedding
+7. 将活跃的 local slot 映射到 global speaker
+8. 把决策转成 RTTM 并持续输出
 
 按职责可以把它分成三层：
 
@@ -56,11 +53,13 @@
 - `_build_assignment`
 - `push_window`
 
-### 3. observation 构造仍然坚持“非重叠优先”
+### 3. observation 优先挑选非重叠音频
 
 它在 speaker 身份维护上保持保守。每个 local slot 构造 observation 时，会优先从非重叠帧中找候选区间；如果找不到，才回退到全部活跃帧。回退得到的 observation 会被标记为 `overlap_fallback`，默认不参与正常强更新，以降低对 centroid 的污染风险。
 
 这个设计的出发点是：先保证系统“能输出两个人”，再谨慎决定“是否让重叠片段强力参与身份更新”。
+
+不过当前实现补了一层高置信度弱更新：当 `overlap_fallback` 片段和已匹配 global speaker 的相似度超过 `global_match_threshold + weak_update_similarity_margin` 时，仍允许用 `weak_update_weight_multiplier` 指定的衰减倍率对 centroid 做轻微更新；默认值分别是 `0.15` 和 `0.25`。
 
 相关代码在 `segmentation.py`：
 
@@ -89,7 +88,7 @@
 
 相关代码在 `streaming.py`。
 
-### 6. 支持可选的短 speaker 延迟写出和 RTTM speaker 重映射
+### 6. 支持可选的可疑 speaker 延迟写出和 RTTM speaker 重映射
 
 为了方便排查短暂误检 speaker，streaming 层支持一组可选行为：
 
@@ -101,7 +100,7 @@
 
 - 只有真正写入 RTTM 的 speaker 才会分配 RTTM id
 - RTTM speaker id 按首次写出的顺序连续编号
-- 运行结束后会统一打印最终映射，方便对照内部聚类结果和最终 RTTM
+- 运行结束后会在log里统一打印最终映射，方便对照内部聚类结果和最终 RTTM
 
 ## 模块分工
 
@@ -113,7 +112,7 @@
 - 合并 YAML 配置
 - 校验运行必需项
 - 初始化 `output_dir/run.log` 日志文件
-- 初始化流水线并遍历输入音频
+- 初始化管线并遍历输入音频
 
 入口函数是 `pipline.app:main`。
 
@@ -125,7 +124,7 @@
 - 再用显式 CLI 参数覆盖
 - 最后转换为运行时配置对象 `PipelineConfig`
 
-当前默认配置文件路径就是仓库根目录的 `online_pipline_overlap_config.yaml`。
+当前默认配置文件路径就是仓库根目录的 `config.yaml`。
 
 ### `schema.py`
 
@@ -165,13 +164,13 @@
 
 ## 参数分层理解
 
-为了避免把不同阶段的参数混在一起，建议按下面几层来理解。
+参数分为一下几个层面。
 
-### 1. 音频与在线调度
+### 1. 音频与实时调度
 
 - `context_left_duration`：目标时刻左侧历史上下文长度
 - `context_right_duration`：目标时刻右侧未来上下文长度
-- `step`：在线推进步长，也是输出决策的基本时间粒度
+- `step`：推进步长，也是输出决策的基本时间粒度
 
 这组参数决定系统“看多宽、走多快”。
 
@@ -200,6 +199,8 @@
 - `merge_threshold`：全局 speaker 自动合并阈值
 - `sma_window`：centroid 前期使用简单平均更新的窗口大小
 - `update_segment_overlap_threshold`：连续两次更新片段允许的最大重合度
+- `weak_update_similarity_margin`：弱更新相对主匹配阈值还需额外超过的相似度裕量
+- `weak_update_weight_multiplier`：overlap fallback 高置信度命中时的弱更新倍率
 
 这组参数决定 speaker 身份如何延续、何时分裂、何时合并。
 
@@ -210,27 +211,7 @@
 - `streaming_flush_interval`：稳定前缀累计多久后真正写盘
 - `streaming_merge_gap`：同一 speaker 相邻片段可自动合并的最大间隔
 
-这里最容易混淆的是：
-
-- `min_segment_duration` 只控制 RTTM 写出
-- `min_segment_duration_for_embedding` 才控制 observation 是否允许提 embedding
-
-两者处在不同阶段，不应混用。
-
-## 当前 overlap 配置的工程取向
-
-仓库里的 `online_pipline_overlap_config.yaml` 对当前实现和脚本对应的是一套偏工程化、偏 overlap 召回的配置，主要取向包括：
-
-- `tau_active=0.50`：降低激活门槛，提升第二说话人召回
-- `target_primary_min_duration=0.15`：要求主说话人有最小持续性，减少噪声触发
-- `target_overlap_min_duration=0.08`：尽量保留短促重叠语音
-- `min_segment_duration_for_embedding=0.30`：让更短的 overlap 片段也能进入全局匹配
-- `global_match_threshold=0.55`：保持匹配相对开放，同时尽量避免明显误贴
-- `merge_threshold=0.70`：对 speaker merge 保持更保守的策略
-- `max_frame_speakers=3`：当前 YAML 允许单时刻最多输出 3 个 speaker
-- `streaming_flush_interval=20.0`：明显偏向减少 RTTM 碎片，而不是追求极低写出延迟
-
-这不是唯一合理的参数组合，但比较符合当前仓库中 overlap 实验的目的：优先观察 overlap 召回和输出稳定性。
+这组参数决定RTTM的输出。
 
 ## 输入、输出与调试
 
@@ -267,7 +248,7 @@
 
 - `*.segmentation_scores.jsonl`
 
-它记录每个在线窗口的 segmentation 概率矩阵和时间信息，适合观察窗口级行为。
+它记录每个实时窗口的 segmentation 概率矩阵和时间信息，适合观察窗口级行为。
 
 ### 控制台同步 RTTM
 
@@ -311,7 +292,7 @@ python3 pipline.py \
   --wav ./datasets/tingshen_6.wav \
   --model_path ./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt \
   --output_dir ./tmp/overlap_run \
-  --config ./online_pipline_overlap_config.yaml \
+  --config ./config.yaml \
   --device auto
 ```
 
@@ -353,14 +334,14 @@ bash test_der.sh ./datasets/tingshen_6.wav
 
 ## 当前版本的边界
 
-这条流水线已经比普通在线版本更适合重叠输出，但它仍然不是完整的 overlap 联合建模系统。当前仍然保留着一些有意的保守设计：
+这条管线已经比普通实时版本更适合重叠输出，但它仍然不是完整的 overlap 联合建模系统。当前仍然保留着一些有意的保守设计：
 
 - observation 构造依然优先非重叠区域
 - overlap fallback 证据不会像干净片段那样强更新 centroid
 - 目标 speaker 选择仍主要依赖累计活跃时长，而不是更复杂的置信度模型
-- 输出侧虽然支持多 speaker，但本质上仍是在线近似决策，而不是全局最优离线解
+- 输出侧虽然支持多 speaker，但本质上仍是实时近似决策，而不是全局最优离线解
 
-因此更准确的定位是：这是一个针对 overlap 场景做了专门增强的在线 diarization 流水线，而不是一个彻底为 overlap 重建的端到端研究系统。
+因此更准确的定位是：这是一个针对 overlap 场景做了专门增强的实时 diarization 管线，而不是一个彻底为 overlap 重建的端到端研究系统。
 
 ## 代码入口速查
 

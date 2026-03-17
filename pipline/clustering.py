@@ -1,4 +1,4 @@
-"""在线全局 speaker 分配与 centroid 维护模块。"""
+"""实时全局 speaker 分配与 centroid 维护模块。"""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class UpdateSegmentRecord:
 
 
 class IncrementalCentroidClusterer:
-    """overlap 版本在线全局 speaker 分配器。
+    """overlap 版本实时全局 speaker 分配器。
 
     相比原简化版，这里最重要的变化是：
     - 同一个目标窗口内的多个 local speaker 不再逐个独立贪心匹配；
@@ -48,6 +48,8 @@ class IncrementalCentroidClusterer:
         merge_threshold: float,
         sma_window: int,
         update_segment_overlap_threshold: float,
+        weak_update_similarity_margin: float,
+        weak_update_weight_multiplier: float,
     ):
         self.delta_new = float(delta_new)
         self.max_speakers = max(1, int(max_speakers))
@@ -56,6 +58,8 @@ class IncrementalCentroidClusterer:
         self.sma_window = max(1, int(sma_window))
         self.ema_alpha = 2.0 / (self.sma_window + 1.0)
         self.update_segment_overlap_threshold = float(update_segment_overlap_threshold)
+        self.weak_update_similarity_margin = float(weak_update_similarity_margin)
+        self.weak_update_weight_multiplier = float(weak_update_weight_multiplier)
 
         self.centroids: dict[int, np.ndarray] = {}
         self.counts: dict[int, int] = {}
@@ -453,10 +457,14 @@ class IncrementalCentroidClusterer:
                 # [弱更新策略]
                 # 当 observation 为 overlap_fallback（即在纯净无重叠区域找不到片段，只能在包含重叠的区域提取时），
                 # 为了防止聚类中心被重叠的人声污染，原本是一律跳过更新的。
-                # 但这里引入高置信度弱更新：如果这个片段与匹配到的 Global Speaker 极其相似（超过阈值 0.15 以上），
-                # 则说明我们很确信这就是他，此时允许以 0.25 倍的衰减权重进行轻微更新。
+                # 但这里引入高置信度弱更新：如果这个片段与匹配到的 Global Speaker 极其相似，
+                # 并且相似度超过 `global_match_threshold + weak_update_similarity_margin`，
+                # 则说明我们很确信这就是他，此时允许以可配置的衰减权重进行轻微更新。
                 # 这能够有效解决长时间争吵/重叠导致第二说话人身份轨迹偏离的问题。
-                if similarity > self.global_match_threshold + 0.15:
+                if (
+                    similarity
+                    > self.global_match_threshold + self.weak_update_similarity_margin
+                ):
                     should_skip, overlap_ratio = self._should_skip_update(
                         assigned_speaker,
                         observation,
@@ -474,7 +482,9 @@ class IncrementalCentroidClusterer:
                         continue
 
                     mode, alpha = self._update_speaker(
-                        assigned_speaker, observation, weight_multiplier=0.25
+                        assigned_speaker,
+                        observation,
+                        weight_multiplier=self.weak_update_weight_multiplier,
                     )
                     debug_info["updated_speakers"].append(
                         {

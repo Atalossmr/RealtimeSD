@@ -148,7 +148,7 @@ class SegmentBuilder:
         - 最后再看长度是否更长。
 
         这样做的原因是：
-        - 在线场景里，离当前目标时刻更近的证据更不容易跨到别的说话人；
+        - 实时场景里，离当前目标时刻更近的证据更不容易跨到别的说话人；
         - 纯度更高的片段通常更适合拿来提 embedding；
         - 长度仍然重要，但不应压过时序相关性和纯度。
         """
@@ -197,7 +197,7 @@ class SegmentBuilder:
         """返回 target_time 附近的统计窗口及对应的 frame_step。
 
         overlap 版本里，目标 speaker 的选择不再只看一个 17ms 左右的单帧，
-        而是看一个和在线输出步长 `step` 对齐的小时间窗。
+        而是看一个和实时输出步长 `step` 对齐的小时间窗。
         """
 
         frame_step = self._frame_step(absolute_centers)
@@ -223,7 +223,7 @@ class SegmentBuilder:
 
         背景是：
         - segmentation 的一帧只有十几毫秒；
-        - 在线系统一次真正输出的决策粒度却可能是 0.5 秒甚至更大；
+        - 实时系统一次真正输出的决策粒度却可能是 0.5 秒甚至更大；
         - 因此只看 target_time 对应的单帧很容易因为瞬时波动而漏掉说话人。
 
         当前策略是：

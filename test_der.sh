@@ -5,23 +5,23 @@ set -euo pipefail
 # 用法:
 #   bash test_der.sh [audio_input]
 #
-# 这个脚本专门测试 overlap 版本在线流水线。
-# 运行参数尽量以 `online_pipline_overlap_config.yaml` 为准，
+# 这个脚本专门测试实时管线。
+# 运行参数尽量以 `config.yaml` 为准，
 # 脚本只负责补充运行时必须信息和少量常用覆盖项。
 
 if [ -f ./.venv/bin/activate ]; then
     source ./.venv/bin/activate
 fi
 
-audio_input=${1:-./datasets/aishell4-test/S_R004S04C01.wav}
+audio_input=${1:-./datasets/aishell4-test}
 config_path=${CONFIG_PATH:-./config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
-ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/rttm/S_R004S04C01.rttm}}
+ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/rttm}}
 debug_flag=${DEBUG:-0}
 save_scores_flag=${SAVE_SEGMENTATION_SCORES:-0}
-show_rttm_flag=${SHOW_RTTM:-1}
+show_rttm_flag=${SHOW_RTTM:-0}
 der_verbose_flag=${DER_VERBOSE:-1}
 output_root=${OUTPUT_ROOT:-./exp}
 run_name=${RUN_NAME:-default}

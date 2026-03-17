@@ -1,9 +1,9 @@
-# 在线说话人识别配置文件
+# 实时说话人识别配置文件
 
 # 模型与运行环境。
 # 推理设备；可设为 auto / cpu / cuda 。
 device: auto
-# speaker encoder 类型；当前 overlap 流水线只支持 eres2netv2。
+# speaker encoder 类型；当前 overlap 管线只支持 eres2netv2。
 model_type: eres2netv2
 # 本地 speaker encoder checkpoint 路径；留空时会自动从 ModelScope 下载预训练 ERes2NetV2。
 model_path: # ./pretrained/modelscope/iic/speech_eres2netv2_sv_zh-cn_16k-common/pretrained_eres2netv2.ckpt
@@ -17,7 +17,7 @@ hf_cache_dir: ./pretrained/huggingface
 context_left_duration: 5.0
 # 目标时刻右侧未来上下文长度；建议与左侧总和保持在 10s 左右。
 context_right_duration: 5.0
-# 在线推进步长；越小越细，越大越省算力。
+# 实时推进步长；越小越细，越大越省算力。
 step: 0.5
 
 # segmentation 与目标 speaker 选择。
@@ -51,6 +51,10 @@ merge_threshold: 0.7
 sma_window: 10
 # 连续两次用于更新 centroid 的片段允许的最大重合度。
 update_segment_overlap_threshold: 0.50
+# overlap fallback 触发弱更新时，相对主匹配阈值还需额外超过的相似度裕量。
+weak_update_similarity_margin: 0.15
+# overlap fallback 在高置信度下允许弱更新时使用的衰减权重倍率；1.0 表示等同正常更新。
+weak_update_weight_multiplier: 0.25
 
 # streaming RTTM 输出控制。
 # RTTM 写出时允许保留的最短稳定片段时长；只影响输出，不影响 observation 选择。
@@ -64,7 +68,7 @@ streaming_merge_gap: 0.75
 # 是否启用“短 speaker 延迟写出”；开启后，累计说话时长不足阈值的 speaker 先不落 RTTM。
 delay_short_speaker_output: true
 # 启用延迟写出时，speaker 累计说话时长至少达到多少秒才开始补写此前缓存的 RTTM。
-speaker_min_total_duration_to_emit: 5.0
+speaker_min_total_duration_to_emit: 10.0
 
 # 调试与额外导出。
 # 是否保存每个窗口 segmentation-3.0 输出的概率矩阵。

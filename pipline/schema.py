@@ -1,4 +1,4 @@
-"""在线说话人分离涉及的配置和数据结构定义。"""
+"""实时说话人分离涉及的配置和数据结构定义。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .constants import BASE_DIR
 
 @dataclass
 class PipelineConfig:
-    """整条在线链路的统一配置。
+    """整条实时链路的统一配置。
 
     参数包括以下方面：
     - 音频调度；
@@ -23,7 +23,7 @@ class PipelineConfig:
     - 调试与额外导出。
     """
 
-    # 音频与在线调度参数。
+    # 音频与实时调度参数。
     # 这里仍保留左右上下文分开配置，方便在离线回放和低延迟场景之间切换。
     sample_rate: int = 16000
     context_left_duration: float = 5.0
@@ -73,6 +73,8 @@ class PipelineConfig:
     merge_threshold: float = 0.8
     sma_window: int = 5
     update_segment_overlap_threshold: float = 0.8
+    weak_update_similarity_margin: float = 0.15
+    weak_update_weight_multiplier: float = 0.25
 
     # 输出控制。
     # overlap 版本默认允许一个目标时刻输出两个 speaker，

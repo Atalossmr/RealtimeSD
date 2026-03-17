@@ -5,8 +5,8 @@ set -euo pipefail
 # 用法:
 #   bash run.sh [audio_input]
 #
-# 这个脚本专门测试 overlap 版本在线流水线。
-# 运行参数尽量以 `online_pipline_overlap_config.yaml` 为准，
+# 这个脚本专门运行实时管线。
+# 运行参数尽量以 `config.yaml` 为准，
 # 脚本只负责补充运行时必须信息和少量常用覆盖项。
 
 if [ -f ./.venv/bin/activate ]; then
@@ -26,7 +26,7 @@ show_rttm_flag=${SHOW_RTTM:-0}
 output_root=${OUTPUT_ROOT:-./exp}
 run_name=${RUN_NAME:-default}
 
-test_name="pipline_exp"
+test_name="common"
 basic_dir="${output_root}/${test_name}"
 exp_dir="${basic_dir}/${run_name}"
 results_file="$basic_dir/results.txt"
