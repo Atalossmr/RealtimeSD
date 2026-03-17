@@ -1,0 +1,9 @@
+.venv/
+exp/
+examples/
+pretrained/
+.ruff_cache/
+__pycache__/
+datasets/
+tmp/
+test/

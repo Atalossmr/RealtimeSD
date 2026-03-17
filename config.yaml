@@ -1,0 +1,126 @@
+# RealtimeSD 配置文件
+# 合并优先级：CLI 默认值 < 本 YAML < 显式 CLI 参数
+
+# ------------------------------------------------------------
+# 模型与运行环境
+# ------------------------------------------------------------
+# 推理设备：auto / cpu / cuda / cuda:0
+device: cuda
+# 说话人 embedding 模型类型（当前仅支持 eres2netv2）
+model_type: eres2netv2
+# 本地 embedding checkpoint 路径；为空时自动走 ModelScope 默认模型
+model_path:
+# pyannote segmentation 模型名
+segmentation_model: pyannote/segmentation-3.0
+# Hugging Face 缓存目录（segmentation 与 TIGER 共用）
+hf_cache_dir: ./pretrained/huggingface
+
+# ------------------------------------------------------------
+# 实时调度与目标帧
+# ------------------------------------------------------------
+# 目标时刻左侧历史上下文时长（秒）
+context_left_duration: 7.0
+# 目标时刻右侧未来上下文时长（秒）
+context_right_duration: 3.0
+# 时间轴推进步长（窗口触发频率，秒）
+advance_step: 0.5
+
+# ------------------------------------------------------------
+# observation 构造与 embedding 提取
+# ------------------------------------------------------------
+# select_target_local_indices 的统计窗口时长（秒）
+target_activity_window_duration: 1.00
+# 目标窗口内 local slot 的最小累计活跃时长（秒）
+target_min_duration: 0.30
+# 允许提取 embedding 的最短片段时长（秒）
+# ! 说明：当前 ERes2NetV2 + FBank(25ms window / 10ms hop) 下，
+# ! 若该值过低（至少需要 1680 samples ，即0.105s@16k），可能出现 NaN embedding，
+# ! 进而在 Hungarian 分配时报 "matrix contains invalid numeric entries"。
+min_segment_duration_for_embedding: 0.30
+# 允许提取 embedding 的最长片段时长（秒）
+max_segment_duration_for_embedding: 2.50
+# 候选片段中心距离 target_time 的最大偏移（秒）
+max_segment_shift_from_center: 7.0
+# 批量提取 segment embedding 时的 batch size
+segment_batch_size: 8
+
+# ------------------------------------------------------------
+# 全局 speaker 匹配与 centroid 维护
+# ------------------------------------------------------------
+# 最多维护多少个全局 speaker
+max_speakers: 50
+# 低于该相似度时，更倾向于新建 speaker
+new_speaker_threshold: 0.40
+# observation 命中已有 global speaker 的主阈值
+global_match_threshold: 0.50
+# 全局 speaker 自动 merge 的相似度阈值
+merge_threshold: 0.65
+# 仅当 observation 片段时长达到该阈值，才允许新建 speaker（秒）
+min_segment_duration_for_new_speaker: 1.00
+# 仅当 observation 片段时长达到该阈值，才允许更新 centroid（秒）
+min_segment_duration_for_centroid_update: 1.50
+# 是否关闭 EMA 更新；true 表示全程使用增量均值（SMA）
+disable_ema_update: true
+# centroid 预热窗口；预热阶段使用增量均值，之后切 EMA
+centroid_warmup_window: 10
+# speaker 更新次数达到该阈值后视为 stable
+stable_update_count_threshold: 10
+# 连续两次用于更新 centroid 的片段允许的最大重叠比
+update_segment_overlap_threshold: 0.5
+# overlap_fallback 弱更新触发所需的额外相似度裕量
+weak_update_similarity_margin: 0.15
+# overlap_fallback 弱更新权重倍率（1.0 表示与常规更新同权重）
+weak_update_weight_multiplier: 1.00
+
+# ------------------------------------------------------------
+# observation reuse 缓存
+# ------------------------------------------------------------
+# true 表示关闭复用（每个窗口都重新提 embedding）
+disable_observation_reuse: false
+# 命中复用所需的最小重叠比（overlap / min(duration_a, duration_b)）
+reuse_overlap_threshold: 0.90
+# 复用缓存的时间有效期（秒）
+reuse_time_horizon: 7.00
+# 全局复用缓存最多保留的记录条数
+reuse_max_recent_records: 8
+
+# ------------------------------------------------------------
+# streaming RTTM 输出
+# ------------------------------------------------------------
+# RTTM 写出最短片段时长（秒）
+min_segment_duration: 0.30
+# 单个目标时刻最多输出的 speaker 数
+max_frame_speakers: 3
+# 活跃 turn 的稳定前缀最小刷盘时长（秒）
+streaming_flush_interval: 20.0
+# 同 speaker 相邻片段自动拼接允许的最大间隔（秒）
+streaming_merge_gap: 0.75
+# 是否延迟输出未稳定 speaker 的 RTTM 片段
+delay_short_speaker_output: true
+# 是否同步把新增 RTTM 行打印到控制台
+show_rttm: false
+
+# ------------------------------------------------------------
+# 重叠分离与音轨导出
+# ------------------------------------------------------------
+# 是否启用说话人音轨转录（并在重叠段执行 TIGER 分离覆盖）
+enable_speech_separation: false
+# TIGER 模型仓库名
+separation_model: JusperLee/TIGER-speech
+# 连续重叠达到该时长才触发分离（秒）
+min_overlap_duration_to_process: 0.25
+# 重叠段送入分离模型前，补齐到的目标时长（秒）
+separation_required_duration: 3.0
+# 长重叠分段处理时，每段的最大处理时长（秒）
+max_overlap_process_interval: 3.0
+# 是否导出 uncertain 说话人音轨
+export_uncertain_speaker_audio: false
+# 导出说话人音轨采样率
+speaker_audio_sample_rate: 16000
+# 导出音频格式（推荐 wav）
+speaker_audio_format: wav
+
+# ------------------------------------------------------------
+# 调试
+# ------------------------------------------------------------
+debug: false
