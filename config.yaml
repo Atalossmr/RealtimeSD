@@ -68,7 +68,7 @@ streaming_merge_gap: 0.75
 # 是否启用“短 speaker 延迟写出”；开启后，累计说话时长不足阈值的 speaker 先不落 RTTM。
 delay_short_speaker_output: true
 # 启用延迟写出时，speaker 累计说话时长至少达到多少秒才开始补写此前缓存的 RTTM。
-speaker_min_total_duration_to_emit: 10.0
+speaker_min_total_duration_to_emit: 5.0
 
 # 调试与额外导出。
 # 是否保存每个窗口 segmentation-3.0 输出的概率矩阵。
