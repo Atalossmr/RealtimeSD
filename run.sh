@@ -6,7 +6,7 @@ set -euo pipefail
 #   bash run.sh [audio_input]
 #
 # 这个脚本专门运行实时管线。
-# 运行参数尽量以 `config.yaml` 为准，
+# 运行参数以 `config.yaml` 为准，
 # 脚本只负责补充运行时必须信息和少量常用覆盖项。
 
 if [ -f ./.venv/bin/activate ]; then
@@ -18,8 +18,6 @@ config_path=${CONFIG_PATH:-./config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
-ref_rttm=${REF_RTTM:-}
-ref_rttm_dir=${REF_RTTM_DIR:-./datasets/rttm}
 debug_flag=${DEBUG:-0}
 save_scores_flag=${SAVE_SEGMENTATION_SCORES:-0}
 show_rttm_flag=${SHOW_RTTM:-0}
