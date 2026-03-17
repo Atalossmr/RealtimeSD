@@ -13,7 +13,7 @@
 7. 将活跃的 local slot 映射到 global speaker
 8. 把决策转成 RTTM 并持续输出
 
-按职责可以把它分成三层：
+主要分成三层：
 
 - `segmentation`：回答“这一时刻附近有哪些 local speaker 在说话”
 - `clustering`：回答“这些 local speaker 分别是谁”
@@ -260,9 +260,9 @@ python3 pipline.py --show_rttm ...
 
 这个开关只影响控制台是否实时看到 RTTM 行，不影响 `output_dir/run.log` 和最终 RTTM 文件落盘。
 
-### 调试时优先看什么
+### 调试
 
-建议在排查 overlap 行为时打开：
+建议在排查问题时打开：
 
 ```bash
 python3 pipline.py --debug --verbose ...
@@ -276,20 +276,13 @@ python3 pipline.py --debug --verbose ...
 - `local_assignments`：多个 local 是否被成功分到不同 global
 - `frame_decision`：最终输出阶段是否真的保住了第二说话人
 
-如果遇到“明明有重叠但没输出第二人”，建议按这个顺序排查：
-
-1. `target_local_activity` 是否已经把第二个 local 过滤掉
-2. `build_observations` 是否没能为它构造出合法 observation
-3. Hungarian assignment 是否把它映射到异常的 global id
-4. 最终 `max_frame_speakers` 截断是否又把它裁掉
-
 ## 运行方式
 
 仓库根目录当前实际入口是：
 
 ```bash
 python3 pipline.py \
-  --wav ./datasets/tingshen_6.wav \
+  --wav ./examples/example.wav \
   --model_path ./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt \
   --output_dir ./tmp/overlap_run \
   --config ./config.yaml \
@@ -301,20 +294,20 @@ python3 pipline.py \
 如果你想直接复用仓库里维护的 overlap 实验参数，也可以使用根目录脚本，例如：
 
 ```bash
-bash run.sh ./datasets/tingshen_6.wav
+bash run.sh ./examples/example.wav
 ```
 
 如果希望脚本运行时同步在控制台看到 RTTM 行：
 
 ```bash
-SHOW_RTTM=1 bash run.sh ./datasets/tingshen_6.wav
+SHOW_RTTM=1 bash run.sh ./examples/example.wav
 ```
 
 或者在提供参考 RTTM 时直接联动评估：
 
 ```bash
 REF_RTTM=./datasets/rttm \
-bash test_der.sh ./datasets/tingshen_6.wav
+bash test_der.sh ./examples/example.wav
 ```
 
 同样也支持：
@@ -322,26 +315,8 @@ bash test_der.sh ./datasets/tingshen_6.wav
 ```bash
 REF_RTTM=./datasets/rttm \
 SHOW_RTTM=1 \
-bash test_der.sh ./datasets/tingshen_6.wav
+bash test_der.sh ./examples/example.wav
 ```
-
-它适合做 overlap 参数实验，因为会：
-
-- 固定一套 overlap 配置和运行入口
-- 记录实际命令
-- 汇总 RTTM 结果
-- 在提供参考 RTTM 时自动计算 DER
-
-## 当前版本的边界
-
-这条管线已经比普通实时版本更适合重叠输出，但它仍然不是完整的 overlap 联合建模系统。当前仍然保留着一些有意的保守设计：
-
-- observation 构造依然优先非重叠区域
-- overlap fallback 证据不会像干净片段那样强更新 centroid
-- 目标 speaker 选择仍主要依赖累计活跃时长，而不是更复杂的置信度模型
-- 输出侧虽然支持多 speaker，但本质上仍是实时近似决策，而不是全局最优离线解
-
-因此更准确的定位是：这是一个针对 overlap 场景做了专门增强的实时 diarization 管线，而不是一个彻底为 overlap 重建的端到端研究系统。
 
 ## 代码入口速查
 
@@ -360,12 +335,3 @@ bash test_der.sh ./datasets/tingshen_6.wav
 - `--verbose` 控制全局日志级别到 `DEBUG`
 - `--debug` 控制是否输出窗口级结构化调试信息
 - `--show_rttm` 控制是否把新写出的 RTTM 行同步输出到控制台
-
-通常排查 overlap 行为时，这两个开关需要一起开。
-
-如果你后续要继续调 overlap 效果，最值得联动观察的通常是这几组参数：
-
-1. `tau_active` + `target_primary_min_duration` + `target_overlap_min_duration`
-2. `min_segment_duration_for_embedding` + `max_segment_shift_from_center`
-3. `global_match_threshold` + `merge_threshold`
-4. `max_frame_speakers` + `streaming_flush_interval` + `streaming_merge_gap`
