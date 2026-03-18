@@ -28,16 +28,13 @@ class UpdateSegmentRecord:
 
 
 class IncrementalCentroidClusterer:
-    """overlap 版本实时全局 speaker 分配器。
+    """实时全局 speaker 分配器。
 
-    相比原简化版，这里最重要的变化是：
-    - 同一个目标窗口内的多个 local speaker 不再逐个独立贪心匹配；
-    - 而是先构造 local x global 的 cost matrix；
-    - 再用 Hungarian algorithm 做联合分配；
-    - 从而显式避免“两个同时说话的人被分到同一个 global speaker”。
+    依据以下逻辑：
+    - 构造 local x global 的 cost matrix；
+    - 用 Hungarian algorithm 做联合分配；
 
-    这相当于把 overlap 版本里的最小版 cannot-link，从“手工跳过已占用 id”升级成
-    “同窗联合 assignment”。
+    防止同时活跃的局部说话人被贴到同一个全局说话人
     """
 
     def __init__(

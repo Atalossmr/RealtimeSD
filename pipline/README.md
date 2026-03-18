@@ -184,7 +184,7 @@
 
 - `min_segment_duration`：RTTM 写出允许的最短稳定片段时长
 - `max_frame_speakers`：单个目标时刻最多输出多少个 speaker
-- `streaming_flush_interval`：稳定前缀累计多久后真正写盘
+- `streaming_flush_interval`：单条 RTTM 的最大时间长度
 - `streaming_merge_gap`：同一 speaker 相邻片段可自动合并的最大间隔
 
 这组参数决定RTTM的输出。

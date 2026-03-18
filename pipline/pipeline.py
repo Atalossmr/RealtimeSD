@@ -1,4 +1,4 @@
-"""实时说话人分离主流程模块。"""
+"""实时说话人识别主流程模块。"""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 class NativeOnlineSpeakerDiarization:
     """实时主控类。
 
-    当前重构后的实现严格围绕流程图来组织：
+    当前实现的主要流程为：
     1. 读音频；
     2. 切上下文；
     3. 跑 segmentation；
@@ -46,9 +46,6 @@ class NativeOnlineSpeakerDiarization:
     6. 做 local -> global 映射；
     7. 按简单顺序提交；
     8. 写 streaming RTTM。
-
-    和旧版本相比，这里刻意去掉了很多“为了更聪明而更复杂”的策略，
-    保留一个容易读、容易解释、容易调试的主干实现。
     """
 
     def __init__(self, config: PipelineConfig, embedding_model_path: Optional[str]):

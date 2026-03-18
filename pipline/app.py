@@ -21,11 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """CLI 入口。
-
-    这里故意只保留“参数解析 + 初始化 + 批量跑文件”的最薄一层，
-    让外部维护者能一眼看到脚本真正的运行入口，而不是再去翻大量算法细节。
-    """
+    """CLI 入口。"""
 
     parser = build_arg_parser()
     raw_args = parser.parse_args()

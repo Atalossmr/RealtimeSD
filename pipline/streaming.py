@@ -17,13 +17,7 @@ logger = logging.getLogger(__name__)
 class StreamingRTTMWriter:
     """把 overlap 版本的逐帧决策持续写成 RTTM。
 
-    和原版相比，这里最重要的差别是：
-    - 不再维护单一 `pending_write_turn`；
-    - 而是按 speaker 分别维护活跃 turn；
-    - 因此在 overlap 场景里，两个 speaker 可以同时延展各自的 turn；
-    - 写出时也不会因为某一帧刚经过就立即把一小段 RTTM 切出来。
-
-    这能显著减少 overlap 场景下“每帧一过就写一小段 RTTM”的碎片问题。
+    - 按 speaker 分别维护活跃 turn，防止重叠音频导致 RTTM 变得细碎
     """
 
     def __init__(

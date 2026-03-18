@@ -14,13 +14,13 @@ from .schema import PipelineConfig, SegmentObservation
 class SegmentBuilder:
     """从 segmentation 帧结果中构造最小可用的 observation。
 
-    这次重构的目标是把逻辑压到最简单：
+    主要流程为：
     - 先在目标帧上找活跃的 local slot；
     - 再在整个上下文里为每个活跃 slot 找连续活跃区间；
     - 对每个 slot 只取“离目标帧最近、且长度合法”的那一段；
     - 然后直接提 embedding。
 
-    这样做虽然比复杂排序策略更朴素，但更容易理解、排查和维护。
+    后续可替换为更有效地挑选逻辑。
     """
 
     def __init__(
