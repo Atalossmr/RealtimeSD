@@ -37,15 +37,16 @@ pip install -r requirements.txt
 
 运行时通常需要两个模型：
 
-- speaker encoder：`ERes2NetV2`
-- segmentation：`pyannote/segmentation-3.0`
+- `ERes2NetV2`
+
+- `pyannote/segmentation-3.0`
 
 默认行为：
 
-- 如果 `--model_path` 未提供，会尝试从 ModelScope 下载默认 `ERes2NetV2`
-- segmentation 模型会从 Hugging Face 下载并缓存到 `./pretrained/huggingface`
+- 如果 `--model_path` 未提供，会尝试从 ModelScope 下载预训练 `ERes2NetV2`
+- segmentation-3.0 模型会在首次使用时从 Hugging Face 下载并缓存到 `./pretrained/huggingface`
 
-Hugging Face 模型需要授权，可通过环境变量或参数提供 token：
+Hugging Face 模型需要授权，需要环境变量或参数提供 hf token：
 
 ```bash
 export HF_TOKEN=your_token
@@ -71,40 +72,27 @@ python3 pipline.py \
   --config ./config.yaml
 ```
 
-常用覆盖项：
+常用参数：
 
 ```bash
 python3 pipline.py \
   --wav ./examples \
   --output_dir ./exp/batch_demo \
   --config ./config.yaml \
-  --model_path ./pretrained/custom_eres2netv2_finetune/final_model.ckpt \
+  --model_path ./pretrained/examples/example.ckpt \
   --hf_cache_dir ./pretrained/huggingface \
-  --device cuda:0 \
   --verbose
 ```
 
-如果需要窗口级结构化调试信息，记得再加 `--debug`。
-
-如果希望在运行时把新生成的 RTTM 行同步输出到控制台，可以再加：
-
-```bash
-python3 pipline.py \
-  --wav ./examples \
-  --output_dir ./exp/batch_demo \
-  --config ./config.yaml \
-  --show_rttm
-```
+需要调试信息，可添加参数 `--debug`。
+需要运行时将新生成的 RTTM 行同步输出到控制台，可添加参数 `--show_rttm`。
 
 ## 输出文件
 
 每个音频通常会在输出目录下生成：
 
 - `*.streaming.rttm`：流式识别结果
-- `run.log`：运行日志（CLI 启动时强制写入 `output_dir`）
-- `command.log`：实际命令（使用脚本时）
-
-日志会写入 `run.log`；如果需要终端实时看到 RTTM，请开启 `--show_rttm` 或使用 `SHOW_RTTM=1`。
+- `run.log`：运行日志
 
 如果开启 `--save_segmentation_scores`，还会生成：
 

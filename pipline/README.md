@@ -15,23 +15,21 @@
 
 主要分成三层：
 
-- `segmentation`：回答“这一时刻附近有哪些 local speaker 在说话”
-- `clustering`：回答“这些 local speaker 分别是谁”
-- `streaming`：回答“怎样把这些决策写成更稳定的 RTTM 片段”
+- `segmentation`：完成局部说话人识别和片段采集
+- `clustering`：完成局部 -> 全局的匹配
+- `streaming`：写出 RTTM
 
 ## 重叠音频处理相关内容
 
 ### 1. 目标 speaker 选择不再只看单帧
 
-在 overlap 场景里，只靠单帧活跃度判断非常脆弱，因为第二说话人往往只在部分帧活跃，且得分容易闪烁。当前实现改成在 `target_time` 周围取一个与 `step` 对齐的小窗口，统计每个 local slot 的累计活跃时长。
+在重叠场景里，只靠单帧活跃度判断非常脆弱，因为第二说话人往往只在部分帧活跃，且得分容易闪烁。当前实现为在 `target_time` 周围取一个与 `step` 对齐的小窗口，统计每个 local slot 的累计活跃时长。
 
 核心逻辑是：
 
 - 先用 `target_overlap_min_duration` 过滤太短的候选
 - 再要求至少有一个候选达到 `target_primary_min_duration`
 - 满足后才认为这一时刻真的有人说话
-
-这样做更适合保留短促重叠语音，也更能抵抗瞬时噪声。
 
 对应代码主要在 `segmentation.py`：
 
@@ -40,7 +38,7 @@
 
 ### 2. 同窗多个 local speaker 使用 Hungarian 联合分配
 
-重叠场景里，一个常见错误是两个同时活跃的 local speaker 都与同一个 global centroid 相似，逐个贪心匹配时就会被错误贴到同一个人。这里的做法是：
+为防止两个同时活跃的局部说话人被贴到同一个 global speaker，这里的做法是：
 
 - 对当前窗口所有 observation 与所有 global centroid 计算相似度
 - 构造 `cost = 1 - similarity` 的代价矩阵
@@ -59,41 +57,19 @@
 
 这个设计的出发点是：先保证系统“能输出两个人”，再谨慎决定“是否让重叠片段强力参与身份更新”。
 
-不过当前实现补了一层高置信度弱更新：当 `overlap_fallback` 片段和已匹配 global speaker 的相似度超过 `global_match_threshold + weak_update_similarity_margin` 时，仍允许用 `weak_update_weight_multiplier` 指定的衰减倍率对 centroid 做轻微更新；默认值分别是 `0.15` 和 `0.25`。
+当前支持高置信度弱更新：当 `overlap_fallback` 片段和已匹配 global speaker 的相似度超过 `global_match_threshold + weak_update_similarity_margin` 时，仍允许用 `weak_update_weight_multiplier` 指定的衰减倍率对 centroid 做轻微更新；默认值分别是 `0.15` 和 `0.25`。
 
 相关代码在 `segmentation.py`：
 
 - `_non_overlap_mask`
 - `_select_region_for_local`
 
-### 4. 最终输出按时间窗聚合，而不是按单帧瞬时分数截断
-
-原始按单帧分数截断的策略在 overlap 场景下很容易把第二说话人裁掉。当前版本会先把目标时间附近的 local 证据聚合到 global speaker 维度，再综合活跃总时长、平均分数和目标帧得分，最后才按 `max_frame_speakers` 做截断。
-
-这比“谁当前帧最高就保留谁”的策略稳定得多。
-
-相关代码在 `pipeline.py`：
-
-- `_target_frame_speakers`
-
-### 5. streaming RTTM 写出改成按 speaker 维护活跃 turn
-
-按 speaker 分别维护 `active_turns`：
-
-- 同一时刻允许多个 turn 并行延展
-- 优先写稳定前缀，而不是每一帧立即落盘尾部
-- 在 turn 结束或 `finalize()` 时再补尾段
-
-这能明显减少 overlap RTTM 中的碎片化输出。
-
-相关代码在 `streaming.py`。
-
-### 6. 支持可选的可疑 speaker 延迟写出和 RTTM speaker 重映射
+### 4. 支持可选的可疑 speaker 延迟写出和 RTTM speaker 重映射
 
 为了方便排查短暂误检 speaker，streaming 层支持一组可选行为：
 
 - 开启 `delay_short_speaker_output` 后，speaker 在累计说话时长达到 `speaker_min_total_duration_to_emit` 前不会写入 RTTM
-- 达到阈值后，会把之前缓存的 RTTM 片段一次性补写
+- 达到阈值后，会把之前该说话人缓存的 RTTM 片段一次性写出
 - 如果整段音频结束时仍未达标，则不写入 RTTM，但会把缓存片段按 RTTM 风格打印到日志
 
 在这个模式下，还会维护一份内部 speaker id 到 RTTM speaker id 的映射：
@@ -144,10 +120,10 @@
 
 负责维护 global speaker centroid，并处理：
 
+- speaker 合并
 - Hungarian 联合分配
 - speaker 新建
 - speaker 更新
-- speaker 合并
 - 调试信息记录
 
 ### `streaming.py`
@@ -162,9 +138,9 @@
 
 负责通用工具逻辑，例如音频路径收集、日志初始化等。
 
-## 参数分层理解
+## 参数作用
 
-参数分为一下几个层面。
+参数分为以下几个方面：
 
 ### 1. 音频与实时调度
 
@@ -234,13 +210,10 @@
 每个输入音频默认会生成一个：
 
 - `*.streaming.rttm`
+
+其余信息在：
+
 - `run.log`
-
-输出文件 stem 与输入音频 stem 对齐。
-
-其中 `run.log` 由 CLI 在启动时强制创建在 `output_dir` 下，不再依赖 shell 重定向。
-
-默认情况下，常规 `INFO` / `DEBUG` 日志只写入 `run.log`，不会同步打印到控制台。
 
 ### 可选调试输出
 
@@ -248,17 +221,15 @@
 
 - `*.segmentation_scores.jsonl`
 
-它记录每个实时窗口的 segmentation 概率矩阵和时间信息，适合观察窗口级行为。
+它记录每个实时窗口的 segmentation 概率矩阵和时间信息。
 
 ### 控制台同步 RTTM
 
-如果希望在运行时一边持续写入 `*.streaming.rttm`，一边把新生成的 RTTM 行同步打印到控制台，可以开启：
+如果希望在运行时在控制台里看到r RTTM 文件，可添加参数 `--show_rttm`。
 
 ```bash
 python3 pipline.py --show_rttm ...
 ```
-
-这个开关只影响控制台是否实时看到 RTTM 行，不影响 `output_dir/run.log` 和最终 RTTM 文件落盘。
 
 ### 调试
 
@@ -268,55 +239,13 @@ python3 pipline.py --show_rttm ...
 python3 pipline.py --debug --verbose ...
 ```
 
-推荐优先关注这些日志字段：
+主要日志字段：
 
 - `target_local_activity`：目标时刻附近各 local slot 的累计活跃时长
 - `observations`：每个 local 是使用 `non_overlap` 还是 `overlap_fallback`
 - `assignment_cost_matrix`：local 与 global 的相似度/代价矩阵是否合理
 - `local_assignments`：多个 local 是否被成功分到不同 global
 - `frame_decision`：最终输出阶段是否真的保住了第二说话人
-
-## 运行方式
-
-仓库根目录当前实际入口是：
-
-```bash
-python3 pipline.py \
-  --wav ./examples/example.wav \
-  --model_path ./pretrained/custom_eres2netv2_finetune/final_model_v2.ckpt \
-  --output_dir ./tmp/overlap_run \
-  --config ./config.yaml \
-  --device auto
-```
-
-运行后会固定在 `./tmp/overlap_run/run.log` 写入本次执行日志。
-
-如果你想直接复用仓库里维护的 overlap 实验参数，也可以使用根目录脚本，例如：
-
-```bash
-bash run.sh ./examples/example.wav
-```
-
-如果希望脚本运行时同步在控制台看到 RTTM 行：
-
-```bash
-SHOW_RTTM=1 bash run.sh ./examples/example.wav
-```
-
-或者在提供参考 RTTM 时直接联动评估：
-
-```bash
-REF_RTTM=./datasets/rttm \
-bash test_der.sh ./examples/example.wav
-```
-
-同样也支持：
-
-```bash
-REF_RTTM=./datasets/rttm \
-SHOW_RTTM=1 \
-bash test_der.sh ./examples/example.wav
-```
 
 ## 代码入口速查
 
@@ -328,10 +257,3 @@ bash test_der.sh ./examples/example.wav
 - 全局 speaker 分配：`clustering.py`
 - RTTM 写出：`streaming.py`
 - 数据结构：`schema.py`
-
-另外，日志层面要注意一件事：
-
-- 运行日志总是写入 `output_dir/run.log`
-- `--verbose` 控制全局日志级别到 `DEBUG`
-- `--debug` 控制是否输出窗口级结构化调试信息
-- `--show_rttm` 控制是否把新写出的 RTTM 行同步输出到控制台
