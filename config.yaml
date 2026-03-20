@@ -34,7 +34,7 @@ max_speakers: 50
 # 允许提取 embedding 的最短片段时长；调低可提升短重叠片段召回。
 min_segment_duration_for_embedding: 0.30
 # 允许提取 embedding 的最长片段时长；过长片段会按中心裁剪。
-max_segment_duration_for_embedding: 2.5
+max_segment_duration_for_embedding: 2.50
 # 候选 observation 中心距离目标时刻允许偏移的最大范围。
 max_segment_shift_from_center: 5.0
 # 批量提取 segment embedding 时的 batch size。
