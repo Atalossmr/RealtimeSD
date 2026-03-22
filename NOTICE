@@ -2,9 +2,9 @@ RealtimeSD
 Copyright (c) 2026 Yanchen Zhang
 
 This product includes software and model assets from 3D-Speaker
-(https://github.com/modelscope/3D-Speaker), used in `speakerlab/`.
+(<https://github.com/modelscope/3D-Speaker>), used in `speakerlab/`.
 
-Copyright 3D-Speaker (https://github.com/alibaba-damo-academy/3D-Speaker). All Rights Reserved.
+Copyright 3D-Speaker (<https://github.com/modelscope/3D-Speaker>). All Rights Reserved.
 Licensed under the Apache License, Version 2.0.
 
 This product includes `speakerlab/md-eval.pl`.
@@ -13,7 +13,7 @@ Copyright (c) 2018, Neville Ryant
 Licensed under the BSD 2-Clause License.
 
 This product includes software and model assets from pyannote/pyannote-audio
-(https://github.com/pyannote/pyannote-audio), including `pyannote/segmentation-3.0`.
+(<https://github.com/pyannote/pyannote-audio>), including `pyannote/segmentation-3.0`.
 
 Copyright (c) 2023 CNRS
 Licensed under the MIT License.
