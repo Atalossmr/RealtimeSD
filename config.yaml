@@ -14,9 +14,9 @@ hf_cache_dir: ./pretrained/huggingface
 
 # 音频与上下文调度。
 # 目标时刻左侧历史上下文长度；建议与右侧总和保持在 10s 左右。
-context_left_duration: 5.0
+context_left_duration: 7.0
 # 目标时刻右侧未来上下文长度；建议与左侧总和保持在 10s 左右。
-context_right_duration: 5.0
+context_right_duration: 3.0
 # 实时推进步长；越小越细，越大越省算力。
 step: 0.5
 
@@ -34,9 +34,9 @@ max_speakers: 50
 # 允许提取 embedding 的最短片段时长；调低可提升短重叠片段召回。
 min_segment_duration_for_embedding: 0.30
 # 允许提取 embedding 的最长片段时长；过长片段会按中心裁剪。
-max_segment_duration_for_embedding: 2.50
+max_segment_duration_for_embedding: 2.00
 # 候选 observation 中心距离目标时刻允许偏移的最大范围。
-max_segment_shift_from_center: 5.0
+max_segment_shift_from_center: 7.0
 # 批量提取 segment embedding 时的 batch size。
 segment_batch_size: 8
 
@@ -44,9 +44,9 @@ segment_batch_size: 8
 # 当前 observation 与已有全局 speaker 都不够像时，更倾向新建 speaker 的阈值。
 delta_new: 0.45
 # observation 匹配已有全局 speaker 的主阈值；过低易误贴，过高易碎裂。
-global_match_threshold: 0.55
+global_match_threshold: 0.60
 # 全局 speaker 触发自动合并的相似度阈值；overlap 场景建议更保守。
-merge_threshold: 0.7
+merge_threshold: 0.75
 # centroid 早期使用简单平均的样本窗口大小。
 sma_window: 10
 # 连续两次用于更新 centroid 的片段允许的最大重合度。

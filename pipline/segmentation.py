@@ -142,15 +142,11 @@ class SegmentBuilder:
     ) -> Optional[tuple[float, float, float, float]]:
         """为一个 local slot 选出最合适的单个片段。
 
-        overlap 版本里，这里的排序规则改成：
-        - 优先选择离目标时间更近的 region；
-        - 距离接近时，再看平均激活是否更高；
+        这里的排序规则为：
+        - 平均激活是否更高；
+        - 离目标时间更近的；
         - 最后再看长度是否更长。
 
-        这样做的原因是：
-        - 实时场景里，离当前目标时刻更近的证据更不容易跨到别的说话人；
-        - 纯度更高的片段通常更适合拿来提 embedding；
-        - 长度仍然重要，但不应压过时序相关性和纯度。
         """
 
         best_item: Optional[
@@ -180,7 +176,7 @@ class SegmentBuilder:
             region_center = 0.5 * (seg_start + seg_end)
             distance = abs(region_center - reference_center)
 
-            rank = (-distance, mean_activity, duration)
+            rank = (mean_activity, -distance, duration)
             value = (seg_start, seg_end, mean_activity, speech_ratio)
             if best_item is None or rank > best_item[0]:
                 best_item = (rank, value)
