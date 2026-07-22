@@ -1,5 +1,6 @@
-# RealtimeSD 配置文件
+# RealtimeSD 管线配置文件
 # 全部调参项以本文件为唯一来源；CLI 仅保留运行时输入、模型/环境参数与少量开关
+# 架构：segmentation-3.0 在 10s chunk 内做局部识别，ERes2NetV2 + 增量聚类做全局对齐
 
 # ------------------------------------------------------------
 # 模型与运行环境
@@ -12,35 +13,29 @@ model_type: eres2netv2
 model_path:
 # pyannote segmentation 模型名
 segmentation_model: pyannote/segmentation-3.0
-# Hugging Face 缓存目录（segmentation 与 TIGER 共用）
+# Hugging Face 缓存目录
 hf_cache_dir: ./pretrained/huggingface
 
 # ------------------------------------------------------------
-# 实时调度与目标帧
+# chunk 调度
 # ------------------------------------------------------------
-# 目标时刻左侧历史上下文时长（秒）
-context_left_duration: 7.0
-# 目标时刻右侧未来上下文时长（秒）
-context_right_duration: 3.0
-# 时间轴推进步长（窗口触发频率，秒）
-advance_step: 0.5
+# chunk 时长（秒）；segmentation-3.0 原生窗口即 10s
+chunk_duration: 10.0
+# 窗口推进步长（秒）。hop < chunk_duration 时为重叠滑窗：
+# 每个窗口只提交中段 hop 秒（两侧各留 (chunk-hop)/2 作为边界缓冲），
+# hop == chunk_duration 时退化为非重叠模式
+hop_duration: 5.0
 
 # ------------------------------------------------------------
-# observation 构造与 embedding 提取
+# chunk 内 local track 构造与 embedding 提取
 # ------------------------------------------------------------
-# select_target_local_indices 的统计窗口时长（秒）
-target_activity_window_duration: 1.00
-# 目标窗口内 local slot 的最小累计活跃时长（秒）
-target_min_duration: 0.30
-# 允许提取 embedding 的最短片段时长（秒）
-# ! 说明：当前 ERes2NetV2 + FBank(25ms window / 10ms hop) 下，
-# ! 若该值过低（至少需要 1680 samples ，即0.105s@16k），可能出现 NaN embedding，
-# ! 进而在 Hungarian 分配时报 "matrix contains invalid numeric entries"。
+# local slot 在 chunk 内的最小累计活跃时长（秒），低于则不建 track、不输出
+min_local_activity_duration: 0.30
+# 允许提取 embedding 的最短拼接时长（秒）
+# ! 过低（< 0.105s@16k）可能产生 NaN embedding，导致 Hungarian 报错
 min_segment_duration_for_embedding: 0.30
-# 允许提取 embedding 的最长片段时长（秒）
-max_segment_duration_for_embedding: 2.50
-# 候选片段中心距离 target_time 的最大偏移（秒）
-max_segment_shift_from_center: 7.0
+# 单个 track 用于提 embedding 的最大拼接时长（秒）
+max_segment_duration_for_embedding: 4.0
 # 批量提取 segment embedding 时的 batch size
 segment_batch_size: 8
 
@@ -50,59 +45,35 @@ segment_batch_size: 8
 # 最多维护多少个全局 speaker
 max_speakers: 50
 # 低于该相似度时，更倾向于新建 speaker
-new_speaker_threshold: 0.40
+# 注意：probationary 架构下 false split 可被 absorb 修复、false glue 永久存在，
+# 因此该阈值应靠近 global_match_threshold，宁可多建簇也不要黏合
+new_speaker_threshold: 0.50
 # observation 命中已有 global speaker 的主阈值
 global_match_threshold: 0.50
-# 全局 speaker 自动 merge 的相似度阈值
-merge_threshold: 0.60
-# 仅当 observation 片段时长达到该阈值，才允许新建 speaker（秒）
-min_segment_duration_for_new_speaker: 1.00
-# 仅当 observation 片段时长达到该阈值，才允许更新 centroid（秒）
+# probationary speaker 被最近 confirmed speaker 吸收的相似度阈值
+absorb_threshold: 0.65
+# 仅当 track 时长达到该阈值，才允许新建 speaker（秒）
+min_segment_duration_for_new_speaker: 0.50
+# 仅当 track 时长达到该阈值，才允许更新 centroid（秒）
 min_segment_duration_for_centroid_update: 1.50
-# speaker 更新次数达到该阈值后视为 stable
-stable_update_count_threshold: 10
 # 连续两次用于更新 centroid 的片段允许的最大重叠比
-update_segment_overlap_threshold: 0.5
+update_segment_overlap_threshold: 1.0
 # overlap_fallback 弱更新触发所需的额外相似度裕量
 weak_update_similarity_margin: 0.15
 # overlap_fallback 弱更新权重倍率（1.0 表示与常规更新同权重）
 weak_update_weight_multiplier: 1.00
+# 新建 speaker 累计匹配语音达到该时长后转正（秒）
+probation_confirm_duration: 10.0
 
 # ------------------------------------------------------------
-# streaming RTTM 输出
+# RTTM 输出
 # ------------------------------------------------------------
 # RTTM 写出最短片段时长（秒）
 min_segment_duration: 0.30
-# 单个目标时刻最多输出的 speaker 数
-max_frame_speakers: 3
-# 活跃 turn 的稳定前缀最小刷盘时长（秒）
-streaming_flush_interval: 20.0
-# 同 speaker 相邻片段自动拼接允许的最大间隔（秒）
+# 同 speaker 相邻片段自动拼接允许的最大间隔（秒，跨 chunk 生效）
 streaming_merge_gap: 0.75
-# 是否延迟输出未稳定 speaker 的 RTTM 片段
-delay_short_speaker_output: true
 # 是否同步把新增 RTTM 行打印到控制台
 show_rttm: false
-
-# ------------------------------------------------------------
-# 重叠分离与音轨导出
-# ------------------------------------------------------------
-# 是否启用说话人音轨转录（并在重叠段执行 TIGER 分离覆盖）
-enable_speech_separation: false
-# TIGER 模型仓库名
-separation_model: JusperLee/TIGER-speech
-# 连续重叠达到该时长才触发分离（秒）
-min_overlap_duration_to_process: 0.25
-# 重叠段送入分离模型前，补齐到的目标时长（秒）
-separation_required_duration: 3.0
-# 长重叠分段处理时，每段的最大处理时长（秒）
-max_overlap_process_interval: 3.0
-# 是否导出 uncertain 说话人音轨
-export_uncertain_speaker_audio: false
-# 导出说话人音轨采样率
-speaker_audio_sample_rate: 16000
-# 导出音频格式（推荐 wav）
-speaker_audio_format: wav
 
 # ------------------------------------------------------------
 # 调试

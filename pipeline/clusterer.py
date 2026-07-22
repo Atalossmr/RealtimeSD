@@ -19,7 +19,7 @@ from scipy.optimize import linear_sum_assignment
 
 from .config import ChunkPipelineConfig
 from .schema import ChunkDebugInfo, ChunkObservation
-from ..utils import l2_normalize
+from .utils import l2_normalize
 
 
 @dataclass

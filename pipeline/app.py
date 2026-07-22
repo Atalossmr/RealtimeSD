@@ -1,19 +1,18 @@
-"""应用入口编排模块。"""
+"""chunk 管线 CLI 入口编排模块。"""
 
 from __future__ import annotations
 
 import logging
 import os
-
 import sys
 
-from .cli import (
+from .config import (
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
     validate_runtime_args,
 )
-from .orchestrator.diarization import NativeOnlineSpeakerDiarization
+from .orchestrator import ChunkDiarizationPipeline
 from .utils import collect_audio_paths, setup_logger
 
 
@@ -37,8 +36,12 @@ def main() -> None:
     logger.info("Run log is written to %s", run_log_path)
     logger.info("Collected %d audio file(s) for processing", len(audio_paths))
 
-    pipeline = NativeOnlineSpeakerDiarization(config, args.model_path)
+    pipeline = ChunkDiarizationPipeline(config, args.model_path)
     for audio_path in audio_paths:
         logger.info("Processing %s", audio_path)
         output_path = pipeline.process_file(audio_path)
         logger.info("Wrote streaming RTTM to %s", output_path)
+
+
+if __name__ == "__main__":
+    main()

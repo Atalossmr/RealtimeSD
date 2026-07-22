@@ -5,11 +5,9 @@ from .embedding_infer import (
     load_embedding_model,
 )
 from .segmentation_infer import PyannoteStreamingSegmentation
-from .separator_infer import TIGERSeparator
 
 __all__ = [
     "load_embedding_model",
     "PyannoteStreamingSegmentation",
     "NativeERes2NetV2SegmentEmbedder",
-    "TIGERSeparator",
 ]

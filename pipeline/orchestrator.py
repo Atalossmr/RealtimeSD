@@ -29,12 +29,12 @@ from .config import ChunkPipelineConfig
 from .rttm_writer import AppendOnlyRTTMWriter
 from .schema import ChunkDebugInfo, ChunkObservation
 from .track_builder import ChunkTrackBuilder, LocalTrack
-from ..models.embedding_infer import (
+from .models.embedding_infer import (
     NativeERes2NetV2SegmentEmbedder,
     load_embedding_model,
 )
-from ..models.segmentation_infer import PyannoteStreamingSegmentation
-from ..utils import resample_waveform_if_needed, resolve_device
+from .models.segmentation_infer import PyannoteStreamingSegmentation
+from .utils import resample_waveform_if_needed, resolve_device
 
 
 logger = logging.getLogger(__name__)

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """分析实时推理 run.log 中各机制命中情况与占比。
 
-同时支持两种管线的日志：
+当前管线（pipeline.py，chunk 架构）的 marker：
 
-- 滑窗版（pipeline.py）：window_summary / frame_decision / merge_event / stable 等 marker；
-- chunk 版（chunk_pipeline.py）：额外解析 new_speakers / absorb_events /
-  final_redirect_map / current_global_speakers(probationary 状态) 等 marker。
+- window_summary / frame_decision / new_speakers / updated_speakers / skipped_updates
+- absorb_events / final_redirect_map / current_global_speakers（probationary 状态）
+
+同时兼容旧滑窗版日志（merge_event / stable 等 marker）。
 
 使用方法：
   1) 直接打印分析报告:

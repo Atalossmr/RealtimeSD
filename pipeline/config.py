@@ -1,6 +1,6 @@
-"""chunk 管线的配置定义、YAML 加载与 CLI 构建。
+"""管线的配置定义、YAML 加载与 CLI 构建。
 
-与主 `pipeline/cli.py` 同一约定：
+约定：
 
 - YAML 是全部调参项的唯一来源；
 - CLI 仅保留运行时输入、模型/环境参数与少量开关；
@@ -11,18 +11,80 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, fields as dataclass_fields
+from pathlib import Path
 from typing import Optional
 
-from ..cli import (
-    _extract_provided_dests,
-    _load_yaml_config,
-    _parser_dest_set,
-    validate_runtime_args,
-)
-from ..constants import BASE_DIR
+import yaml
+
+from .constants import BASE_DIR
 
 
-DEFAULT_CHUNK_CONFIG_PATH = BASE_DIR / "config_chunk.yaml"
+DEFAULT_CONFIG_PATH = BASE_DIR / "config.yaml"
+
+
+def _parser_dest_set(parser: argparse.ArgumentParser) -> set[str]:
+    """收集 argparse 中定义过的参数名，用于校验 YAML 键名。"""
+
+    return {
+        action.dest
+        for action in parser._actions
+        if action.dest not in {argparse.SUPPRESS, "help"}
+    }
+
+
+def _extract_provided_dests(
+    parser: argparse.ArgumentParser, argv: list[str] | None
+) -> set[str]:
+    """根据原始命令行，判断用户显式传了哪些参数。"""
+
+    if argv is None:
+        return set()
+
+    option_to_dest: dict[str, str] = {}
+    for action in parser._actions:
+        for option_string in action.option_strings:
+            option_to_dest[option_string] = action.dest
+
+    provided: set[str] = set()
+    for token in argv:
+        if not token.startswith("-"):
+            continue
+        option = token.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest is not None:
+            provided.add(dest)
+    return provided
+
+
+def _load_yaml_config(config_path: str, explicit: bool) -> dict[str, object]:
+    """读取 YAML 配置文件。"""
+
+    path = Path(config_path)
+    if not path.exists():
+        if explicit:
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        return {}
+
+    with open(path, "r", encoding="utf-8") as file_obj:
+        data = yaml.safe_load(file_obj) or {}
+    if not isinstance(data, dict):
+        raise ValueError("YAML config must be a mapping at top level")
+    return data
+
+
+def validate_runtime_args(args: argparse.Namespace) -> None:
+    """校验运行实时脚本所必需的输入参数。"""
+
+    missing: list[str] = []
+    for field_name in ("wav", "output_dir"):
+        value = getattr(args, field_name, None)
+        if value in {None, ""}:
+            missing.append(field_name)
+    if missing:
+        raise ValueError(
+            "Missing required runtime arguments after merging CLI and YAML: "
+            + ", ".join(missing)
+        )
 
 
 @dataclass
@@ -94,7 +156,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default=str(DEFAULT_CHUNK_CONFIG_PATH),
+        default=str(DEFAULT_CONFIG_PATH),
         help="YAML 配置文件路径；全部调参项以该文件为唯一来源",
     )
     parser.add_argument(
@@ -144,7 +206,7 @@ def merge_args_with_config(
     provided_dests = _extract_provided_dests(parser, argv)
     args_dict = vars(args)
 
-    config_path = str(args_dict.get("config", DEFAULT_CHUNK_CONFIG_PATH))
+    config_path = str(args_dict.get("config", DEFAULT_CONFIG_PATH))
     explicit_config = "config" in provided_dests
     yaml_config = _load_yaml_config(config_path, explicit=explicit_config)
 
@@ -240,7 +302,7 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
 
 __all__ = [
     "ChunkPipelineConfig",
-    "DEFAULT_CHUNK_CONFIG_PATH",
+    "DEFAULT_CONFIG_PATH",
     "build_arg_parser",
     "merge_args_with_config",
     "config_from_args",
