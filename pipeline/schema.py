@@ -84,8 +84,6 @@ class PipelineConfig:
     merge_threshold: float = 0.8
     min_segment_duration_for_new_speaker: float = 0.6
     min_segment_duration_for_centroid_update: float = 0.45
-    enable_ema_update: bool = True
-    centroid_warmup_window: int = 5
     stable_update_count_threshold: int = 10
     update_segment_overlap_threshold: float = 0.8
     weak_update_similarity_margin: float = 0.15

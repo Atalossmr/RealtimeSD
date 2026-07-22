@@ -159,8 +159,6 @@ class NativeOnlineSpeakerDiarization:
             merge_threshold=self.config.merge_threshold,
             min_segment_duration_for_new_speaker=self.config.min_segment_duration_for_new_speaker,
             min_segment_duration_for_centroid_update=self.config.min_segment_duration_for_centroid_update,
-            enable_ema_update=self.config.enable_ema_update,
-            centroid_warmup_window=self.config.centroid_warmup_window,
             update_segment_overlap_threshold=self.config.update_segment_overlap_threshold,
             weak_update_similarity_margin=self.config.weak_update_similarity_margin,
             weak_update_weight_multiplier=self.config.weak_update_weight_multiplier,

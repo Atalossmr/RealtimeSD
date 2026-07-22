@@ -100,6 +100,8 @@ python3 pipeline.py \
 - `--debug`：输出窗口级调试信息
 - `--show_rttm`：运行时把新写出的 RTTM 行同步打印到控制台
 
+说明：全部调参项（阈值、窗口、更新策略、输出控制等）只通过 `config.yaml` 配置；CLI 仅保留运行时输入（`--wav`/`--output_dir`/`--config`）、模型/环境参数（`--model_path`/`--model_type`/`--segmentation_model`/`--separation_model`/`--hf_token`/`--hf_cache_dir`/`--device`）与 `--debug`/`--verbose`/`--show_rttm` 开关。
+
 ## 输出说明
 
 每个输入音频会在 `output_dir` 下生成：
@@ -196,8 +198,8 @@ bash test_der.sh ./examples
 - 新增长度门控：
   - `min_segment_duration_for_new_speaker`
   - `min_segment_duration_for_centroid_update`
-- 更新策略开关：`disable_ema_update`
-- 更新稳定性：`centroid_warmup_window`、`stable_update_count_threshold`
+- 更新策略开关：centroid 全程使用 SMA 增量更新（无 EMA）
+- 更新稳定性：`stable_update_count_threshold`
 - 输出：`min_segment_duration`、`max_frame_speakers`、`streaming_flush_interval`
 - 音轨/分离：`enable_speech_separation`、`min_overlap_duration_to_process`、`separation_required_duration`
 
@@ -206,7 +208,7 @@ bash test_der.sh ./examples
 - `min_segment_duration_for_embedding` 在当前 `FBank -> ERes2NetV2(TSTP)` 实现下存在有效下限；16k 场景建议不低于 `0.105s`（`1680` samples），过低可能产生 NaN embedding，进而触发 `matrix contains invalid numeric entries`
 - 只有当 observation 片段时长达到 `min_segment_duration_for_new_speaker` 才允许新建 speaker
 - 只有当 observation 片段时长达到 `min_segment_duration_for_centroid_update` 才允许更新簇中心
-- 当 `disable_ema_update=true` 时，centroid 全程使用增量均值，不再切换 EMA
+- centroid 全程使用增量均值（SMA）更新，弱更新在此基础上按 `weak_update_weight_multiplier` 衰减
 
 ## 仓库结构
 

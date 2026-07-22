@@ -1,5 +1,5 @@
 # RealtimeSD 配置文件
-# 合并优先级：CLI 默认值 < 本 YAML < 显式 CLI 参数
+# 全部调参项以本文件为唯一来源；CLI 仅保留运行时输入、模型/环境参数与少量开关
 
 # ------------------------------------------------------------
 # 模型与运行环境
@@ -59,10 +59,6 @@ merge_threshold: 0.60
 min_segment_duration_for_new_speaker: 1.00
 # 仅当 observation 片段时长达到该阈值，才允许更新 centroid（秒）
 min_segment_duration_for_centroid_update: 1.50
-# 是否关闭 EMA 更新；true 表示全程使用增量均值（SMA）
-disable_ema_update: true
-# centroid 预热窗口；预热阶段使用增量均值，之后切 EMA
-centroid_warmup_window: 10
 # speaker 更新次数达到该阈值后视为 stable
 stable_update_count_threshold: 10
 # 连续两次用于更新 centroid 的片段允许的最大重叠比

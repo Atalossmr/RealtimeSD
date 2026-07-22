@@ -69,14 +69,12 @@
 
 相关代码：`pipeline/clustering/clusterer.py`
 
-### 5) centroid 更新策略可切换 EMA
+### 5) centroid 更新策略
 
-当前支持通过配置关闭 EMA 更新：
+centroid 全程使用简单移动平均（SMA）增量更新：
 
-- `disable_ema_update=false`（默认）：先按 `centroid_warmup_window` 使用增量均值，随后切换 EMA
-- `disable_ema_update=true`：全程使用增量均值（SMA），不再进入 EMA
-
-该开关会影响常规更新和弱更新的步长计算。
+- 常规更新：步长 `alpha = 1 / (count + 1)`
+- 弱更新：在常规步长基础上再乘 `weak_update_weight_multiplier` 进行衰减
 
 ### 6) stable 判定与 merge 约束
 
@@ -134,7 +132,7 @@ merge 事件由 clusterer 产出，上层同步到 streaming/audio：
 CLI 主入口：
 
 - 解析参数
-- YAML 与 CLI 合并
+- 加载 YAML 配置并与 CLI 合并
 - 参数校验
 - 初始化日志和 pipeline
 - 遍历输入音频
@@ -145,8 +143,8 @@ CLI 主入口：
 
 参数定义与配置构建：
 
-- `build_arg_parser`：定义 CLI 参数
-- `merge_args_with_config`：合并 YAML 与 CLI
+- `build_arg_parser`：定义 CLI 参数（仅运行时输入、模型/环境参数与 `debug/verbose/show_rttm` 开关）
+- `merge_args_with_config`：加载 YAML（调参项的唯一来源）并与 CLI 合并，校验 YAML 键名合法性
 - `config_from_args`：构建 `PipelineConfig`
 
 ### `schema.py`
@@ -181,7 +179,7 @@ observation 构造器：
 - merge（含 stable 约束）
 - Hungarian 联合分配
 - `matched/new/fallback` 决策
-- centroid 更新（SMA/EMA + 弱更新）
+- centroid 更新（SMA + 弱更新）
 - 窗口级 debug 信息构建
 
 ### `streaming/writer.py`
@@ -245,6 +243,8 @@ merge 事件消费：
 
 ## 参数分组与作用
 
+以下调参项全部通过 `config.yaml` 配置（YAML 是唯一来源）；CLI 仅保留 `--wav`、`--output_dir`、`--config`、模型/环境参数（`--model_path`、`--model_type`、`--segmentation_model`、`--separation_model`、`--hf_token`、`--hf_cache_dir`、`--device`）与 `--debug`、`--verbose`、`--show_rttm` 开关。
+
 ### 1) 实时调度与目标帧
 
 - `context_left_duration`
@@ -274,8 +274,6 @@ merge 事件消费：
 - `merge_threshold`
 - `min_segment_duration_for_new_speaker`
 - `min_segment_duration_for_centroid_update`
-- `disable_ema_update`
-- `centroid_warmup_window`
 - `stable_update_count_threshold`
 - `update_segment_overlap_threshold`
 - `weak_update_similarity_margin`

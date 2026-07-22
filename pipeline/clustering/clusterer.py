@@ -3,7 +3,7 @@
 本模块负责：
 
 - 把局部 local slot 的 observation 映射为全局 global speaker id；
-- 维护每个 global speaker 的 centroid（SMA/EMA 增量更新）；
+- 维护每个 global speaker 的 centroid（SMA 增量更新）；
 - 在必要时合并相似 speaker，并生成 merge 事件供上层处理。
 
 注意：speaker merge 的“输出与音频合并策略”不在本模块实现，
@@ -55,8 +55,6 @@ class IncrementalCentroidClusterer:
         merge_threshold: float,
         min_segment_duration_for_new_speaker: float,
         min_segment_duration_for_centroid_update: float,
-        enable_ema_update: bool,
-        centroid_warmup_window: int,
         update_segment_overlap_threshold: float,
         weak_update_similarity_margin: float,
         weak_update_weight_multiplier: float,
@@ -70,8 +68,6 @@ class IncrementalCentroidClusterer:
             merge_threshold: 说话人合并阈值。
             min_segment_duration_for_new_speaker: 允许新建 speaker 的最短片段时长（秒）。
             min_segment_duration_for_centroid_update: 允许更新 centroid 的最短片段时长（秒）。
-            enable_ema_update: 是否启用 EMA 更新。
-            centroid_warmup_window: centroid 预热窗口长度。
             update_segment_overlap_threshold: 更新片段重合跳过阈值。
             weak_update_similarity_margin: 弱更新相似度裕量。
             weak_update_weight_multiplier: 弱更新权重倍率。
@@ -86,9 +82,6 @@ class IncrementalCentroidClusterer:
         self.min_segment_duration_for_centroid_update = max(
             0.0, float(min_segment_duration_for_centroid_update)
         )
-        self.enable_ema_update = bool(enable_ema_update)
-        self.centroid_warmup_window = max(1, int(centroid_warmup_window))
-        self.ema_alpha = 2.0 / (self.centroid_warmup_window + 1.0)
         self.update_segment_overlap_threshold = float(update_segment_overlap_threshold)
         self.weak_update_similarity_margin = float(weak_update_similarity_margin)
         self.weak_update_weight_multiplier = float(weak_update_weight_multiplier)
@@ -357,33 +350,23 @@ class IncrementalCentroidClusterer:
             weight_multiplier: 更新权重的乘子（用于降低 overlap fallback 等不确定场景下的更新幅度，防止身份漂移）
 
         更新策略:
-            - 早期 (count < centroid_warmup_window): 使用简单移动平均 (SMA, Simple Moving Average) 快速拉入特征
-            - 后期 (count >= centroid_warmup_window): 使用指数移动平均 (EMA, Exponential Moving Average) 稳定维持特征
+            全程使用简单移动平均 (SMA, Simple Moving Average) 增量更新。
         """
         embedding = l2_normalize(observation.embedding.astype(np.float32, copy=False))
         centroid = self.centroids[speaker_id]
         count = self.counts[speaker_id]
 
-        if count < self.centroid_warmup_window or not self.enable_ema_update:
-            alpha = 1.0 / float(count + 1)
-            alpha *= weight_multiplier
-            updated = (1.0 - alpha) * centroid + alpha * embedding
-            mode = "sma"
-            if weight_multiplier == 1.0:
-                self.counts[speaker_id] = count + 1
-        else:
-            alpha = self.ema_alpha * weight_multiplier
-            updated = (1.0 - alpha) * centroid + alpha * embedding
-            mode = "ema"
-            if weight_multiplier == 1.0:
-                self.counts[speaker_id] = count + 1
+        alpha = (1.0 / float(count + 1)) * weight_multiplier
+        updated = (1.0 - alpha) * centroid + alpha * embedding
+        if weight_multiplier == 1.0:
+            self.counts[speaker_id] = count + 1
 
         self.centroids[speaker_id] = l2_normalize(updated)
         self.last_update_segments[speaker_id] = UpdateSegmentRecord(
             start=float(observation.start),
             end=float(observation.end),
         )
-        return mode, alpha
+        return "sma", alpha
 
     def _similarity_vector(
         self,

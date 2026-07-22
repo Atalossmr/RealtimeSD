@@ -2,8 +2,8 @@
 
 职责：
 
-- 定义命令行参数；
-- 将 YAML 配置与 CLI 参数合并；
+- 定义命令行参数（仅保留运行时输入、模型/环境参数与少量开关）；
+- 以 YAML 配置文件作为全部调参项的唯一来源，并与 CLI 参数合并；
 - 构造运行时的 `PipelineConfig`。
 
 """
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 import yaml
@@ -86,16 +87,19 @@ def merge_args_with_config(
     explicit_config = "config" in provided_dests
     yaml_config = _load_yaml_config(config_path, explicit=explicit_config)
 
-    valid_dests = _parser_dest_set(parser)
-    unknown_keys = sorted(set(yaml_config.keys()) - valid_dests)
+    # YAML 允许携带两类键：
+    # - `PipelineConfig` 的字段名（调参项，YAML 是它们的唯一来源）；
+    # - CLI 上保留的运行时/模型/开关参数名。
+    valid_keys = _parser_dest_set(parser) | {
+        field.name for field in dataclass_fields(PipelineConfig)
+    }
+    unknown_keys = sorted(set(yaml_config.keys()) - valid_keys)
     if unknown_keys:
         raise ValueError(f"Unknown keys in YAML config: {', '.join(unknown_keys)}")
 
     # 合并优先级：argparse 默认值 < YAML 配置 < 显式 CLI 参数。
-    # 这样可以保证：
-    # - CLI 明确传入的参数总是优先；
-    # - CLI 未传时优先使用 config.yaml；
-    # - config.yaml 缺失项再回退到 argparse 默认值。
+    # 调参项已从 CLI 移除，因此它们的生效值始终以 YAML 为准；
+    # CLI 上仅存的运行时/模型/开关参数仍保持“显式传入优先”。
     merged = dict(args_dict)
     merged.update(yaml_config)
 
@@ -153,7 +157,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         default=str(DEFAULT_CONFIG_PATH),
-        help="YAML 配置文件路径；未显式传参的选项会优先从这里读取",
+        help="YAML 配置文件路径；全部调参项以该文件为唯一来源",
     )
     parser.add_argument("--device", default="auto", help="运行设备，如 auto/cpu/cuda:0")
     parser.add_argument(
@@ -161,53 +165,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="eres2netv2",
         choices=["eres2netv2"],
         help="speaker encoder 类型，当前仅支持 eres2netv2",
-    )
-
-    parser.add_argument(
-        "--context_left_duration",
-        type=float,
-        default=5.0,
-        help="目标帧左侧使用多少秒历史上下文，单位秒",
-    )
-    parser.add_argument(
-        "--context_right_duration",
-        type=float,
-        default=5.0,
-        help="目标帧右侧使用多少秒未来上下文，单位秒",
-    )
-    parser.add_argument(
-        "--chunk_duration",
-        type=float,
-        default=None,
-        help="兼容旧参数；若设置，则表示总上下文时长，会平均拆到左右两侧",
-    )
-    parser.add_argument(
-        "--advance_step",
-        type=float,
-        default=0.5,
-        help="时间轴推进步长，同时也是每帧决策覆盖时长，单位秒",
-    )
-    parser.add_argument(
-        "--target_activity_window_duration",
-        type=float,
-        default=0.5,
-        help="select_target_local_indices 的统计窗口时长，单位秒",
-    )
-    parser.add_argument(
-        "--target_min_duration",
-        type=float,
-        default=0.08,
-        help="目标窗口内 local slot 的最小累计活跃时长阈值，低于该值视为 inactive",
-    )
-
-    parser.add_argument(
-        "--new_speaker_threshold",
-        type=float,
-        default=0.68,
-        help="低于该相似度时更倾向于新建 speaker",
-    )
-    parser.add_argument(
-        "--max_speakers", type=int, default=10, help="允许维护的最大全局 speaker 数"
     )
 
     parser.add_argument(
@@ -223,120 +180,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--min_segment_duration",
-        type=float,
-        default=0.35,
-        help="streaming RTTM 允许写出的最短稳定片段时长",
-    )
-    parser.add_argument(
-        "--min_segment_duration_for_embedding",
-        type=float,
-        default=0.8,
-        help="允许提 embedding 的最短片段时长",
-    )
-    parser.add_argument(
-        "--max_segment_duration_for_embedding",
-        type=float,
-        default=2.5,
-        help="允许提 embedding 的最长片段时长",
-    )
-    parser.add_argument(
-        "--max_segment_shift_from_center",
-        type=float,
-        default=1.5,
-        help="候选片段中心离目标帧允许的最大偏移",
-    )
-    parser.add_argument(
-        "--segment_batch_size",
-        type=int,
-        default=8,
-        help="批量提取 segment embedding 时的 batch size",
-    )
-
-    parser.add_argument(
-        "--global_match_threshold",
-        type=float,
-        default=0.7,
-        help="observation 与 global centroid 主匹配阈值",
-    )
-    parser.add_argument(
-        "--merge_threshold",
-        type=float,
-        default=0.8,
-        help="全局 speaker 在更新前触发合并的相似度阈值",
-    )
-    parser.add_argument(
-        "--min_segment_duration_for_new_speaker",
-        type=float,
-        default=0.6,
-        help="仅当 observation 片段时长达到该阈值时才允许新建 speaker",
-    )
-    parser.add_argument(
-        "--min_segment_duration_for_centroid_update",
-        type=float,
-        default=0.45,
-        help="仅当 observation 片段时长达到该阈值时才允许更新 centroid",
-    )
-    parser.add_argument(
-        "--disable_ema_update",
-        action="store_true",
-        help="关闭 EMA 更新，centroid 全程使用增量均值更新",
-    )
-    parser.add_argument(
-        "--centroid_warmup_window",
-        type=int,
-        default=5,
-        help="centroid 预热窗口大小（EMA 开启时超过该值后切换到 EMA）",
-    )
-    parser.add_argument(
-        "--stable_update_count_threshold",
-        type=int,
-        default=10,
-        help="speaker 被更新达到该次数后判定为 stable",
-    )
-    parser.add_argument(
-        "--update_segment_overlap_threshold",
-        type=float,
-        default=0.8,
-        help="连续两次用于更新 centroid 的片段允许的最大重合度",
-    )
-    parser.add_argument(
-        "--weak_update_similarity_margin",
-        type=float,
-        default=0.15,
-        help="overlap fallback 触发弱更新时，相对 `global_match_threshold` 还需额外超过的相似度裕量",
-    )
-    parser.add_argument(
-        "--weak_update_weight_multiplier",
-        type=float,
-        default=0.25,
-        help="overlap fallback 高置信度弱更新时使用的衰减权重倍率",
-    )
-
-    parser.add_argument(
-        "--max_frame_speakers",
-        type=int,
-        default=2,
-        help="每帧最多输出几个 speaker，overlap 版本默认 2",
-    )
-    parser.add_argument(
-        "--streaming_flush_interval",
-        type=float,
-        default=2.0,
-        help="streaming RTTM 稳定前缀的最小刷盘时长",
-    )
-    parser.add_argument(
-        "--streaming_merge_gap",
-        type=float,
-        default=0.75,
-        help="streaming RTTM 中同 speaker 相邻片段允许自动合并的最大间隔",
-    )
-    parser.add_argument(
-        "--delay_short_speaker_output",
-        action="store_true",
-        help="开启后，未达到 stable 条件的 speaker turn 先缓存，不立即写出 RTTM",
-    )
-    parser.add_argument(
         "--show_rttm",
         action="store_true",
         help="在持续写入 output_dir 下 RTTM 文件的同时，把新生成的 RTTM 行同步输出到控制台",
@@ -345,44 +188,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", action="store_true", help="启用 DEBUG 级日志")
     # 说话人音轨转录与重叠分离相关参数
     parser.add_argument(
-        "--enable_speech_separation",
-        action="store_true",
-        help="是否启用说话人音轨转录（开启后可在重叠段执行分离覆盖）",
-    )
-    parser.add_argument(
         "--separation_model",
         type=str,
         default="JusperLee/TIGER-speech",
         help="TIGER语音分离模型名",
-    )
-    parser.add_argument(
-        "--min_overlap_duration_to_process",
-        type=float,
-        default=0.3,
-        help="触发分离的最小重叠段时长（秒）",
-    )
-    parser.add_argument(
-        "--separation_required_duration",
-        type=float,
-        default=3.0,
-        help="TIGER需要的输入时长（秒）",
-    )
-    parser.add_argument(
-        "--max_overlap_process_interval",
-        type=float,
-        default=3.0,
-        help="长重叠的最大处理间隔（秒）",
-    )
-    parser.add_argument(
-        "--export_uncertain_speaker_audio",
-        action="store_true",
-        help="是否导出不确定说话人的音轨",
-    )
-    parser.add_argument(
-        "--speaker_audio_sample_rate", type=int, default=16000, help="导出音频的采样率"
-    )
-    parser.add_argument(
-        "--speaker_audio_format", type=str, default="wav", help="导出音频的格式"
     )
     return parser
 
@@ -397,7 +206,6 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
     )
 
     new_speaker_threshold = _merged_value(args, "new_speaker_threshold", 0.68)
-    centroid_warmup_window = _merged_value(args, "centroid_warmup_window", 5)
 
     config = PipelineConfig(
         context_left_duration=5.0,
@@ -432,8 +240,6 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         min_segment_duration_for_centroid_update=float(
             _merged_value(args, "min_segment_duration_for_centroid_update", 0.45)
         ),
-        enable_ema_update=not bool(_merged_value(args, "disable_ema_update", False)),
-        centroid_warmup_window=max(1, int(centroid_warmup_window)),
         stable_update_count_threshold=max(
             1, int(_merged_value(args, "stable_update_count_threshold", 10))
         ),
@@ -478,18 +284,12 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         ),
         speaker_audio_format=_merged_value(args, "speaker_audio_format", "wav"),
     )
-    chunk_duration = _merged_value(args, "chunk_duration", None)
-    if chunk_duration is not None:
-        half = max(0.0, float(chunk_duration)) / 2.0
-        config.context_left_duration = half
-        config.context_right_duration = half
-    else:
-        config.context_left_duration = max(
-            0.0, float(_merged_value(args, "context_left_duration", 5.0))
-        )
-        config.context_right_duration = max(
-            0.0, float(_merged_value(args, "context_right_duration", 5.0))
-        )
+    config.context_left_duration = max(
+        0.0, float(_merged_value(args, "context_left_duration", 5.0))
+    )
+    config.context_right_duration = max(
+        0.0, float(_merged_value(args, "context_right_duration", 5.0))
+    )
     if config.chunk_duration <= 0.0:
         raise ValueError("context_left_duration + context_right_duration must be > 0")
     if config.advance_step <= 0.0:
