@@ -102,6 +102,23 @@ python3 pipeline.py \
 
 说明：全部调参项（阈值、窗口、更新策略、输出控制等）只通过 `config.yaml` 配置；CLI 仅保留运行时输入（`--wav`/`--output_dir`/`--config`）、模型/环境参数（`--model_path`/`--model_type`/`--segmentation_model`/`--separation_model`/`--hf_token`/`--hf_cache_dir`/`--device`）与 `--debug`/`--verbose`/`--show_rttm` 开关。
 
+### chunk 管线（新架构，与滑窗版并行）
+
+10s chunk 局部识别 + ERes2NetV2 增量聚类全局对齐，无 merge/重写机制：
+
+```bash
+python3 chunk_pipeline.py \
+  --wav ./examples \
+  --output_dir ./exp/chunk_demo \
+  --config ./config_chunk.yaml
+```
+
+DER 对照评估：
+
+```bash
+PIPELINE_IMPL=chunk bash test_der.sh
+```
+
 ## 输出说明
 
 每个输入音频会在 `output_dir` 下生成：
@@ -212,12 +229,13 @@ bash test_der.sh ./examples
 
 ## 仓库结构
 
-- `pipeline/`：主实现
+- `pipeline/`：主实现（滑窗版，入口 `pipeline.py`）
+- `pipeline/chunk/`：chunk 版实现（10s 局部识别 + 增量聚类，入口 `chunk_pipeline.py`，配置 `config_chunk.yaml`）
 - `speakerlab/`：本地依赖与 `md-eval.pl`
 - `tools/compute_der.py`：DER 统计与批量评估
 - `tools/analyze_run_log.py`：run.log 命中统计分析
 - `run.sh`：基础运行脚本
-- `test_der.sh`：运行 + DER 评估脚本
+- `test_der.sh`：运行 + DER 评估脚本（`PIPELINE_IMPL=chunk` 切换到 chunk 管线）
 - `pipeline/README.md`：按模块组织的详细实现说明
 
 ## 备注

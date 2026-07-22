@@ -14,7 +14,16 @@ if [ -f ./.venv/bin/activate ]; then
 fi
 
 audio_input=${1:-./datasets/aishell4-test/}
-config_path=${CONFIG_PATH:-./config.yaml}
+# 管线实现选择：native（默认，滑窗实现）或 chunk（10s chunk + 增量聚类）
+pipeline_impl=${PIPELINE_IMPL:-native}
+if [ "$pipeline_impl" = "chunk" ]; then
+    entry_script="chunk_pipeline.py"
+    default_config="./config_chunk.yaml"
+else
+    entry_script="pipeline.py"
+    default_config="./config.yaml"
+fi
+config_path=${CONFIG_PATH:-$default_config}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
@@ -64,7 +73,7 @@ fi
 echo "=========================================="
 
 cmd=(
-    python3 pipeline.py
+    python3 "$entry_script"
     --wav "$audio_input"
     --output_dir "$exp_dir"
     --config "$config_path"

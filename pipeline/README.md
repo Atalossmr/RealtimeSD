@@ -241,6 +241,28 @@ merge 事件消费：
 - merge 音频合并
 - 按 stable/uncertain 分组导出
 
+## `chunk/` 子包（新架构，与滑窗版并行）
+
+chunk 版管线：segmentation-3.0 在 10s chunk 内做局部识别，ERes2NetV2 + 增量聚类做全局 speaker 对齐。入口 `chunk_pipeline.py`，配置 `config_chunk.yaml`（YAML 唯一调参来源，CLI 保留清单与滑窗版一致）。
+
+与滑窗版的核心差异：
+
+- 无 speaker merge、无 RTTM 重写、无 stable/延迟输出机制
+- 新建 speaker 进入 probationary 试用期：累计匹配语音达到 `probation_confirm_duration` 转正；试用期内与某 confirmed speaker 相似度 ≥ `absorb_threshold` 则被吸收（只影响后续 chunk 与终局 remap）
+- RTTM append-only；音频结束时按 redirect_map 做一次终局 remap 并整文件重写
+- 首版为非重叠 10s chunk（hop == chunk_duration）
+
+模块分工：
+
+- `chunk/config.py`：`ChunkPipelineConfig` + YAML 加载/校验 + CLI
+- `chunk/track_builder.py`：chunk 内 local track 聚合（非重叠纯净区优先，overlap_fallback 回退）
+- `chunk/clusterer.py`：Hungarian local->global 分配、SMA/弱更新、probationary 转正与吸收
+- `chunk/rttm_writer.py`：append-only RTTM 写出 + 终局 remap
+- `chunk/orchestrator.py`：chunk 主循环
+- `chunk/app.py`：CLI 入口编排
+
+复用（不改动）：`pipeline/models/` 推理封装、`pipeline/utils.py` 工具函数、`tools/compute_der.py` / `tools/analyze_run_log.py`。
+
 ## 参数分组与作用
 
 以下调参项全部通过 `config.yaml` 配置（YAML 是唯一来源）；CLI 仅保留 `--wav`、`--output_dir`、`--config`、模型/环境参数（`--model_path`、`--model_type`、`--segmentation_model`、`--separation_model`、`--hf_token`、`--hf_cache_dir`、`--device`）与 `--debug`、`--verbose`、`--show_rttm` 开关。
