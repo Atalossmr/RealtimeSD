@@ -18,19 +18,11 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from .reuse_policy import (
-    prune_recent_assignments,
-    record_recent_assignment,
-    segment_overlap_ratio,
-    try_reuse_assignment as try_reuse_assignment_impl,
-)
 from ..schema import (
     BufferedDecisionWindow,
     GlobalSpeakerDebug,
     MergedSpeakerDebug,
-    ReusedObservationDecision,
     ResolvedDecisionWindow,
-    SegmentCandidate,
     SegmentObservation,
     WindowDebugInfo,
 )
@@ -43,18 +35,6 @@ class UpdateSegmentRecord:
 
     start: float
     end: float
-
-
-@dataclass
-class RecentAcceptedObservation:
-    """功能：记录近期可用于复用的已接受分配。"""
-
-    local_idx: int
-    global_id: int
-    start: float
-    end: float
-    target_time: float
-    decision: str
 
 
 class IncrementalCentroidClusterer:
@@ -80,12 +60,8 @@ class IncrementalCentroidClusterer:
         update_segment_overlap_threshold: float,
         weak_update_similarity_margin: float,
         weak_update_weight_multiplier: float,
-        enable_observation_reuse: bool,
-        reuse_overlap_threshold: float,
-        reuse_time_horizon: float,
-        reuse_max_recent_records: int,
     ):
-        """功能：初始化增量聚类器与复用策略参数。
+        """功能：初始化增量聚类器。
 
         参数：
             new_speaker_threshold: 新建说话人阈值。
@@ -99,10 +75,6 @@ class IncrementalCentroidClusterer:
             update_segment_overlap_threshold: 更新片段重合跳过阈值。
             weak_update_similarity_margin: 弱更新相似度裕量。
             weak_update_weight_multiplier: 弱更新权重倍率。
-            enable_observation_reuse: 是否启用 observation 复用。
-            reuse_overlap_threshold: 复用命中重合阈值。
-            reuse_time_horizon: 复用缓存时间窗（秒）。
-            reuse_max_recent_records: 全局复用缓存最大条数。
         """
         self.new_speaker_threshold = float(new_speaker_threshold)
         self.max_speakers = max(1, int(max_speakers))
@@ -120,10 +92,6 @@ class IncrementalCentroidClusterer:
         self.update_segment_overlap_threshold = float(update_segment_overlap_threshold)
         self.weak_update_similarity_margin = float(weak_update_similarity_margin)
         self.weak_update_weight_multiplier = float(weak_update_weight_multiplier)
-        self.enable_observation_reuse = bool(enable_observation_reuse)
-        self.reuse_overlap_threshold = float(reuse_overlap_threshold)
-        self.reuse_time_horizon = max(0.0, float(reuse_time_horizon))
-        self.reuse_max_recent_records = max(1, int(reuse_max_recent_records))
 
         self.centroids: dict[int, np.ndarray] = {}
         self.counts: dict[int, int] = {}
@@ -133,7 +101,6 @@ class IncrementalCentroidClusterer:
 
         self.next_speaker_id = 0
         self.window_counter = 0
-        self._recent_assignments: list[RecentAcceptedObservation] = []
 
         # 记录 speaker merge 事件的队列。
         # 上层 pipeline 会在合适时机消费并执行：
@@ -296,7 +263,6 @@ class IncrementalCentroidClusterer:
         return {
             "num_centroids_before": len(self.centroids),
             "num_centroids_after": len(self.centroids),
-            "num_reused_observations": 0,
             "num_embedded_observations": 0,
             "assignment_cost_matrix": None,
             "local_assignments": [],
@@ -304,83 +270,8 @@ class IncrementalCentroidClusterer:
             "merged_speakers": [],
             "updated_speakers": [],
             "skipped_updates": [],
-            "reuse_events": [],
             "global_speakers": [],
         }
-
-    def _prune_recent_assignments(self, current_target_time: float) -> None:
-        """功能：按时间窗清理过期复用缓存。
-
-        参数：
-            current_target_time: 当前窗口目标时刻（秒）。
-        """
-        self._recent_assignments = prune_recent_assignments(
-            recent_assignments=self._recent_assignments,
-            current_target_time=float(current_target_time),
-            reuse_time_horizon=float(self.reuse_time_horizon),
-        )
-
-    def try_reuse_assignment(
-        self,
-        candidate: SegmentCandidate,
-        target_time: float,
-    ) -> Optional[ReusedObservationDecision]:
-        """功能：尝试为候选片段复用近期分配结果。
-
-        参数：
-            candidate: embedding 提取前的候选片段。
-            target_time: 当前窗口目标时刻（秒）。
-
-        返回：
-            命中复用时返回复用决策，否则返回 None。
-        """
-        # 复用判定涉及“时间窗裁剪 + overlap 过滤 + 命中决策”，
-        # 已抽到独立模块，便于后续单测覆盖阈值边界。
-        decision, pruned_recent = try_reuse_assignment_impl(
-            candidate=candidate,
-            target_time=float(target_time),
-            enable_observation_reuse=self.enable_observation_reuse,
-            recent_assignments=self._recent_assignments,
-            centroids=self.centroids,
-            reuse_overlap_threshold=float(self.reuse_overlap_threshold),
-            reuse_time_horizon=float(self.reuse_time_horizon),
-        )
-        self._recent_assignments = pruned_recent
-        return decision
-
-    def _record_recent_assignment(
-        self,
-        *,
-        local_idx: int,
-        global_id: int,
-        start: float,
-        end: float,
-        target_time: float,
-        decision: str,
-    ) -> None:
-        """功能：记录可复用的近期分配，并做容量裁剪。
-
-        参数：
-            local_idx: local 槽位索引。
-            global_id: 目标全局说话人 ID。
-            start: 片段起点（秒）。
-            end: 片段终点（秒）。
-            target_time: 目标时刻（秒）。
-            decision: 分配决策类型。
-        """
-        self._recent_assignments = record_recent_assignment(
-            enable_observation_reuse=self.enable_observation_reuse,
-            recent_assignments=self._recent_assignments,
-            local_idx=int(local_idx),
-            global_id=int(global_id),
-            start=float(start),
-            end=float(end),
-            target_time=float(target_time),
-            decision=str(decision),
-            reuse_time_horizon=float(self.reuse_time_horizon),
-            reuse_max_recent_records=int(self.reuse_max_recent_records),
-            record_factory=RecentAcceptedObservation,
-        )
 
     def current_global_speakers(self) -> list[GlobalSpeakerDebug]:
         """功能：返回当前全局说话人摘要列表。"""
@@ -424,12 +315,9 @@ class IncrementalCentroidClusterer:
         right: UpdateSegmentRecord,
     ) -> float:
         """功能：计算两个片段的归一化时间重合比。"""
-        return segment_overlap_ratio(
-            left_start=float(left.start),
-            left_end=float(left.end),
-            right_start=float(right.start),
-            right_end=float(right.end),
-        )
+        overlap = max(0.0, min(left.end, right.end) - max(left.start, right.start))
+        min_duration = max(1e-6, min(left.end - left.start, right.end - right.start))
+        return float(overlap / min_duration)
 
     def _should_skip_update(
         self,
@@ -573,7 +461,6 @@ class IncrementalCentroidClusterer:
         segmentation: np.ndarray,
         absolute_centers: np.ndarray,
         observations: list[SegmentObservation],
-        reused_observations: list[ReusedObservationDecision],
     ) -> BufferedDecisionWindow:
         """功能：创建并编号一个待解析窗口。"""
         window = BufferedDecisionWindow(
@@ -584,7 +471,6 @@ class IncrementalCentroidClusterer:
             segmentation=segmentation,
             absolute_centers=absolute_centers,
             observations=observations,
-            reused_observations=list(reused_observations),
         )
         self.window_counter += 1
         return window
@@ -600,48 +486,9 @@ class IncrementalCentroidClusterer:
         """功能：完成窗口内 local->global 分配、更新与调试信息生成。"""
         debug_info = self._default_debug_info()
         local_to_global: dict[int, int] = {}
-        debug_info["num_reused_observations"] = int(len(window.reused_observations))
         debug_info["num_embedded_observations"] = int(len(window.observations))
 
-        for reused in window.reused_observations:
-            local_to_global[int(reused.local_idx)] = int(reused.global_id)
-            self.last_assigned_target_times[int(reused.global_id)] = float(
-                window.target_time
-            )
-            self._record_recent_assignment(
-                local_idx=int(reused.local_idx),
-                global_id=int(reused.global_id),
-                start=float(reused.start),
-                end=float(reused.end),
-                target_time=float(window.target_time),
-                decision="reused",
-            )
-            debug_info["local_assignments"].append(
-                {
-                    "local": int(reused.local_idx),
-                    "global": int(reused.global_id),
-                    "decision": "reused",
-                    "similarity": 1.0,
-                    "score_at_target": float(reused.score_at_target),
-                    "mean_activity": float(reused.mean_activity),
-                    "speech_ratio": float(reused.speech_ratio),
-                    "selection_mode": reused.selection_mode,
-                    "start": float(reused.start),
-                    "end": float(reused.end),
-                }
-            )
-            debug_info["reuse_events"].append(
-                {
-                    "local": int(reused.local_idx),
-                    "global_id": int(reused.global_id),
-                    "start": float(reused.start),
-                    "end": float(reused.end),
-                    "overlap_ratio": float(reused.overlap_ratio),
-                    "source_target_time": float(reused.source_target_time),
-                }
-            )
-
-        if not window.observations and not window.reused_observations:
+        if not window.observations:
             return ResolvedDecisionWindow(
                 window=window,
                 local_to_global=local_to_global,
@@ -746,15 +593,6 @@ class IncrementalCentroidClusterer:
                     }
                 )
                 continue
-
-            self._record_recent_assignment(
-                local_idx=int(local_idx),
-                global_id=int(assigned_speaker),
-                start=float(observation.start),
-                end=float(observation.end),
-                target_time=float(window.target_time),
-                decision=decision,
-            )
 
             if not observation.allow_centroid_update:
                 # [弱更新策略]

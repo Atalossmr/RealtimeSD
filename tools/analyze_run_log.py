@@ -28,15 +28,11 @@ class FramesSummary(TypedDict):
     frame_decisions: int
     window_summaries: int
     windows_with_observation: int
-    windows_with_reuse: int
-    reuse_window_ratio: float
 
 
 class ObservationSummary(TypedDict):
     sum_observations: int
-    sum_reused: int
     sum_embedded: int
-    reuse_share: float
 
 
 class AssignmentSummary(TypedDict):
@@ -57,11 +53,6 @@ class SkipsSummary(TypedDict):
     by_reason: list[CounterItem]
 
 
-class ReuseEventsSummary(TypedDict):
-    count: int
-    overlap_ratio_stats: dict[str, float]
-
-
 class StreamingEventsSummary(TypedDict, total=False):
     merge_events: int
     speaker_became_stable: int
@@ -75,7 +66,6 @@ class RunLogSummary(TypedDict):
     assignment: AssignmentSummary
     updates: UpdatesSummary
     skips: SkipsSummary
-    reuse_events: ReuseEventsSummary
     streaming_events: StreamingEventsSummary
 
 
@@ -173,11 +163,9 @@ def analyze_log(log_path: Path) -> RunLogSummary:
 
     total_frame_decisions = 0
     total_windows = 0
-    windows_with_reuse = 0
     windows_with_observation = 0
 
     sum_observations = 0
-    sum_reused = 0
     sum_embedded = 0
 
     decision_counter: Counter[str] = Counter()
@@ -185,8 +173,6 @@ def analyze_log(log_path: Path) -> RunLogSummary:
     skipped_reason_counter: Counter[str] = Counter()
     update_mode_counter: Counter[str] = Counter()
 
-    reuse_event_count = 0
-    reuse_overlap_ratios: list[float] = []
     merge_event_count = 0
     speaker_became_stable_count = 0
     unstable_finalize_speaker_count = 0
@@ -208,14 +194,10 @@ def analyze_log(log_path: Path) -> RunLogSummary:
                 window_state = payload.get("window_state", {})
                 if isinstance(window_state, dict):
                     obs = int(window_state.get("observations", 0))
-                    reused = int(window_state.get("reused", 0))
                     embedded = int(window_state.get("embedded", 0))
                     sum_observations += obs
-                    sum_reused += reused
                     sum_embedded += embedded
-                    if reused > 0:
-                        windows_with_reuse += 1
-                    if obs + reused > 0:
+                    if obs > 0:
                         windows_with_observation += 1
 
                 assignment = payload.get("assignment", {})
@@ -249,20 +231,6 @@ def analyze_log(log_path: Path) -> RunLogSummary:
                             update_mode_counter[mode] += 1
                 continue
 
-            if "[debug] reuse_events:" in line:
-                payload = _read_json_block(lines)
-                if isinstance(payload, list):
-                    reuse_event_count += len(payload)
-                    for item in payload:
-                        if isinstance(item, dict) and "overlap_ratio" in item:
-                            try:
-                                reuse_overlap_ratios.append(
-                                    float(item["overlap_ratio"])
-                                )
-                            except (TypeError, ValueError):
-                                pass
-                continue
-
             if "[streaming] merge_event" in line:
                 merge_event_count += 1
                 continue
@@ -283,41 +251,16 @@ def analyze_log(log_path: Path) -> RunLogSummary:
         count for mode, count in update_mode_counter.items() if mode.endswith("_weak")
     )
 
-    reuse_ratio_vs_total = _ratio(sum_reused, sum_reused + sum_embedded)
-    reuse_ratio_vs_windows = _ratio(windows_with_reuse, total_windows)
-
-    overlap_stats: dict[str, float] = {}
-    if reuse_overlap_ratios:
-        sorted_values = sorted(reuse_overlap_ratios)
-        n = len(sorted_values)
-
-        def q(p: float) -> float:
-            idx = min(n - 1, int((n - 1) * p))
-            return float(sorted_values[idx])
-
-        overlap_stats = {
-            "min": float(sorted_values[0]),
-            "mean": float(sum(sorted_values) / n),
-            "p50": q(0.50),
-            "p90": q(0.90),
-            "p99": q(0.99),
-            "max": float(sorted_values[-1]),
-        }
-
     return {
         "log_path": str(log_path),
         "frames": {
             "frame_decisions": total_frame_decisions,
             "window_summaries": total_windows,
             "windows_with_observation": windows_with_observation,
-            "windows_with_reuse": windows_with_reuse,
-            "reuse_window_ratio": reuse_ratio_vs_windows,
         },
         "observation": {
             "sum_observations": sum_observations,
-            "sum_reused": sum_reused,
             "sum_embedded": sum_embedded,
-            "reuse_share": reuse_ratio_vs_total,
         },
         "assignment": {
             "total": total_assignments,
@@ -336,10 +279,6 @@ def analyze_log(log_path: Path) -> RunLogSummary:
             "total": total_skips,
             "by_reason": _counter_with_ratio(skipped_reason_counter, total_skips),
         },
-        "reuse_events": {
-            "count": int(reuse_event_count),
-            "overlap_ratio_stats": overlap_stats,
-        },
         "streaming_events": {
             "merge_events": int(merge_event_count),
             "speaker_became_stable": int(speaker_became_stable_count),
@@ -356,7 +295,6 @@ def _print_report(summary: RunLogSummary) -> None:
     assignment = summary["assignment"]
     updates = summary["updates"]
     skips = summary["skips"]
-    reuse_events = summary["reuse_events"]
     streaming_events = summary.get("streaming_events", {})
 
     print("== Run Log Analysis ==")
@@ -365,14 +303,10 @@ def _print_report(summary: RunLogSummary) -> None:
         f"frames: decisions={frames['frame_decisions']} windows={frames['window_summaries']} "
         f"windows_with_observation={frames['windows_with_observation']}"
     )
-    print(
-        f"reuse_windows: {frames['windows_with_reuse']} "
-        f"({100.0 * float(frames['reuse_window_ratio']):.2f}%)"
-    )
 
     print(
-        f"observations: reused={observation['sum_reused']} embedded={observation['sum_embedded']} "
-        f"reuse_share={100.0 * float(observation['reuse_share']):.2f}%"
+        f"observations: total={observation['sum_observations']} "
+        f"embedded={observation['sum_embedded']}"
     )
 
     print("\n-- assignment.by_decision --")
@@ -391,17 +325,6 @@ def _print_report(summary: RunLogSummary) -> None:
     print(f"total={skips['total']}")
     for item in skips["by_reason"]:
         print(f"{item['name']}: {item['count']} ({100.0 * float(item['ratio']):.2f}%)")
-
-    print("\n-- reuse_events --")
-    print(f"count={reuse_events['count']}")
-    overlap_stats = reuse_events.get("overlap_ratio_stats", {})
-    if overlap_stats:
-        print(
-            "overlap_ratio: "
-            f"min={overlap_stats['min']:.4f} mean={overlap_stats['mean']:.4f} "
-            f"p50={overlap_stats['p50']:.4f} p90={overlap_stats['p90']:.4f} "
-            f"p99={overlap_stats['p99']:.4f} max={overlap_stats['max']:.4f}"
-        )
 
     print("\n-- streaming_events --")
     print(f"merge_events={streaming_events.get('merge_events', 0)}")

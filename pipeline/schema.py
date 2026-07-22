@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, TypedDict
 
 import numpy as np
@@ -79,7 +79,7 @@ class PipelineConfig:
     segment_batch_size: int = 8
 
     # 全局 speaker 维护。
-    # 包含匹配/合并阈值、片段长度门控、更新节奏与 observation reuse 相关参数。
+    # 包含匹配/合并阈值、片段长度门控与更新节奏参数。
     global_match_threshold: float = 0.7
     merge_threshold: float = 0.8
     min_segment_duration_for_new_speaker: float = 0.6
@@ -90,10 +90,6 @@ class PipelineConfig:
     update_segment_overlap_threshold: float = 0.8
     weak_update_similarity_margin: float = 0.15
     weak_update_weight_multiplier: float = 0.25
-    enable_observation_reuse: bool = True
-    reuse_overlap_threshold: float = 0.9
-    reuse_time_horizon: float = 1.0
-    reuse_max_recent_records: int = 8
 
     # 输出控制。
     # overlap 版本默认允许一个目标时刻输出两个 speaker，
@@ -179,22 +175,6 @@ class SegmentCandidate:
 
 
 @dataclass
-class ReusedObservationDecision:
-    """命中复用逻辑后直接继承的 local->global 决策。"""
-
-    local_idx: int
-    global_id: int
-    start: float
-    end: float
-    score_at_target: float
-    mean_activity: float
-    speech_ratio: float
-    selection_mode: str
-    overlap_ratio: float
-    source_target_time: float
-
-
-@dataclass
 class BufferedDecisionWindow:
     """单个目标帧对应的缓冲窗口。"""
 
@@ -205,7 +185,6 @@ class BufferedDecisionWindow:
     segmentation: np.ndarray
     absolute_centers: np.ndarray
     observations: list[SegmentObservation]
-    reused_observations: list[ReusedObservationDecision] = field(default_factory=list)
 
 
 @dataclass
@@ -300,17 +279,6 @@ class GlobalSpeakerDebug(TypedDict):
     dim: int
 
 
-class ReuseEventDebug(TypedDict):
-    """记录复用命中的事件。"""
-
-    local: int
-    global_id: int
-    start: float
-    end: float
-    overlap_ratio: float
-    source_target_time: float
-
-
 class WindowDebugInfo(TypedDict):
     """窗口级调试信息的固定结构。
 
@@ -322,7 +290,6 @@ class WindowDebugInfo(TypedDict):
 
     num_centroids_before: int
     num_centroids_after: int
-    num_reused_observations: int
     num_embedded_observations: int
     assignment_cost_matrix: AssignmentCostMatrixDebug | None
     local_assignments: list[LocalAssignmentDebug]
@@ -330,7 +297,6 @@ class WindowDebugInfo(TypedDict):
     merged_speakers: list[MergedSpeakerDebug]
     updated_speakers: list[UpdatedSpeakerDebug]
     skipped_updates: list[SkippedUpdateDebug]
-    reuse_events: list[ReuseEventDebug]
     global_speakers: list[GlobalSpeakerDebug]
 
 

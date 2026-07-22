@@ -312,29 +312,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.25,
         help="overlap fallback 高置信度弱更新时使用的衰减权重倍率",
     )
-    parser.add_argument(
-        "--disable_observation_reuse",
-        action="store_true",
-        help="关闭 observation 复用，始终执行 embedding 提取与聚类",
-    )
-    parser.add_argument(
-        "--reuse_overlap_threshold",
-        type=float,
-        default=0.9,
-        help="命中 observation 复用所需的时间重合阈值",
-    )
-    parser.add_argument(
-        "--reuse_time_horizon",
-        type=float,
-        default=1.0,
-        help="observation 复用缓存的最大时间跨度（秒）",
-    )
-    parser.add_argument(
-        "--reuse_max_recent_records",
-        type=int,
-        default=8,
-        help="全局近期复用缓存最多保留多少条记录（按时间保留最近 N 条）",
-    )
 
     parser.add_argument(
         "--max_frame_speakers",
@@ -468,16 +445,6 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         ),
         weak_update_weight_multiplier=float(
             _merged_value(args, "weak_update_weight_multiplier", 0.25)
-        ),
-        enable_observation_reuse=not bool(
-            _merged_value(args, "disable_observation_reuse", False)
-        ),
-        reuse_overlap_threshold=float(
-            _merged_value(args, "reuse_overlap_threshold", 0.9)
-        ),
-        reuse_time_horizon=float(_merged_value(args, "reuse_time_horizon", 1.0)),
-        reuse_max_recent_records=max(
-            1, int(_merged_value(args, "reuse_max_recent_records", 8))
         ),
         max_frame_speakers=_merged_value(args, "max_frame_speakers", 2),
         streaming_flush_interval=_merged_value(args, "streaming_flush_interval", 2.0),

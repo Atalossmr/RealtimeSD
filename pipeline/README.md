@@ -13,7 +13,7 @@
 5. 在 `target_time ± 0.5 * target_activity_window_duration` 内统计 local slot 累积活跃时长
 6. 仅保留活跃时长 `>= target_min_duration` 的 local slot
 7. 为每个 local slot 生成候选 observation：优先非重叠区，必要时回退到 `overlap_fallback`
-8. 先尝试 `observation reuse`，未命中才提 embedding
+8. 对候选 observation 批量提取 embedding
 9. clustering 先执行 speaker merge，再通过 Hungarian 做 local->global 联合分配
 10. 根据阈值决定 `matched/new/fallback`，并更新 centroid
 11. 每个窗口在完成 clustering 后先按帧级决策写说话人音轨，再进入 streaming 写 RTTM turn
@@ -182,17 +182,7 @@ observation 构造器：
 - Hungarian 联合分配
 - `matched/new/fallback` 决策
 - centroid 更新（SMA/EMA + 弱更新）
-- 复用记录维护
 - 窗口级 debug 信息构建
-
-### `clustering/reuse_policy.py`
-
-observation reuse 纯策略函数：
-
-- 时间窗裁剪
-- 重叠比计算
-- 命中决策
-- 缓存记录维护
 
 ### `streaming/writer.py`
 
@@ -291,19 +281,7 @@ merge 事件消费：
 - `weak_update_similarity_margin`
 - `weak_update_weight_multiplier`
 
-### 4) observation reuse
-
-- `disable_observation_reuse`
-- `reuse_overlap_threshold`
-- `reuse_time_horizon`
-- `reuse_max_recent_records`
-
-行为说明：
-
-- 仅 `matched` 结果会写入复用缓存
-- `reused` 结果不会继续回写缓存，避免链式偏移放大
-
-### 5) streaming RTTM 输出
+### 4) streaming RTTM 输出
 
 - `min_segment_duration`
 - `max_frame_speakers`
@@ -312,7 +290,7 @@ merge 事件消费：
 - `delay_short_speaker_output`
 - `show_rttm`
 
-### 6) 音轨转录、重叠分离与导出
+### 5) 音轨转录、重叠分离与导出
 
 - `enable_speech_separation`
 - `separation_model`
@@ -357,7 +335,6 @@ python3 pipeline.py --debug --verbose --show_rttm ...
 - `local_assignments`
 - `updated_speakers`
 - `skipped_updates`
-- `reuse_events`
 - `frame_decision`
 
 说明：

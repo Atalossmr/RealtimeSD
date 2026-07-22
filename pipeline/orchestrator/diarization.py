@@ -164,10 +164,6 @@ class NativeOnlineSpeakerDiarization:
             update_segment_overlap_threshold=self.config.update_segment_overlap_threshold,
             weak_update_similarity_margin=self.config.weak_update_similarity_margin,
             weak_update_weight_multiplier=self.config.weak_update_weight_multiplier,
-            enable_observation_reuse=self.config.enable_observation_reuse,
-            reuse_overlap_threshold=self.config.reuse_overlap_threshold,
-            reuse_time_horizon=self.config.reuse_time_horizon,
-            reuse_max_recent_records=self.config.reuse_max_recent_records,
         )
 
     def reset(self) -> None:
@@ -368,7 +364,6 @@ class NativeOnlineSpeakerDiarization:
             },
             "window_state": {
                 "observations": int(len(observations)),
-                "reused": int(debug_info.get("num_reused_observations", 0)),
                 "embedded": int(
                     debug_info.get("num_embedded_observations", len(observations))
                 ),
@@ -442,13 +437,6 @@ class NativeOnlineSpeakerDiarization:
                 "[debug]",
                 "skipped_updates",
                 debug_info["skipped_updates"],
-            )
-        if debug_info.get("reuse_events"):
-            self._log_structured(
-                logging.DEBUG,
-                "[debug]",
-                "reuse_events",
-                debug_info["reuse_events"],
             )
         if debug_info["global_speakers"]:
             self._log_structured(
@@ -568,7 +556,7 @@ class NativeOnlineSpeakerDiarization:
             # if target_time == 12.25:
             #     print("local speaker:", target_local_indices)
 
-            # 第四步：先构造候选片段，再做复用分流，仅对未复用项提 embedding。
+            # 第四步：构造候选片段并批量提取 embedding。
             candidates = self.segment_builder.build_candidates(
                 window_id=self.clusterer.window_counter,
                 segmentation=seg_scores,
@@ -577,19 +565,10 @@ class NativeOnlineSpeakerDiarization:
                 reference_center=target_time,
             )
 
-            reused_observations = []
-            fresh_candidates = []
-            for candidate in candidates:
-                reused = self.clusterer.try_reuse_assignment(candidate, target_time)
-                if reused is not None:
-                    reused_observations.append(reused)
-                else:
-                    fresh_candidates.append(candidate)
-
             observations = self.segment_builder.embed_candidates(
                 chunk=chunk,
                 chunk_start_time=chunk_start_time,
-                candidates=fresh_candidates,
+                candidates=candidates,
             )
 
             # 第五步：把当前目标帧窗口送入全局 speaker 分配器。
@@ -608,7 +587,6 @@ class NativeOnlineSpeakerDiarization:
                 segmentation=seg_scores,
                 absolute_centers=absolute_centers,
                 observations=observations,
-                reused_observations=reused_observations,
             )
             resolved = self.clusterer.push_window(window)
 

@@ -179,7 +179,7 @@ bash test_der.sh ./examples
 2. 在 `target_time ± 0.5 * target_activity_window_duration` 内统计各 local slot 累积活跃时长
 3. local slot 活跃时长达到 `target_min_duration` 才进入候选
 4. observation 优先从非重叠帧选段；失败回退 `overlap_fallback`
-5. 命中 `observation reuse` 时复用历史分配；否则提 embedding
+5. 对候选片段提取 embedding
 6. clustering 层先做可选 speaker merge，再做 Hungarian 联合分配
 7. 决策后按规则新建/匹配/回退，并更新 centroid 与 debug 统计
 8. 每个窗口解析后先按帧级聚类结果写基础音轨，再进入 streaming 处理 RTTM 与 merge 补写
@@ -198,7 +198,6 @@ bash test_der.sh ./examples
   - `min_segment_duration_for_centroid_update`
 - 更新策略开关：`disable_ema_update`
 - 更新稳定性：`centroid_warmup_window`、`stable_update_count_threshold`
-- reuse：`disable_observation_reuse`、`reuse_overlap_threshold`、`reuse_time_horizon`
 - 输出：`min_segment_duration`、`max_frame_speakers`、`streaming_flush_interval`
 - 音轨/分离：`enable_speech_separation`、`min_overlap_duration_to_process`、`separation_required_duration`
 
