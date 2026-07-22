@@ -32,6 +32,9 @@ class ChunkPipelineConfig:
     # 音频与调度。
     sample_rate: int = 16000
     chunk_duration: float = 10.0
+    # 窗口推进步长（秒）。hop == chunk_duration 时退化为非重叠模式；
+    # hop < chunk_duration 时按重叠滑窗运行，每个窗口只提交中段 hop 秒。
+    hop_duration: float = 5.0
 
     # ERes2NetV2 配置。
     model_type: str = "eres2netv2"
@@ -181,6 +184,7 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         ),
         hf_token=_merged_value(args, "hf_token", None),
         chunk_duration=float(_merged_value(args, "chunk_duration", 10.0)),
+        hop_duration=float(_merged_value(args, "hop_duration", 5.0)),
         min_local_activity_duration=float(
             _merged_value(args, "min_local_activity_duration", 0.30)
         ),
@@ -225,6 +229,8 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
     )
     if config.chunk_duration <= 0.0:
         raise ValueError("chunk_duration must be > 0")
+    if config.hop_duration <= 0.0 or config.hop_duration > config.chunk_duration:
+        raise ValueError("hop_duration must be in (0, chunk_duration]")
 
     hf_cache_dir = _merged_value(args, "hf_cache_dir", None)
     if hf_cache_dir:

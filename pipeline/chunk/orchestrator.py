@@ -150,6 +150,7 @@ class ChunkDiarizationPipeline:
         *,
         chunk_index: int,
         chunk_start: float,
+        commit_start: float,
         commit_end: float,
         seg_scores: np.ndarray,
         observations: list[ChunkObservation],
@@ -163,6 +164,7 @@ class ChunkDiarizationPipeline:
             "chunk_index": int(chunk_index),
             "chunk": {
                 "start": round(float(chunk_start), 3),
+                "commit_start": round(float(commit_start), 3),
                 "end": round(float(commit_end), 3),
             },
             "segmentation_summary": {
@@ -232,6 +234,12 @@ class ChunkDiarizationPipeline:
         chunk_samples = max(
             1, int(round(self.config.chunk_duration * self.config.sample_rate))
         )
+        hop_samples = max(
+            1, int(round(self.config.hop_duration * self.config.sample_rate))
+        )
+        # 提交区为窗口中段 hop 秒，两侧各留 margin 作为边界缓冲；
+        # 第一个窗口没有左侧缓冲，直接从 0 开始提交。
+        margin_duration = 0.5 * (self.config.chunk_duration - self.config.hop_duration)
 
         writer = AppendOnlyRTTMWriter(
             streaming_log_path,
@@ -242,18 +250,28 @@ class ChunkDiarizationPipeline:
         )
 
         chunk_index = 0
-        for chunk_start_sample in range(0, total_samples, chunk_samples):
+        chunk_start_sample = 0
+        while chunk_start_sample < total_samples:
             chunk = waveform[:, chunk_start_sample : chunk_start_sample + chunk_samples]
             if chunk.shape[1] < chunk_samples:
                 chunk = F.pad(chunk, (0, chunk_samples - chunk.shape[1]))
 
             chunk_start = chunk_start_sample / self.config.sample_rate
-            commit_end = min(chunk_start + self.config.chunk_duration, total_duration)
+            commit_start = (
+                chunk_start if chunk_index == 0 else chunk_start + margin_duration
+            )
+            commit_end = min(
+                chunk_start + margin_duration + self.config.hop_duration,
+                total_duration,
+            )
+            if commit_start >= commit_end - 1e-9:
+                break
 
             # 1) 局部识别。
             seg_scores, centers = self.segmentation(chunk, self.config.sample_rate)
             if seg_scores.size == 0:
                 chunk_index += 1
+                chunk_start_sample += hop_samples
                 continue
             frame_step = self.config.chunk_duration / seg_scores.shape[0]
 
@@ -273,6 +291,10 @@ class ChunkDiarizationPipeline:
                 {
                     "chunk_index": int(chunk_index),
                     "chunk_start": round(float(chunk_start), 3),
+                    "commit": [
+                        round(float(commit_start), 3),
+                        round(float(commit_end), 3),
+                    ],
                     "local_to_global": {
                         str(local_idx): int(global_id)
                         for local_idx, global_id in sorted(local_to_global.items())
@@ -280,11 +302,12 @@ class ChunkDiarizationPipeline:
                 },
             )
 
-            # 4) 帧级输出。
+            # 4) 帧级输出（仅提交区）。
             emitted_frames = writer.consume_chunk(
                 seg_scores,
                 frame_step,
                 chunk_start,
+                commit_start,
                 commit_end,
                 local_to_global,
             )
@@ -293,6 +316,7 @@ class ChunkDiarizationPipeline:
                 self._log_debug_chunk(
                     chunk_index=chunk_index,
                     chunk_start=chunk_start,
+                    commit_start=commit_start,
                     commit_end=commit_end,
                     seg_scores=seg_scores,
                     observations=observations,
@@ -302,6 +326,7 @@ class ChunkDiarizationPipeline:
                 )
 
             chunk_index += 1
+            chunk_start_sample += hop_samples
 
         # 5) probationary 收尾 + 终局 remap。
         redirect_map = self.clusterer.finalize_redirects()

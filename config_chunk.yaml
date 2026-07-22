@@ -20,8 +20,11 @@ hf_cache_dir: ./pretrained/huggingface
 # chunk 调度
 # ------------------------------------------------------------
 # chunk 时长（秒）；segmentation-3.0 原生窗口即 10s
-# 首版为非重叠推进（hop == chunk_duration），后续版本可扩展 hop/提交区
 chunk_duration: 10.0
+# 窗口推进步长（秒）。hop < chunk_duration 时为重叠滑窗：
+# 每个窗口只提交中段 hop 秒（两侧各留 (chunk-hop)/2 作为边界缓冲），
+# hop == chunk_duration 时退化为非重叠模式
+hop_duration: 5.0
 
 # ------------------------------------------------------------
 # chunk 内 local track 构造与 embedding 提取
@@ -42,23 +45,25 @@ segment_batch_size: 8
 # 最多维护多少个全局 speaker
 max_speakers: 50
 # 低于该相似度时，更倾向于新建 speaker
-new_speaker_threshold: 0.40
+# 注意：probationary 架构下 false split 可被 absorb 修复、false glue 永久存在，
+# 因此该阈值应靠近 global_match_threshold，宁可多建簇也不要黏合
+new_speaker_threshold: 0.50
 # observation 命中已有 global speaker 的主阈值
 global_match_threshold: 0.50
 # probationary speaker 被最近 confirmed speaker 吸收的相似度阈值
-absorb_threshold: 0.60
+absorb_threshold: 0.65
 # 仅当 track 时长达到该阈值，才允许新建 speaker（秒）
-min_segment_duration_for_new_speaker: 1.00
+min_segment_duration_for_new_speaker: 0.50
 # 仅当 track 时长达到该阈值，才允许更新 centroid（秒）
 min_segment_duration_for_centroid_update: 1.50
 # 连续两次用于更新 centroid 的片段允许的最大重叠比
-update_segment_overlap_threshold: 0.5
+update_segment_overlap_threshold: 1.0
 # overlap_fallback 弱更新触发所需的额外相似度裕量
 weak_update_similarity_margin: 0.15
 # overlap_fallback 弱更新权重倍率（1.0 表示与常规更新同权重）
 weak_update_weight_multiplier: 1.00
 # 新建 speaker 累计匹配语音达到该时长后转正（秒）
-probation_confirm_duration: 3.0
+probation_confirm_duration: 10.0
 
 # ------------------------------------------------------------
 # RTTM 输出

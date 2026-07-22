@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """分析实时推理 run.log 中各机制命中情况与占比。
 
+同时支持两种管线的日志：
+
+- 滑窗版（pipeline.py）：window_summary / frame_decision / merge_event / stable 等 marker；
+- chunk 版（chunk_pipeline.py）：额外解析 new_speakers / absorb_events /
+  final_redirect_map / current_global_speakers(probationary 状态) 等 marker。
+
 使用方法：
   1) 直接打印分析报告:
      python tools/analyze_run_log.py --log /path/to/run.log
@@ -59,6 +65,18 @@ class StreamingEventsSummary(TypedDict, total=False):
     unstable_finalize_speakers: int
 
 
+class AbsorbEventsSummary(TypedDict):
+    count: int
+    similarity_stats: dict[str, float]
+
+
+class ChunkEventsSummary(TypedDict, total=False):
+    new_speakers: int
+    final_redirects: int
+    final_probationary: int
+    final_confirmed: int
+
+
 class RunLogSummary(TypedDict):
     log_path: str
     frames: FramesSummary
@@ -67,6 +85,8 @@ class RunLogSummary(TypedDict):
     updates: UpdatesSummary
     skips: SkipsSummary
     streaming_events: StreamingEventsSummary
+    absorb_events: AbsorbEventsSummary
+    chunk_events: ChunkEventsSummary
 
 
 def _iter_lines(file_obj: TextIO) -> Iterator[str]:
@@ -158,6 +178,27 @@ def _counter_with_ratio(counter: Counter[str], total: int) -> list[CounterItem]:
     return items
 
 
+def _basic_stats(values: list[float]) -> dict[str, float]:
+    """功能：计算一组数值的基础统计量（min/mean/p50/p90/max）。"""
+
+    if not values:
+        return {}
+    sorted_values = sorted(values)
+    n = len(sorted_values)
+
+    def q(p: float) -> float:
+        idx = min(n - 1, int((n - 1) * p))
+        return float(sorted_values[idx])
+
+    return {
+        "min": float(sorted_values[0]),
+        "mean": float(sum(sorted_values) / n),
+        "p50": q(0.50),
+        "p90": q(0.90),
+        "max": float(sorted_values[-1]),
+    }
+
+
 def analyze_log(log_path: Path) -> RunLogSummary:
     """功能：扫描 run.log 并汇总机制命中统计。"""
 
@@ -176,6 +217,14 @@ def analyze_log(log_path: Path) -> RunLogSummary:
     merge_event_count = 0
     speaker_became_stable_count = 0
     unstable_finalize_speaker_count = 0
+
+    # chunk 管线专属统计。
+    absorb_event_count = 0
+    absorb_similarities: list[float] = []
+    new_speaker_count = 0
+    final_redirect_count = 0
+    final_probationary: int | None = None
+    final_confirmed: int | None = None
 
     with open(log_path, "r", encoding="utf-8") as file_obj:
         lines = _iter_lines(file_obj)
@@ -231,6 +280,45 @@ def analyze_log(log_path: Path) -> RunLogSummary:
                             update_mode_counter[mode] += 1
                 continue
 
+            # ---- chunk 管线专属 marker ----
+
+            if "[debug] new_speakers:" in line:
+                payload = _read_json_block(lines)
+                if isinstance(payload, list):
+                    new_speaker_count += len(payload)
+                continue
+
+            if "[debug] absorb_events:" in line:
+                payload = _read_json_block(lines)
+                if isinstance(payload, list):
+                    absorb_event_count += len(payload)
+                    for item in payload:
+                        if isinstance(item, dict) and "similarity" in item:
+                            try:
+                                absorb_similarities.append(float(item["similarity"]))
+                            except (TypeError, ValueError):
+                                pass
+                continue
+
+            if "[runtime] final_redirect_map:" in line:
+                payload = _read_json_block(lines)
+                if isinstance(payload, dict):
+                    final_redirect_count += len(payload)
+                continue
+
+            if "[runtime] current_global_speakers:" in line:
+                payload = _read_json_block(lines)
+                if isinstance(payload, list):
+                    statuses = [
+                        str(item.get("status"))
+                        for item in payload
+                        if isinstance(item, dict) and "status" in item
+                    ]
+                    if statuses:
+                        final_probationary = statuses.count("probationary")
+                        final_confirmed = statuses.count("confirmed")
+                continue
+
             if "[streaming] merge_event" in line:
                 merge_event_count += 1
                 continue
@@ -284,6 +372,16 @@ def analyze_log(log_path: Path) -> RunLogSummary:
             "speaker_became_stable": int(speaker_became_stable_count),
             "unstable_finalize_speakers": int(unstable_finalize_speaker_count),
         },
+        "absorb_events": {
+            "count": int(absorb_event_count),
+            "similarity_stats": _basic_stats(absorb_similarities),
+        },
+        "chunk_events": {
+            "new_speakers": int(new_speaker_count),
+            "final_redirects": int(final_redirect_count),
+            "final_probationary": int(final_probationary or 0),
+            "final_confirmed": int(final_confirmed or 0),
+        },
     }
 
 
@@ -296,6 +394,8 @@ def _print_report(summary: RunLogSummary) -> None:
     updates = summary["updates"]
     skips = summary["skips"]
     streaming_events = summary.get("streaming_events", {})
+    absorb_events = summary.get("absorb_events", {})
+    chunk_events = summary.get("chunk_events", {})
 
     print("== Run Log Analysis ==")
     print(f"log_path: {summary['log_path']}")
@@ -331,6 +431,25 @@ def _print_report(summary: RunLogSummary) -> None:
     print(f"speaker_became_stable={streaming_events.get('speaker_became_stable', 0)}")
     print(
         f"unstable_finalize_speakers={streaming_events.get('unstable_finalize_speakers', 0)}"
+    )
+
+    print("\n-- absorb_events (chunk) --")
+    print(f"count={absorb_events.get('count', 0)}")
+    similarity_stats = absorb_events.get("similarity_stats", {})
+    if similarity_stats:
+        print(
+            "similarity: "
+            f"min={similarity_stats['min']:.4f} mean={similarity_stats['mean']:.4f} "
+            f"p50={similarity_stats['p50']:.4f} p90={similarity_stats['p90']:.4f} "
+            f"max={similarity_stats['max']:.4f}"
+        )
+
+    print("\n-- chunk_events --")
+    print(f"new_speakers={chunk_events.get('new_speakers', 0)}")
+    print(f"final_redirects={chunk_events.get('final_redirects', 0)}")
+    print(
+        f"final_probationary={chunk_events.get('final_probationary', 0)} "
+        f"final_confirmed={chunk_events.get('final_confirmed', 0)}"
     )
 
 

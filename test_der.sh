@@ -15,7 +15,7 @@ fi
 
 audio_input=${1:-./datasets/aishell4-test/}
 # 管线实现选择：native（默认，滑窗实现）或 chunk（10s chunk + 增量聚类）
-pipeline_impl=${PIPELINE_IMPL:-native}
+pipeline_impl=${PIPELINE_IMPL:-chunk}
 if [ "$pipeline_impl" = "chunk" ]; then
     entry_script="chunk_pipeline.py"
     default_config="./config_chunk.yaml"
@@ -28,7 +28,7 @@ model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
 ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/rttm/}}
-debug_flag=${DEBUG:-0}
+debug_flag=${DEBUG:-1}
 show_rttm_flag=${SHOW_RTTM:-0}
 der_verbose_flag=${DER_VERBOSE:-1}
 output_root=${OUTPUT_ROOT:-./exp}

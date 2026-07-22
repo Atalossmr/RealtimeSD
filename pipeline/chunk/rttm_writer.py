@@ -103,10 +103,11 @@ class AppendOnlyRTTMWriter:
         seg_scores: np.ndarray,
         frame_step: float,
         chunk_start: float,
+        commit_start: float,
         commit_end: float,
         local_to_global: dict[int, int],
     ) -> int:
-        """消费一个 chunk 的帧级结果，返回写入的帧数。"""
+        """消费一个 chunk 的帧级结果（仅 [commit_start, commit_end) 提交区），返回写入的帧数。"""
 
         if seg_scores.size == 0 or not local_to_global:
             return 0
@@ -116,9 +117,13 @@ class AppendOnlyRTTMWriter:
         num_frames = seg_scores.shape[0]
         for frame_idx in range(num_frames):
             frame_start = chunk_start + frame_idx * frame_step
+            frame_end = frame_start + frame_step
+            if frame_end <= commit_start + 1e-9:
+                continue
             if frame_start >= commit_end - 1e-9:
                 break
-            frame_end = min(frame_start + frame_step, commit_end)
+            frame_start = max(frame_start, commit_start)
+            frame_end = min(frame_end, commit_end)
 
             frame_scores = seg_scores[frame_idx]
             active_globals = sorted(

@@ -250,7 +250,7 @@ chunk 版管线：segmentation-3.0 在 10s chunk 内做局部识别，ERes2NetV2
 - 无 speaker merge、无 RTTM 重写、无 stable/延迟输出机制
 - 新建 speaker 进入 probationary 试用期：累计匹配语音达到 `probation_confirm_duration` 转正；试用期内与某 confirmed speaker 相似度 ≥ `absorb_threshold` 则被吸收（只影响后续 chunk 与终局 remap）
 - RTTM append-only；音频结束时按 redirect_map 做一次终局 remap 并整文件重写
-- 首版为非重叠 10s chunk（hop == chunk_duration）
+- 重叠滑窗调度：`hop_duration < chunk_duration` 时每窗口只提交中段 hop 秒（两侧各留 `(chunk-hop)/2` 边界缓冲）；hop == chunk 时退化为非重叠
 
 模块分工：
 
