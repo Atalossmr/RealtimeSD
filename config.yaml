@@ -57,11 +57,10 @@ min_segment_duration_for_new_speaker: 0.50
 # 仅当 track 时长达到该阈值，才允许更新 centroid（秒）
 min_segment_duration_for_centroid_update: 1.50
 # 连续两次用于更新 centroid 的片段允许的最大重叠比
-update_segment_overlap_threshold: 1.0
 # overlap_fallback 弱更新触发所需的额外相似度裕量
 weak_update_similarity_margin: 0.15
 # overlap_fallback 弱更新权重倍率（1.0 表示与常规更新同权重）
-weak_update_weight_multiplier: 1.00
+weak_update_weight_multiplier: 0.00
 # 新建 speaker 累计匹配语音达到该时长后转正（秒）
 probation_confirm_duration: 10.0
 
@@ -71,7 +70,7 @@ probation_confirm_duration: 10.0
 # RTTM 写出最短片段时长（秒）
 min_segment_duration: 0.30
 # 同 speaker 相邻片段自动拼接允许的最大间隔（秒，跨 chunk 生效）
-streaming_merge_gap: 0.75
+streaming_merge_gap: 0.25
 # 是否同步把新增 RTTM 行打印到控制台
 show_rttm: false
 

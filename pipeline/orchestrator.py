@@ -6,8 +6,9 @@
 2. segmentation-3.0 局部识别，得到帧级多标签分数；
 3. 每个 local slot 聚合纯净语音提 ERes2NetV2 embedding；
 4. `ChunkSpeakerClusterer` Hungarian 分配 local->global，维护全局身份；
-5. 帧级活跃 local 映射 global 后直接 append 到 RTTM；
-6. 音频结束后做 probationary 收尾与终局 remap（整文件重写一次）。
+5. 帧级活跃 local 映射 global 后写出：confirmed 即时进入 open-turn 管线，
+   probationary 先入内存缓冲，身份定案（转正/吸收）后 flush 追加；
+6. 音频结束后定案残余 probationary 并 flush，writer 纯追加收尾（全程零重写）。
 """
 
 from __future__ import annotations
@@ -281,8 +282,22 @@ class ChunkDiarizationPipeline:
             )
             observations = self._embed_tracks(waveform, tracks)
 
-            # 3) 全局分配。
+            # 3) 全局分配 + 身份定案 flush。
             local_to_global, debug_info = self.clusterer.assign_chunk(observations)
+            if debug_info["resolved_speakers"]:
+                self._log_structured(
+                    logging.INFO,
+                    "[runtime]",
+                    "resolved_speakers",
+                    {
+                        "chunk_index": int(chunk_index),
+                        "resolutions": debug_info["resolved_speakers"],
+                    },
+                )
+            for resolution in debug_info["resolved_speakers"]:
+                writer.flush_speaker(
+                    int(resolution["speaker_id"]), int(resolution["final_id"])
+                )
 
             self._log_structured(
                 logging.INFO,
@@ -302,7 +317,7 @@ class ChunkDiarizationPipeline:
                 },
             )
 
-            # 4) 帧级输出（仅提交区）。
+            # 4) 帧级输出（仅提交区；probationary 仅入缓冲不写出）。
             emitted_frames = writer.consume_chunk(
                 seg_scores,
                 frame_step,
@@ -310,7 +325,11 @@ class ChunkDiarizationPipeline:
                 commit_start,
                 commit_end,
                 local_to_global,
+                deferred_speakers=set(self.clusterer.probationary),
             )
+
+            # 5) 闭合提交区末尾已不再活跃的 turn（沉默确认，提前写出）。
+            writer.close_inactive(commit_end)
 
             if self.config.debug:
                 self._log_debug_chunk(
@@ -328,13 +347,17 @@ class ChunkDiarizationPipeline:
             chunk_index += 1
             chunk_start_sample += hop_samples
 
-        # 5) probationary 收尾 + 终局 remap。
-        redirect_map = self.clusterer.finalize_redirects()
-        if redirect_map:
+        # 6) 残余 probationary 定案 + 缓冲 flush + 纯追加收尾（零重写）。
+        resolutions = self.clusterer.finalize_redirects()
+        if resolutions:
             self._log_structured(
-                logging.INFO, "[runtime]", "final_redirect_map", redirect_map
+                logging.INFO, "[runtime]", "final_resolutions", resolutions
             )
-        writer.finalize(redirect_map)
+        for resolution in resolutions:
+            writer.flush_speaker(
+                int(resolution["speaker_id"]), int(resolution["final_id"])
+            )
+        writer.finalize()
 
     def process_file(self, wav_path: str) -> str:
         """处理单个音频文件并返回生成的 RTTM 路径。"""

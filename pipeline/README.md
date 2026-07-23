@@ -12,20 +12,22 @@
 4. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding；纯净区不足时回退 `overlap_fallback`
 5. clustering 用 Hungarian 做 local->global 联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid
 6. 新建 speaker 进入 probationary 试用期，达标转正或与 confirmed 过于相似时被吸收
-7. 只提交窗口中段 `hop_duration` 秒的帧级结果，append 到 RTTM
-8. 音频结束：probationary 收尾 + 按 redirect 终局 remap，整文件重写一次
+7. 只提交窗口中段 `hop_duration` 秒的帧级结果：confirmed 即时写入 open-turn 管线，probationary 先入内存缓冲，身份定案（转正/吸收）后 flush 追加
+8. 音频结束：定案残余 probationary 并 flush 其缓冲，writer 纯追加收尾——全程零重写
 
 链路分层：
 
 - `track_builder`：chunk 内 local track 聚合与 embedding 门控
 - `clusterer`：local->global 分配 + centroid 维护 + probationary 状态机
-- `rttm_writer`：append-only RTTM 写出 + 终局 remap
+- `rttm_writer`：零重写 RTTM 写出（open-turn 管线 + probationary 缓冲 flush）
 
 设计要点：
 
-- **无 speaker merge、无 RTTM 流式重写、无 stable/延迟输出机制**
+- **无 speaker merge、无 RTTM 重写（含终局）、无 stable/延迟输出机制**
 - confirmed speaker 身份一旦建立，流式期间永不改变
-- 身份修正只有两个出口：probationary 吸收（只影响后续 chunk）与终局 remap（整文件一次）
+- 身份修正只有一个出口：probationary 吸收；被吸收者的输出因尚在缓冲而未写出，
+  flush 时直接以目标 id 落盘，已写出的行永不回改
+- 代价：新 speaker 的首次发言延迟到其 probation 定案时才出现在输出中
 
 ## 关键策略
 
@@ -58,20 +60,23 @@
 
 - 新建 speaker 一律 probationary；`matched`/`fallback` 都会累计其匹配语音时长
 - 累计 ≥ `probation_confirm_duration` → 转正（confirmed）
-- 仍是 probationary 且与某 confirmed centroid 相似度 ≥ `absorb_threshold` → 吸收：centroid 按 counts 加权并入目标，记录 `redirect_map`，只影响后续 chunk 与终局 remap
+- 仍是 probationary 且与某 confirmed centroid 相似度 ≥ `absorb_threshold` → 吸收：centroid 按 counts 加权并入目标，记录 `redirect_map`；被吸收者的缓冲输出 flush 时以目标 id 落盘
 
 ### 4) centroid 更新
 
 - 全程 SMA 增量更新：`alpha = 1 / (count + 1)`
-- 常规更新门控：track 时长 ≥ `min_segment_duration_for_centroid_update`，且与上次更新片段重合比 < `update_segment_overlap_threshold`
+- 常规更新门控：track 时长 ≥ `min_segment_duration_for_centroid_update`
 - `overlap_fallback` 弱更新：仅当相似度 > `global_match_threshold + weak_update_similarity_margin` 时，以 `weak_update_weight_multiplier` 衰减权重更新
 
-### 5) 提交区与 append-only 输出
+### 5) 提交区与零重写输出
 
 - 重叠滑窗（`hop_duration < chunk_duration`）时，每窗口只提交中段 `hop_duration` 秒，两侧各留 `(chunk-hop)/2` 边界缓冲；首窗从 0 开始
-- 同一 speaker 相邻 turn 间隔 ≤ `streaming_merge_gap` 自动拼接（跨 chunk 生效）
-- 短于 `min_segment_duration` 的 turn 直接丢弃
-- `finalize`：对内存中的全部 turn 应用 redirect_map、重编号、再拼接，整文件重写一次
+- 每个 speaker 维护一个未闭合的 open turn（驻留内存）：后续帧/段间隔 ≤ `streaming_merge_gap` 即在写出前扩展拼接，跨 chunk 生效
+- 沉默闭合：每 chunk 提交后检查，open turn 终点距 commit_end 已超过 `streaming_merge_gap` 即判定说话结束、提前闭合写出（与"下次开口回头闭合"产出等价，但尾段输出延迟从等到 EOF 降到约一个 hop）；EOF 时 `finalize` 兜底闭合全部残余 turn
+- probationary speaker 的帧先入内存 pending 缓冲（缓冲内同样按 merge_gap 拼接）；身份定案后 `flush_speaker` 把缓冲段按时间序重放进 final_id 的 open-turn 管线，与正在进行的 turn 连续段自动拼接
+- 短于 `min_segment_duration` 的 turn 在闭合时丢弃
+- `finalize`：闭合全部 open turn、兜底 flush 残余 pending，纯追加，不重写文件
+- 残余限制：无法向已写出的行回拼（缓冲段桥接两段旧段时，较早写出的行保持独立）；输出文件行序不再严格按时间排序（DER 评分不受影响）
 
 相关代码：`pipeline/rttm_writer.py`
 
@@ -102,11 +107,11 @@ chunk 内 local track 构造：非重叠纯净区优先拼接、overlap_fallback
 
 ### `clusterer.py`
 
-Hungarian local->global 分配、SMA/弱更新、probationary 转正与吸收、终局 redirect。
+Hungarian local->global 分配、SMA/弱更新、probationary 转正与吸收、定案事件（resolved_speakers）。
 
 ### `rttm_writer.py`
 
-append-only RTTM 写出（帧级消费 + turn 拼接）与终局 remap 重写。
+零重写 RTTM 写出：confirmed 帧即时进入 open-turn 管线（写出前拼接），probationary 帧入 pending 缓冲，定案后 flush 追加；`finalize` 纯追加收尾。
 
 ### `models/`
 
@@ -138,7 +143,6 @@ append-only RTTM 写出（帧级消费 + turn 拼接）与终局 remap 重写。
 - `absorb_threshold`
 - `min_segment_duration_for_new_speaker`
 - `min_segment_duration_for_centroid_update`
-- `update_segment_overlap_threshold`
 - `weak_update_similarity_margin`
 - `weak_update_weight_multiplier`
 - `probation_confirm_duration`
@@ -181,7 +185,7 @@ python3 pipeline.py --debug --verbose --show_rttm ...
 - `frame_decision`（chunk 级 local->global）
 - `window_summary`（chunk 级汇总，兼容旧分析工具）
 - `new_speakers` / `updated_speakers` / `skipped_updates`
-- `absorb_events` / `final_redirect_map`
+- `absorb_events` / `resolved_speakers` / `final_resolutions`
 - `current_global_speakers`（含 probationary/confirmed 状态）
 
 可用工具：

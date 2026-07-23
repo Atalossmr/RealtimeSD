@@ -4,7 +4,7 @@
 当前管线（pipeline.py，chunk 架构）的 marker：
 
 - window_summary / frame_decision / new_speakers / updated_speakers / skipped_updates
-- absorb_events / final_redirect_map / current_global_speakers（probationary 状态）
+- absorb_events / resolved_speakers / final_resolutions（probationary 定案）/ current_global_speakers
 
 同时兼容旧滑窗版日志（merge_event / stable 等 marker）。
 
@@ -305,6 +305,30 @@ def analyze_log(log_path: Path) -> RunLogSummary:
                 payload = _read_json_block(lines)
                 if isinstance(payload, dict):
                     final_redirect_count += len(payload)
+                continue
+
+            if "[runtime] resolved_speakers:" in line:
+                payload = _read_json_block(lines)
+                if isinstance(payload, dict):
+                    resolutions = payload.get("resolutions")
+                    if isinstance(resolutions, list):
+                        final_redirect_count += sum(
+                            1
+                            for item in resolutions
+                            if isinstance(item, dict)
+                            and item.get("resolution") == "absorbed"
+                        )
+                continue
+
+            if "[runtime] final_resolutions:" in line:
+                payload = _read_json_block(lines)
+                if isinstance(payload, list):
+                    final_redirect_count += sum(
+                        1
+                        for item in payload
+                        if isinstance(item, dict)
+                        and item.get("resolution") == "absorbed"
+                    )
                 continue
 
             if "[runtime] current_global_speakers:" in line:

@@ -6,12 +6,12 @@
 - 不做 speaker merge：confirmed speaker 身份一旦建立永不改变；
 - 新建 speaker 进入 probationary 试用期，累计足够语音才转正；
   试用期内若与某个 confirmed speaker 足够相似，则被吸收（absorb），
-  吸收只影响后续 chunk 与终局 remap，不重写已提交的流式输出。
+  吸收只影响后续 chunk 与定案事件（resolved_speakers），
+  probationary 的输出在定案前由 writer 缓冲，定案后按 final_id flush。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -20,14 +20,6 @@ from scipy.optimize import linear_sum_assignment
 from .config import ChunkPipelineConfig
 from .schema import ChunkDebugInfo, ChunkObservation
 from .utils import l2_normalize
-
-
-@dataclass
-class UpdateSegmentRecord:
-    """记录某个 global speaker 上一次用于更新 centroid 的片段。"""
-
-    start: float
-    end: float
 
 
 class ChunkSpeakerClusterer:
@@ -42,13 +34,12 @@ class ChunkSpeakerClusterer:
 
         self.centroids: dict[int, np.ndarray] = {}
         self.counts: dict[int, int] = {}
-        self.last_update_segments: dict[int, UpdateSegmentRecord] = {}
 
         # probationary 状态： probationary 集合 + 各 speaker 累计匹配语音时长。
         self.probationary: set[int] = set()
         self.speaker_speech: dict[int, float] = {}
 
-        # 吸收产生的 global id 重定向，供终局 remap 使用。
+        # 吸收产生的 global id 重定向（定案信息的记录，供日志与追溯）。
         self.redirect_map: dict[int, int] = {}
 
         self.next_speaker_id = 0
@@ -84,37 +75,6 @@ class ChunkSpeakerClusterer:
     # centroid 更新（纯 SMA + 弱更新，逻辑平移自旧 clusterer）
     # ------------------------------------------------------------------
 
-    def _segment_overlap_ratio(
-        self,
-        left: UpdateSegmentRecord,
-        right: UpdateSegmentRecord,
-    ) -> float:
-        """计算两个片段的归一化时间重合比。"""
-
-        overlap = max(0.0, min(left.end, right.end) - max(left.start, right.start))
-        min_duration = max(1e-6, min(left.end - left.start, right.end - right.start))
-        return float(overlap / min_duration)
-
-    def _should_skip_update(
-        self,
-        speaker_id: int,
-        observation: ChunkObservation,
-    ) -> tuple[bool, float]:
-        """判断当前 observation 是否应跳过 centroid 更新（与上次更新片段重合过高）。"""
-
-        previous = self.last_update_segments.get(speaker_id)
-        if previous is None:
-            return False, 0.0
-        current = UpdateSegmentRecord(
-            start=float(observation.start),
-            end=float(observation.end),
-        )
-        overlap_ratio = self._segment_overlap_ratio(previous, current)
-        return (
-            overlap_ratio >= self.config.update_segment_overlap_threshold,
-            overlap_ratio,
-        )
-
     def _update_speaker(
         self,
         speaker_id: int,
@@ -135,10 +95,6 @@ class ChunkSpeakerClusterer:
             self.counts[speaker_id] = count + 1
 
         self.centroids[speaker_id] = l2_normalize(updated)
-        self.last_update_segments[speaker_id] = UpdateSegmentRecord(
-            start=float(observation.start),
-            end=float(observation.end),
-        )
         return "sma", alpha
 
     def _create_speaker(self, observation: ChunkObservation) -> int:
@@ -152,10 +108,6 @@ class ChunkSpeakerClusterer:
             observation.embedding.astype(np.float32, copy=False)
         )
         self.counts[speaker_id] = 1
-        self.last_update_segments[speaker_id] = UpdateSegmentRecord(
-            start=float(observation.start),
-            end=float(observation.end),
-        )
         self.probationary.add(speaker_id)
         self.speaker_speech[speaker_id] = float(observation.duration)
         return speaker_id
@@ -163,6 +115,16 @@ class ChunkSpeakerClusterer:
     # ------------------------------------------------------------------
     # 分配
     # ------------------------------------------------------------------
+
+    def _resolve_redirect(self, speaker_id: int) -> int:
+        """沿 redirect_map 解析最终 id（吸收目标恒为 confirmed，链长至多为 1，做通用压缩）。"""
+
+        seen: set[int] = set()
+        current = int(speaker_id)
+        while current in self.redirect_map and current not in seen:
+            seen.add(current)
+            current = int(self.redirect_map[current])
+        return current
 
     def _build_assignment(
         self,
@@ -214,6 +176,7 @@ class ChunkSpeakerClusterer:
             "updated_speakers": [],
             "skipped_updates": [],
             "absorb_events": [],
+            "resolved_speakers": [],
             "global_speakers": [],
         }
         local_to_global: dict[int, int] = {}
@@ -227,6 +190,14 @@ class ChunkSpeakerClusterer:
                 )
 
         self._maintain_probation(debug_info)
+
+        # 本 chunk 分配到的 speaker 可能在 probation 维护中被吸收，
+        # 通过 redirect_map 把映射解析到最终 id，避免向已删除的 id 输出。
+        if self.redirect_map:
+            local_to_global = {
+                local_idx: self._resolve_redirect(global_id)
+                for local_idx, global_id in local_to_global.items()
+            }
 
         debug_info["num_centroids_after"] = len(self.centroids)
         debug_info["global_speakers"] = self.current_global_speakers()
@@ -306,20 +277,6 @@ class ChunkSpeakerClusterer:
                         }
                     )
                     return
-                should_skip, overlap_ratio = self._should_skip_update(
-                    assigned_speaker, observation
-                )
-                if should_skip:
-                    debug_info["skipped_updates"].append(
-                        {
-                            "global": int(assigned_speaker),
-                            "reason": "segment_overlap_during_weak_update",
-                            "overlap_ratio": float(overlap_ratio),
-                            "start": float(observation.start),
-                            "end": float(observation.end),
-                        }
-                    )
-                    return
                 mode, alpha = self._update_speaker(
                     assigned_speaker,
                     observation,
@@ -370,21 +327,6 @@ class ChunkSpeakerClusterer:
             )
             return
 
-        should_skip, overlap_ratio = self._should_skip_update(
-            assigned_speaker, observation
-        )
-        if should_skip:
-            debug_info["skipped_updates"].append(
-                {
-                    "global": int(assigned_speaker),
-                    "reason": "segment_overlap",
-                    "overlap_ratio": float(overlap_ratio),
-                    "start": float(observation.start),
-                    "end": float(observation.end),
-                }
-            )
-            return
-
         mode, alpha = self._update_speaker(assigned_speaker, observation)
         debug_info["updated_speakers"].append(
             {
@@ -409,6 +351,13 @@ class ChunkSpeakerClusterer:
                 >= self.config.probation_confirm_duration
             ):
                 self.probationary.discard(speaker_id)
+                debug_info["resolved_speakers"].append(
+                    {
+                        "speaker_id": int(speaker_id),
+                        "final_id": int(speaker_id),
+                        "resolution": "confirmed",
+                    }
+                )
                 continue
 
             self._try_absorb(speaker_id, debug_info)
@@ -420,8 +369,8 @@ class ChunkSpeakerClusterer:
     ) -> bool:
         """若 probationary 与某 confirmed speaker 足够相似，则把它吸收掉。
 
-        吸收只影响后续 chunk 的分配与终局 remap（redirect_map），
-        不回溯修改任何已提交的输出。
+        吸收只影响后续 chunk 的分配与定案事件（resolved_speakers）；
+        被吸收者的缓冲输出由 writer 按 final_id flush，不回改任何已写出行。
         """
 
         if speaker_id not in self.centroids:
@@ -461,7 +410,6 @@ class ChunkSpeakerClusterer:
 
         del self.centroids[speaker_id]
         del self.counts[speaker_id]
-        self.last_update_segments.pop(speaker_id, None)
         self.speaker_speech.pop(speaker_id, None)
         self.probationary.discard(speaker_id)
         self.redirect_map[int(speaker_id)] = int(best_target)
@@ -473,13 +421,22 @@ class ChunkSpeakerClusterer:
                 "similarity": float(best_similarity),
             }
         )
+        debug_info["resolved_speakers"].append(
+            {
+                "speaker_id": int(speaker_id),
+                "final_id": int(best_target),
+                "resolution": "absorbed",
+                "similarity": float(best_similarity),
+            }
+        )
         return True
 
-    def finalize_redirects(self) -> dict[int, int]:
-        """音频结束时收尾：残余 probationary 映射到最近 confirmed（够像才并）。
+    def finalize_redirects(self) -> list[dict[str, int | float | str]]:
+        """音频结束时收尾：定案全部残余 probationary。
 
-        不够像的 probationary 直接转正保留自身 id。
-        返回完整的 global id 重定向表，供 RTTM 终局 remap 使用。
+        够像某 confirmed 的吸收并入（记录 redirect_map），不够像的转正保留自身 id。
+        返回定案列表（元素含 speaker_id / final_id / resolution），
+        供 writer 逐个 flush 缓冲输出。
         """
 
         debug_info: ChunkDebugInfo = {
@@ -490,12 +447,21 @@ class ChunkSpeakerClusterer:
             "updated_speakers": [],
             "skipped_updates": [],
             "absorb_events": [],
+            "resolved_speakers": [],
             "global_speakers": [],
         }
         for speaker_id in sorted(list(self.probationary)):
-            self._try_absorb(speaker_id, debug_info)
+            absorbed = self._try_absorb(speaker_id, debug_info)
+            if not absorbed:
+                debug_info["resolved_speakers"].append(
+                    {
+                        "speaker_id": int(speaker_id),
+                        "final_id": int(speaker_id),
+                        "resolution": "confirmed",
+                    }
+                )
             self.probationary.discard(speaker_id)
-        return dict(self.redirect_map)
+        return list(debug_info["resolved_speakers"])
 
 
 __all__ = ["ChunkSpeakerClusterer"]
