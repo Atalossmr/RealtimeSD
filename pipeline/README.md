@@ -107,7 +107,7 @@ chunk 内 local track 构造：非重叠纯净区优先拼接、overlap_fallback
 
 ### `clusterer.py`
 
-Hungarian local->global 分配、SMA/弱更新、probationary 转正与吸收、定案事件（resolved_speakers）。
+Hungarian local->global 分配、SMA 更新、probationary 转正与吸收、定案事件（resolved_speakers）。
 
 ### `rttm_writer.py`
 
@@ -143,8 +143,6 @@ Hungarian local->global 分配、SMA/弱更新、probationary 转正与吸收、
 - `absorb_threshold`
 - `min_segment_duration_for_new_speaker`
 - `min_segment_duration_for_centroid_update`
-- `weak_update_similarity_margin`
-- `weak_update_weight_multiplier`
 - `probation_confirm_duration`
 
 ### 4) RTTM 输出

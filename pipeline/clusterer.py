@@ -1,6 +1,6 @@
 """chunk 级全局 speaker 分配与 centroid 维护。
 
-与 `pipeline/clustering/clusterer.py` 的差异：
+设计要点：
 
 - 处理单元是一个 chunk 的一组 local track observation，而不是 0.5s 滑窗；
 - 不做 speaker merge：confirmed speaker 身份一旦建立永不改变；

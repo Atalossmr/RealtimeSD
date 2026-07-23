@@ -120,16 +120,16 @@ class ChunkPipelineConfig:
 
     # 全局 speaker 匹配与维护。
     max_speakers: int = 50
-    new_speaker_threshold: float = 0.40
+    new_speaker_threshold: float = 0.50
     global_match_threshold: float = 0.50
-    absorb_threshold: float = 0.60
-    min_segment_duration_for_new_speaker: float = 1.00
+    absorb_threshold: float = 0.65
+    min_segment_duration_for_new_speaker: float = 0.50
     min_segment_duration_for_centroid_update: float = 1.50
-    probation_confirm_duration: float = 3.0
+    probation_confirm_duration: float = 10.0
 
     # RTTM 输出。
     min_segment_duration: float = 0.30
-    streaming_merge_gap: float = 0.75
+    streaming_merge_gap: float = 0.25
     output_dir_for_streaming: Optional[str] = None
     show_rttm: bool = False
     debug: bool = False
@@ -255,24 +255,22 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         ),
         segment_batch_size=int(_merged_value(args, "segment_batch_size", 8)),
         max_speakers=int(_merged_value(args, "max_speakers", 50)),
-        new_speaker_threshold=float(
-            _merged_value(args, "new_speaker_threshold", 0.40)
-        ),
+        new_speaker_threshold=float(_merged_value(args, "new_speaker_threshold", 0.50)),
         global_match_threshold=float(
             _merged_value(args, "global_match_threshold", 0.50)
         ),
-        absorb_threshold=float(_merged_value(args, "absorb_threshold", 0.60)),
+        absorb_threshold=float(_merged_value(args, "absorb_threshold", 0.65)),
         min_segment_duration_for_new_speaker=float(
-            _merged_value(args, "min_segment_duration_for_new_speaker", 1.00)
+            _merged_value(args, "min_segment_duration_for_new_speaker", 0.50)
         ),
         min_segment_duration_for_centroid_update=float(
             _merged_value(args, "min_segment_duration_for_centroid_update", 1.50)
         ),
         probation_confirm_duration=float(
-            _merged_value(args, "probation_confirm_duration", 3.0)
+            _merged_value(args, "probation_confirm_duration", 10.0)
         ),
         min_segment_duration=float(_merged_value(args, "min_segment_duration", 0.30)),
-        streaming_merge_gap=float(_merged_value(args, "streaming_merge_gap", 0.75)),
+        streaming_merge_gap=float(_merged_value(args, "streaming_merge_gap", 0.25)),
         output_dir_for_streaming=_merged_value(args, "output_dir", None),
         show_rttm=bool(_merged_value(args, "show_rttm", False)),
         debug=bool(_merged_value(args, "debug", False)),
