@@ -11,7 +11,7 @@
 3. 对窗口运行 `pyannote/segmentation-3.0`，得到帧级多标签分数（局部 ≤3 人、帧级 ≤2 人，含重叠）
 4. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding；纯净区不足时回退 `overlap_fallback`
 5. clustering 用 Hungarian 做 local->global 联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid
-6. 新建 speaker 进入 probationary 试用期，达标转正或与 confirmed 过于相似时被吸收
+6. 新建 speaker 进入 probationary 试用期，达标转正，或与 confirmed / 其他 probationary 过于相似时被吸收
 7. 只提交窗口中段 `hop_duration` 秒的帧级结果：confirmed 即时写入 open-turn 管线，probationary 先入内存缓冲，身份定案（转正/吸收）后 flush 追加
 8. 音频结束：定案残余 probationary 并 flush 其缓冲，writer 纯追加收尾——全程零重写
 
@@ -60,7 +60,8 @@
 
 - 新建 speaker 一律 probationary；`matched`/`fallback` 都会累计其匹配语音时长
 - 累计 ≥ `probation_confirm_duration` → 转正（confirmed）
-- 仍是 probationary 且与某 confirmed centroid 相似度 ≥ `absorb_threshold` → 吸收：centroid 按 counts 加权并入目标，记录 `redirect_map`；被吸收者的缓冲输出 flush 时以目标 id 落盘
+- 仍是 probationary 且与某 confirmed centroid 相似度 ≥ `absorb_threshold` → 吸收进 confirmed：centroid 按 counts 加权并入目标，记录 `redirect_map`；被吸收者的缓冲输出 flush 时以目标 id 落盘
+- 没有达标的 confirmed 时，允许吸收进其他 probationary（相似度优先、累计语音时长次之），防止同一人在短时间内被反复建簇；被吸收者的缓冲经 `defer_speaker` 改挂到目标名下继续等待定案，不提前落盘
 
 ### 4) centroid 更新
 
@@ -75,7 +76,7 @@
 - 沉默闭合：每 chunk 提交后检查，open turn 终点距 commit_end 已超过 `streaming_merge_gap` 即判定说话结束、提前闭合写出（与"下次开口回头闭合"产出等价，但尾段输出延迟从等到 EOF 降到约一个 hop）；EOF 时 `finalize` 兜底闭合全部残余 turn
 - probationary speaker 的帧先入内存 pending 缓冲（缓冲内同样按 merge_gap 拼接）；身份定案后 `flush_speaker` 把缓冲段按时间序重放进 final_id 的 open-turn 管线，与正在进行的 turn 连续段自动拼接
 - 短于 `min_segment_duration` 的 turn 在闭合时丢弃
-- `finalize`：闭合全部 open turn、兜底 flush 残余 pending，纯追加，不重写文件
+- `finalize`：闭合全部 open turn、兜底 flush 残余 pending，纯追加，不重写文件；最后在文件末尾以 `#` 注释写出 log speaker_id → RTTM speaker 的映射表（含被吸收者的 final id、被丢弃者的 `<dropped>` 标记）
 - 残余限制：无法向已写出的行回拼（缓冲段桥接两段旧段时，较早写出的行保持独立）；输出文件行序不再严格按时间排序（DER 评分不受影响）
 
 相关代码：`pipeline/rttm_writer.py`
@@ -91,7 +92,7 @@ CLI 主入口：解析参数、加载 YAML 并合并、校验、初始化日志�
 `ChunkPipelineConfig` + YAML 加载/键名校验 + CLI 定义 + 合并。
 
 - YAML 是全部调参项的唯一来源
-- CLI 仅保留 `--wav`、`--output_dir`、`--config`、模型/环境参数（`--model_path`、`--model_type`、`--segmentation_model`、`--hf_token`、`--hf_cache_dir`、`--device`）与 `--debug`、`--verbose`、`--show_rttm`
+- CLI 仅保留 `--wav`、`--output_dir`、`--config`、模型/环境参数（`--model_path`、`--model_type`、`--segmentation_model`、`--hf_token`、`--hf_cache_dir`、`--device`）与 `--debug`、`--verbose`、`--show_rttm`、`--output_unresolved_speakers` / `--no-output_unresolved_speakers`
 
 ### `schema.py`
 
@@ -111,7 +112,7 @@ Hungarian local->global 分配、SMA 更新、probationary 转正与吸收、定
 
 ### `rttm_writer.py`
 
-零重写 RTTM 写出：confirmed 帧即时进入 open-turn 管线（写出前拼接），probationary 帧入 pending 缓冲，定案后 flush 追加；`finalize` 纯追加收尾。
+零重写 RTTM 写出：confirmed 帧即时进入 open-turn 管线（写出前拼接），probationary 帧入 pending 缓冲；probationary 之间相互吸收时缓冲经 `defer_speaker` 改挂目标名下继续等待，定案后 `flush_speaker` 追加；`finalize` 纯追加收尾。
 
 ### `models/`
 
@@ -149,6 +150,7 @@ Hungarian local->global 分配、SMA 更新、probationary 转正与吸收、定
 
 - `min_segment_duration`
 - `streaming_merge_gap`
+- `output_unresolved_speakers`：`false` 时，结尾仍处试用期且未被吸收的 speaker 缓冲直接丢弃，不输出 RTTM 行
 - `show_rttm`
 
 ## 输入输出与调试

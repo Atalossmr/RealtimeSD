@@ -64,6 +64,9 @@ probation_confirm_duration: 10.0
 min_segment_duration: 0.30
 # 同 speaker 相邻片段自动拼接允许的最大间隔（秒，跨 chunk 生效）
 streaming_merge_gap: 0.25
+# 是否在结尾输出未通过试用期（probationary）的不确定说话人的 RTTM 行；
+# false 时这些缓冲在收尾时直接丢弃（被吸收进 confirmed 的语音不受影响）
+output_unresolved_speakers: false
 # 是否同步把新增 RTTM 行打印到控制台
 show_rttm: false
 

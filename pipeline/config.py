@@ -130,6 +130,8 @@ class ChunkPipelineConfig:
     # RTTM 输出。
     min_segment_duration: float = 0.30
     streaming_merge_gap: float = 0.25
+    # 结尾仍未通过试用期（probationary）的不确定说话人是否输出 RTTM 行。
+    output_unresolved_speakers: bool = True
     output_dir_for_streaming: Optional[str] = None
     show_rttm: bool = False
     debug: bool = False
@@ -183,6 +185,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--show_rttm",
         action="store_true",
         help="把新生成的 RTTM 行同步输出到控制台",
+    )
+    parser.add_argument(
+        "--output_unresolved_speakers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="是否在结尾输出未通过试用期的不确定说话人的 RTTM 行"
+        "（--no-output_unresolved_speakers 关闭）",
     )
     parser.add_argument("--debug", action="store_true", help="输出 chunk 级 debug 信息")
     parser.add_argument("--verbose", action="store_true", help="启用 DEBUG 级日志")
@@ -271,6 +280,9 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         ),
         min_segment_duration=float(_merged_value(args, "min_segment_duration", 0.30)),
         streaming_merge_gap=float(_merged_value(args, "streaming_merge_gap", 0.25)),
+        output_unresolved_speakers=bool(
+            _merged_value(args, "output_unresolved_speakers", True)
+        ),
         output_dir_for_streaming=_merged_value(args, "output_dir", None),
         show_rttm=bool(_merged_value(args, "show_rttm", False)),
         debug=bool(_merged_value(args, "debug", False)),
