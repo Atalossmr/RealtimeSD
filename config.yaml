@@ -13,7 +13,7 @@ model_type: eres2netv2
 model_path:
 # pyannote segmentation 模型名
 segmentation_model: pyannote/segmentation-3.0
-# Hugging Face 缓存目录
+# Hugging Face 缓存目录（相对路径按仓库根目录解析）
 hf_cache_dir: ./pretrained/huggingface
 
 # ------------------------------------------------------------
@@ -44,9 +44,7 @@ segment_batch_size: 8
 # ------------------------------------------------------------
 # 最多维护多少个全局 speaker
 max_speakers: 50
-# 低于该相似度时，更倾向于新建 speaker
-# 注意：probationary 架构下 false split 可被 absorb 修复、false glue 永久存在，
-# 因此该阈值应靠近 global_match_threshold，宁可多建簇也不要黏合
+# 新建 speaker 的相似度阈值
 new_speaker_threshold: 0.50
 # observation 命中已有 global speaker 的主阈值
 global_match_threshold: 0.50

@@ -90,6 +90,8 @@ class AppendOnlyRTTMWriter:
         """把一段 [start, end) 送入 speaker 的 open-turn 管线（写出前拼接）。"""
 
         open_turn = self._open_turns.get(speaker_id)
+        # 间隔不超过 merge_gap 视为同一 turn 的延续（跨 chunk 生效），直接延长；
+        # 否则先闭合旧 turn（达到最短时长即落盘）再开新 turn。
         if open_turn is not None and start - open_turn.end <= self.merge_gap:
             open_turn.end = max(open_turn.end, end)
             return
@@ -151,6 +153,8 @@ class AppendOnlyRTTMWriter:
         for frame_idx in range(num_frames):
             frame_start = chunk_start + frame_idx * frame_step
             frame_end = frame_start + frame_step
+            # 只输出与提交区相交的帧；跨界帧裁剪到提交区边界。
+            # 相邻 chunk 的提交区无缝拼接，因此不重复也不遗漏。
             if frame_end <= commit_start + 1e-9:
                 continue
             if frame_start >= commit_end - 1e-9:
@@ -159,6 +163,8 @@ class AppendOnlyRTTMWriter:
             frame_end = min(frame_end, commit_end)
 
             frame_scores = seg_scores[frame_idx]
+            # segmentation-3.0 经 powerset 转硬标签（0/1），> 0.0 即活跃；
+            # 未分配 global（未建 track / 未过门控）的 local slot 帧直接丢弃。
             active_globals = sorted(
                 {
                     int(local_to_global[local_idx])

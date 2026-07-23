@@ -112,6 +112,8 @@ class ChunkTrackBuilder:
 
         config = self.config
         frame_step = max(1e-6, float(frame_step))
+        # segmentation-3.0 输出为 powerset 硬标签（0/1），> 0.0 即活跃；
+        # ≥2 个 local slot 同时活跃的帧视为 overlap。
         all_active = seg_scores > 0.0
         overlap_frames = np.sum(all_active, axis=1) >= 2
 
@@ -146,8 +148,10 @@ class ChunkTrackBuilder:
                 fallback_duration = float(
                     sum(end - start for start, end in regions)
                 )
+                # 回退后仍不足：放弃该 local slot（不建 track、帧不输出）。
                 if fallback_duration < config.min_segment_duration_for_embedding:
                     continue
+                # overlap 段的 embedding 仅参与分配，不允许更新 centroid，防串音污染。
                 allow_update = False
                 selection_mode = "overlap_fallback"
 

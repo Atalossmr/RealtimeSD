@@ -31,16 +31,21 @@ class SpeakerTurn:
     speaker_id: int
 
 
-class LocalAssignmentDebug(TypedDict):
-    """单个 local slot 的分配调试信息。"""
-
-    local: int
-    global_id: int
-    decision: str
-    similarity: float
-    start: float
-    end: float
-    selection_mode: str
+# 单个 local slot 的分配调试信息。
+# "global" 是 Python 保留字，类语法无法声明该字段，因此用函数式语法定义；
+# 键名与 `ChunkSpeakerClusterer._resolve_observation` 写入的运行时 dict 保持一致。
+LocalAssignmentDebug = TypedDict(
+    "LocalAssignmentDebug",
+    {
+        "local": int,
+        "global": int,  # global speaker id
+        "decision": str,
+        "similarity": float,
+        "start": float,
+        "end": float,
+        "selection_mode": str,
+    },
+)
 
 
 class ChunkDebugInfo(TypedDict):

@@ -282,7 +282,12 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
 
     hf_cache_dir = _merged_value(args, "hf_cache_dir", None)
     if hf_cache_dir:
-        config.hf_cache_dir = hf_cache_dir
+        # YAML 中的相对路径（如 ./pretrained/huggingface）按仓库根目录解析，
+        # 避免从其他工作目录运行时缓存失效或重复下载。
+        hf_path = Path(str(hf_cache_dir)).expanduser()
+        if not hf_path.is_absolute():
+            hf_path = BASE_DIR / hf_path
+        config.hf_cache_dir = str(hf_path)
     return config
 
 

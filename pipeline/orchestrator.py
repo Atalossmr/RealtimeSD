@@ -136,6 +136,7 @@ class ChunkDiarizationPipeline:
             pending.append(track)
 
         observations: list[ChunkObservation] = []
+        # 分批提 embedding，避免单批过大占爆显存。
         batch_size = max(1, int(self.config.segment_batch_size))
         for start in range(0, len(pending), batch_size):
             batch_waveforms = waveforms[start : start + batch_size]
@@ -269,11 +270,14 @@ class ChunkDiarizationPipeline:
                 break
 
             # 1) 局部识别。
-            seg_scores, centers = self.segmentation(chunk, self.config.sample_rate)
+            # 返回的 centers（帧中心时刻）当前不使用：
+            # 帧时间统一由 chunk_start + frame_idx * frame_step 推得。
+            seg_scores, _ = self.segmentation(chunk, self.config.sample_rate)
             if seg_scores.size == 0:
                 chunk_index += 1
                 chunk_start_sample += hop_samples
                 continue
+            # chunk 已补零到 chunk_duration，帧在窗口内均匀分布。
             frame_step = self.config.chunk_duration / seg_scores.shape[0]
 
             # 2) local track 聚合 + embedding。
@@ -294,6 +298,8 @@ class ChunkDiarizationPipeline:
                         "resolutions": debug_info["resolved_speakers"],
                     },
                 )
+            # 定案 flush 先于本 chunk 帧输出：刚转正/被吸收的 speaker，
+            # 其缓冲帧按 final_id 落盘，本 chunk 的新帧随后直接续接。
             for resolution in debug_info["resolved_speakers"]:
                 writer.flush_speaker(
                     int(resolution["speaker_id"]), int(resolution["final_id"])

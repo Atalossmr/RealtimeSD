@@ -140,10 +140,14 @@ class ChunkSpeakerClusterer:
         for row_idx, observation in enumerate(observations):
             if observation.embedding is None:
                 continue
+            # centroid 均已 L2 归一化，点积即余弦相似度。
             similarities[row_idx] = np.matmul(
                 centroid_matrix, observation.embedding
             ).astype(np.float32, copy=False)
 
+        # Hungarian 一对一联合分配：同一 chunk 的不同 local slot 不会撞同一个
+        # global speaker（隐式 cannot-link）；observation 多于 centroid 时，
+        # 超出的行保持未匹配，后续走 new / 放弃判定。
         cost_matrix = 1.0 - similarities
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
@@ -214,9 +218,12 @@ class ChunkSpeakerClusterer:
         local_idx = observation.local_idx
         matched_speaker, similarity = assignment.get(local_idx, (None, -1.0))
 
+        # matched：相似度达到主阈值，直接沿用该 global speaker。
         if matched_speaker is not None and similarity >= config.global_match_threshold:
             assigned_speaker = matched_speaker
             decision = "matched"
+        # new：相似度低于建簇阈值且时长足够，新建 probationary speaker。
+        # max_speakers 计数包含 probationary，防止试用簇无限制膨胀。
         elif (
             len(self.centroids) < config.max_speakers
             and (matched_speaker is None or similarity < config.new_speaker_threshold)
@@ -224,9 +231,12 @@ class ChunkSpeakerClusterer:
         ):
             assigned_speaker = self._create_speaker(observation)
             decision = "new"
+        # fallback：介于两阈值之间（或 speaker 数已满 / 时长不足）时保守沿用，
+        # 不更新 centroid，避免低置信观测污染身份。
         elif matched_speaker is not None:
             assigned_speaker = matched_speaker
             decision = "fallback"
+        # 无匹配且不满足建簇条件：放弃该 local slot，其帧不输出。
         else:
             return
 
@@ -315,6 +325,8 @@ class ChunkSpeakerClusterer:
         """转正累计语音足够的 probationary，并吸收与 confirmed 过于相似的。"""
 
         for speaker_id in sorted(list(self.probationary)):
+            # 累计匹配语音达标即转正；转正不做相似度复查
+            # （probation 期外没有身份修正出口，confirmed 永不回改）。
             if (
                 self.speaker_speech.get(speaker_id, 0.0)
                 >= self.config.probation_confirm_duration
