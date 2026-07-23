@@ -56,11 +56,6 @@ absorb_threshold: 0.65
 min_segment_duration_for_new_speaker: 0.50
 # 仅当 track 时长达到该阈值，才允许更新 centroid（秒）
 min_segment_duration_for_centroid_update: 1.50
-# 连续两次用于更新 centroid 的片段允许的最大重叠比
-# overlap_fallback 弱更新触发所需的额外相似度裕量
-weak_update_similarity_margin: 0.15
-# overlap_fallback 弱更新权重倍率（1.0 表示与常规更新同权重）
-weak_update_weight_multiplier: 0.00
 # 新建 speaker 累计匹配语音达到该时长后转正（秒）
 probation_confirm_duration: 10.0
 

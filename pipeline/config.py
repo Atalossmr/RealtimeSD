@@ -125,8 +125,6 @@ class ChunkPipelineConfig:
     absorb_threshold: float = 0.60
     min_segment_duration_for_new_speaker: float = 1.00
     min_segment_duration_for_centroid_update: float = 1.50
-    weak_update_similarity_margin: float = 0.15
-    weak_update_weight_multiplier: float = 1.00
     probation_confirm_duration: float = 3.0
 
     # RTTM 输出。
@@ -269,12 +267,6 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         ),
         min_segment_duration_for_centroid_update=float(
             _merged_value(args, "min_segment_duration_for_centroid_update", 1.50)
-        ),
-        weak_update_similarity_margin=float(
-            _merged_value(args, "weak_update_similarity_margin", 0.15)
-        ),
-        weak_update_weight_multiplier=float(
-            _merged_value(args, "weak_update_weight_multiplier", 1.00)
         ),
         probation_confirm_duration=float(
             _merged_value(args, "probation_confirm_duration", 3.0)

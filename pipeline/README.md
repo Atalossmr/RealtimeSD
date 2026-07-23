@@ -66,7 +66,7 @@
 
 - 全程 SMA 增量更新：`alpha = 1 / (count + 1)`
 - 常规更新门控：track 时长 ≥ `min_segment_duration_for_centroid_update`
-- `overlap_fallback` 弱更新：仅当相似度 > `global_match_threshold + weak_update_similarity_margin` 时，以 `weak_update_weight_multiplier` 衰减权重更新
+- `overlap_fallback` 片段可提 embedding 参与分配，但不更新 centroid
 
 ### 5) 提交区与零重写输出
 

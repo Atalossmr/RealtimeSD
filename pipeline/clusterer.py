@@ -72,14 +72,13 @@ class ChunkSpeakerClusterer:
         return speakers
 
     # ------------------------------------------------------------------
-    # centroid 更新（纯 SMA + 弱更新，逻辑平移自旧 clusterer）
+    # centroid 更新（纯 SMA，逻辑平移自旧 clusterer）
     # ------------------------------------------------------------------
 
     def _update_speaker(
         self,
         speaker_id: int,
         observation: ChunkObservation,
-        weight_multiplier: float = 1.0,
     ) -> tuple[str, float]:
         """以简单移动平均（SMA）增量更新对应 global speaker 的 centroid。"""
 
@@ -89,10 +88,9 @@ class ChunkSpeakerClusterer:
         centroid = self.centroids[speaker_id]
         count = self.counts[speaker_id]
 
-        alpha = (1.0 / float(count + 1)) * weight_multiplier
+        alpha = 1.0 / float(count + 1)
         updated = (1.0 - alpha) * centroid + alpha * embedding
-        if weight_multiplier == 1.0:
-            self.counts[speaker_id] = count + 1
+        self.counts[speaker_id] = count + 1
 
         self.centroids[speaker_id] = l2_normalize(updated)
         return "sma", alpha
@@ -262,45 +260,16 @@ class ChunkSpeakerClusterer:
         ) + float(observation.duration)
 
         if not observation.allow_centroid_update:
-            # 弱更新：overlap_fallback 片段只在极高置信度时以衰减权重轻微更新。
-            if similarity > (
-                config.global_match_threshold + config.weak_update_similarity_margin
-            ):
-                if observation.duration < config.min_segment_duration_for_centroid_update:
-                    debug_info["skipped_updates"].append(
-                        {
-                            "global": int(assigned_speaker),
-                            "reason": "segment_too_short_for_weak_update",
-                            "selection_mode": observation.selection_mode,
-                            "start": float(observation.start),
-                            "end": float(observation.end),
-                        }
-                    )
-                    return
-                mode, alpha = self._update_speaker(
-                    assigned_speaker,
-                    observation,
-                    weight_multiplier=config.weak_update_weight_multiplier,
-                )
-                debug_info["updated_speakers"].append(
-                    {
-                        "global": int(assigned_speaker),
-                        "mode": mode + "_weak",
-                        "alpha": float(alpha),
-                        "start": float(observation.start),
-                        "end": float(observation.end),
-                    }
-                )
-            else:
-                debug_info["skipped_updates"].append(
-                    {
-                        "global": int(assigned_speaker),
-                        "reason": "overlap_fallback_observation",
-                        "selection_mode": observation.selection_mode,
-                        "start": float(observation.start),
-                        "end": float(observation.end),
-                    }
-                )
+            # overlap_fallback 片段不参与 centroid 更新。
+            debug_info["skipped_updates"].append(
+                {
+                    "global": int(assigned_speaker),
+                    "reason": "overlap_fallback_observation",
+                    "selection_mode": observation.selection_mode,
+                    "start": float(observation.start),
+                    "end": float(observation.end),
+                }
+            )
             return
 
         if decision == "fallback":
