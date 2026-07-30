@@ -16,10 +16,10 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from ..config import ChunkPipelineConfig
-from .assigners import BaseChunkAssigner
-from ..schema import ChunkDebugInfo, ChunkObservation
-from ..utils import l2_normalize
+from ...config import ChunkPipelineConfig
+from ..base import BaseChunkAssigner
+from ...schema import ChunkDebugInfo, ChunkObservation
+from ...utils import l2_normalize
 
 
 class ChunkSpeakerClusterer(BaseChunkAssigner):
@@ -78,6 +78,8 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
         centroid = self.centroids[speaker_id]
         count = self.counts[speaker_id]
 
+        # alpha = 1/(count+1)：等权平均的增量形式，观测越多单条影响越小，
+        # centroid 随时间自然稳定下来。
         alpha = 1.0 / float(count + 1)
         updated = (1.0 - alpha) * centroid + alpha * embedding
         self.counts[speaker_id] = count + 1

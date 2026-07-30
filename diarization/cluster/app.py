@@ -16,7 +16,7 @@ from pathlib import Path
 from ..utils import load_chunks
 from ..config import build_arg_parser, config_from_args, merge_args_with_config
 from ..utils import setup_logger
-from .assigners import build_assigner
+from .backends import build_assigner
 from .rttm_writer import AppendOnlyRTTMWriter
 from .runner import run_clustering
 

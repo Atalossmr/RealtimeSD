@@ -2,11 +2,11 @@
 
 基于 `pyannote/segmentation-3.0`(<https://github.com/pyannote/pyannote-audio>) 与 `3D-Speaker/ERes2NetV2`(<https://github.com/modelscope/3D-Speaker>) 的实时说话人分离（speaker diarization）管线。
 
-架构：segmentation-3.0 在 10s chunk 内做局部说话人识别，ERes2NetV2 + 增量聚类（Hungarian 分配 + SMA centroid + probationary 机制）实现全局 speaker ID 一致。无 merge、无 RTTM 重写，输出 append-only。
+架构：segmentation-3.0 在 10s chunk 内做局部说话人识别，ERes2NetV2 + 可插拔聚类后端实现全局 speaker ID 一致（默认 streaming 后端：Hungarian 分配 + SMA centroid，身份一次定案）。无 merge、无 RTTM 重写，输出 append-only。嵌入提取与聚类可拆成两个阶段独立运行（`extract_chunks.py` / `cluster_chunks.py`）。
 
 ## 项目内容
 
-- 入口脚本：`pipeline.py`
+- 入口脚本：`pipeline.py`（端到端）、`extract_chunks.py`（嵌入提取阶段）、`cluster_chunks.py`（聚类阶段）
 - 配置文件：`config.yaml`
 - 管线实现：`diarization/`
 - 运行脚本：`run.sh`、`test_der.sh`
@@ -96,8 +96,10 @@ python3 pipeline.py \
 
 每个输入音频会在 `output_dir` 下生成：
 
-- `*.streaming.rttm`：流式 RTTM 结果（chunk 提交即最终，音频结束时按 probationary 吸收产生的 redirect 做一次终局 remap）
+- `*.<backend_tag>.rttm`：RTTM 结果（streaming 后端为 `*.streaming.rttm`，ahc 后端为 `*.ahc.rttm`；chunk 提交即最终，全程 append-only 零重写）
 - `run.log`：运行日志
+- `*.embeddings.npz`：全部 observation 的 embedding（仅 `save_embeddings: true` 时）
+- `*.chunks.npz`：chunk 中间产物（仅 `extract_chunks.py` 提取阶段产出）
 
 ## 脚本使用
 
@@ -145,10 +147,9 @@ bash test_der.sh ./examples
 
 1. 切出 10s 窗口并运行 segmentation-3.0，得到帧级多标签分数（局部 ≤3 人）
 2. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding，不足时回退 `overlap_fallback`
-3. clustering 层用 Hungarian 做 local->global 联合分配，按阈值判定 `matched/new/fallback`
-4. 新建 speaker 进入 probationary 试用期：累计匹配语音达到 `probation_confirm_duration` 转正；试用期内与 confirmed speaker 相似度 ≥ `absorb_threshold` 则被吸收
-5. 只提交窗口中段 `hop_duration` 秒的帧级结果（边界缓冲），append 到 RTTM
-6. 音频结束：probationary 收尾 + 按 redirect 终局 remap，整文件重写一次
+3. assigner 做 local->global 分配（后端可插拔）：默认 streaming 后端用 Hungarian 联合分配，按阈值判定 `matched/new/fallback`，身份一次定案；AHC 后端则缓冲全部 embedding，音频结束统一聚类
+4. 只提交窗口中段 `hop_duration` 秒的帧级结果（边界缓冲），append 到 RTTM
+5. 音频结束：闭合全部 open turn，writer 纯追加收尾，全程零重写
 
 ## 配置重点
 
@@ -156,18 +157,18 @@ bash test_der.sh ./examples
 
 - 调度：`chunk_duration`、`hop_duration`
 - track 构造：`min_local_activity_duration`、`min_segment_duration_for_embedding`、`max_segment_duration_for_embedding`
-- 匹配：`new_speaker_threshold`、`global_match_threshold`、`absorb_threshold`
+- 匹配：`new_speaker_threshold`、`global_match_threshold`
 - 新增长度门控：
   - `min_segment_duration_for_new_speaker`
   - `min_segment_duration_for_centroid_update`
-- 更新策略：centroid 全程使用 SMA 增量更新，overlap_fallback 弱更新按 `weak_update_weight_multiplier` 衰减
-- 试用期：`probation_confirm_duration`
+- 更新策略：centroid 全程使用 SMA 增量更新；`overlap_fallback` 片段只参与分配、不更新 centroid
+- 聚类后端：`clustering_backend`（`streaming` / `ahc`）、`ahc_similarity_threshold`、`ahc_linkage`、`save_embeddings`
 - 输出：`min_segment_duration`、`streaming_merge_gap`
 
 说明：
 
 - `min_segment_duration_for_embedding` 在当前 `FBank -> ERes2NetV2(TSTP)` 实现下存在有效下限；16k 场景建议不低于 `0.105s`（`1680` samples），过低可能产生 NaN embedding，进而触发 `matrix contains invalid numeric entries`
-- probationary 架构下 false split 可被 absorb 修复、false glue 永久存在，因此 `new_speaker_threshold` 应靠近 `global_match_threshold`，宁可多建簇也不要黏合
+- 纯流式架构下 false split 与 false glue 均不可修复，因此 `new_speaker_threshold` 应适当调高，宁可 glue 也不要 split
 - 只有当 track 时长达到 `min_segment_duration_for_new_speaker` 才允许新建 speaker
 - 只有当 track 时长达到 `min_segment_duration_for_centroid_update` 才允许更新簇中心
 

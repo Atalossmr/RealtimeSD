@@ -1,32 +1,23 @@
-"""聚类后端（assigner）接口与实现。
-
-设计要点：
-
-- embedding 提取（extract/）与聚类分配（assigner）解耦，
-  后端通过 `build_assigner(config)` 按 YAML 配置插拔；
-- 流式后端（deferred=False）：`assign_chunk` 立即返回最终 local->global 映射，
-  调用方逐 chunk 写出 RTTM；
-- 离线后端（deferred=True）：`assign_chunk` 只缓冲 observations，
-  `finalize()` 统一聚类并返回逐 chunk 的映射，调用方在音频结束后
-  用同一 writer 逻辑重放帧级输出。
-"""
+"""离线 AHC 聚类后端：缓冲全部 embedding，音频结束后一次层次聚类。"""
 
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from typing import Optional
 
 import numpy as np
 
-from ..config import ChunkPipelineConfig
-from ..schema import ChunkDebugInfo, ChunkObservation
+from ...config import ChunkPipelineConfig
+from ...schema import ChunkDebugInfo, ChunkObservation
+from ..base import BaseChunkAssigner
 
 
 logger = logging.getLogger(__name__)
 
 
 def _empty_debug_info() -> ChunkDebugInfo:
+    """离线后端在 assign_chunk 阶段不做判定，返回空的 debug 结构。"""
+
     return {
         "num_centroids_before": 0,
         "num_centroids_after": 0,
@@ -36,33 +27,6 @@ def _empty_debug_info() -> ChunkDebugInfo:
         "skipped_updates": [],
         "global_speakers": [],
     }
-
-
-class BaseChunkAssigner(ABC):
-    """chunk 级 local->global 分配后端接口。"""
-
-    # False：assign_chunk 立即返回最终 id；True：缓冲到 finalize 统一分配。
-    deferred: bool = False
-    # 输出 RTTM 文件名后缀：<stem>.<output_tag>.rttm。
-    output_tag: str = "streaming"
-
-    @abstractmethod
-    def assign_chunk(
-        self,
-        observations: list[ChunkObservation],
-    ) -> tuple[Optional[dict[int, int]], ChunkDebugInfo]:
-        """处理一个 chunk 的 observations。
-
-        流式后端返回 (local_to_global, debug_info)；
-        离线后端返回 (None, debug_info)，映射由 finalize() 统一给出。
-        """
-
-    def finalize(self) -> list[dict[int, int]]:
-        """离线后端在音频结束后统一分配，返回逐 chunk 的 local->global 列表。"""
-
-        raise NotImplementedError(
-            f"{type(self).__name__} 不是 deferred 后端，无需 finalize"
-        )
 
 
 class AHCChunkAssigner(BaseChunkAssigner):
@@ -80,18 +44,25 @@ class AHCChunkAssigner(BaseChunkAssigner):
         self,
         observations: list[ChunkObservation],
     ) -> tuple[Optional[dict[int, int]], ChunkDebugInfo]:
+        # 离线后端此刻不做任何判定：只按 chunk 顺序缓冲带 embedding 的
+        # observations，标签在 finalize 统一给出，因此这里返回 None。
         embedded = [obs for obs in observations if obs.embedding is not None]
         self._buffered.append(embedded)
         return None, _empty_debug_info()
 
     def finalize(self) -> list[dict[int, int]]:
+        # sklearn 延迟导入：streaming 后端运行时不需要它。
         from sklearn.cluster import AgglomerativeClustering
 
+        # 展平为全局 observation 序列，cursor 顺序与下方重建映射时严格一致。
         observations = [obs for chunk in self._buffered for obs in chunk]
         if not observations:
             return [{} for _ in self._buffered]
 
         embeddings = np.stack([obs.embedding for obs in observations])
+        # embedding 已 L2 归一化：cosine 距离 = 1 - 相似度，
+        # distance_threshold = 1 - t 即"相似度 ≥ t 才允许并入同一簇"。
+        # n_clusters=None + distance_threshold：簇数完全由阈值决定。
         model = AgglomerativeClustering(
             metric="cosine",
             linkage=self.config.ahc_linkage,
@@ -108,6 +79,8 @@ class AHCChunkAssigner(BaseChunkAssigner):
             self.config.ahc_linkage,
         )
 
+        # 把全局 label 序列按 chunk 切回逐 chunk 的 local->global 映射，
+        # 供 runner 按原始顺序重放帧级输出。
         assignments: list[dict[int, int]] = []
         cursor = 0
         for chunk in self._buffered:
@@ -119,20 +92,4 @@ class AHCChunkAssigner(BaseChunkAssigner):
         return assignments
 
 
-def build_assigner(config: ChunkPipelineConfig) -> BaseChunkAssigner:
-    """按配置构造聚类后端。"""
-
-    backend = str(config.clustering_backend)
-    if backend == "streaming":
-        # lazy import：clusterer 继承本模块的基类，模块级导入会循环依赖。
-        from .clusterer import ChunkSpeakerClusterer
-
-        return ChunkSpeakerClusterer(config)
-    if backend == "ahc":
-        return AHCChunkAssigner(config)
-    raise ValueError(
-        f"Unknown clustering_backend: {backend!r} (expected 'streaming' or 'ahc')"
-    )
-
-
-__all__ = ["BaseChunkAssigner", "AHCChunkAssigner", "build_assigner"]
+__all__ = ["AHCChunkAssigner"]

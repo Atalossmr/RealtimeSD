@@ -70,6 +70,8 @@ class ChunkTrackBuilder:
         if not regions:
             return []
 
+        # 按平均活跃度（信度）降序挑选连通区：拼接时长有上限，
+        # 优先保留信度最高的段落，而不是简单取时间最长的。
         scored = []
         for start_idx, end_idx in regions:
             scores_slice = local_scores[start_idx:end_idx]

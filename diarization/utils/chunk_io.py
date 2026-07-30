@@ -30,16 +30,21 @@ def save_chunks(path: str, uri: str, artifacts: list[ChunkArtifacts]) -> None:
 
     ensure_parent_dir(path)
 
+    # 各 chunk 的 seg_scores 形状为 (num_frames, num_locals)，其中 num_locals
+    # 随 chunk 变化（ragged），无法直接堆成规则数组；
+    # 统一拉平后拼接，加载时按 seg_num_frames × seg_num_locals 切片还原。
     seg_values = np.concatenate(
         [chunk.seg_scores.reshape(-1).astype(np.float32) for chunk in artifacts]
     ) if artifacts else np.zeros(0, dtype=np.float32)
 
     observations = [obs for chunk in artifacts for obs in chunk.observations]
+    # embedding 维度从第一条有效 observation 推断；全部缺失时退化为 (N, 0)。
     embedding_dim = 0
     for obs in observations:
         if obs.embedding is not None:
             embedding_dim = int(obs.embedding.shape[0])
             break
+    # 无 embedding 的 observation 以全零行占位，由 has_embedding 标记区分。
     embeddings = np.zeros((len(observations), embedding_dim), dtype=np.float32)
     for row, obs in enumerate(observations):
         if obs.embedding is not None:
@@ -96,6 +101,8 @@ def load_chunks(path: str) -> tuple[str, list[ChunkArtifacts]]:
     obs_count = data["obs_count"]
     seg_values = data["seg_values"]
 
+    # seg_offset / obs_offset 分别是拼接数组中的游标：逐 chunk 按
+    # (num_frames × num_locals) 与 obs_count 切片，还原 ragged 结构。
     seg_offset = 0
     obs_offset = 0
     artifacts: list[ChunkArtifacts] = []
@@ -110,6 +117,8 @@ def load_chunks(path: str) -> tuple[str, list[ChunkArtifacts]]:
 
         observations: list[ChunkObservation] = []
         for obs_pos in range(obs_offset, obs_offset + int(obs_count[chunk_pos])):
+            # has_embedding=False 的行为占位零，还原为 None 而非零向量，
+            # 避免下游把零向量误当作有效 embedding 参与相似度计算。
             embedding = (
                 data["embeddings"][obs_pos].copy()
                 if bool(data["has_embedding"][obs_pos])

@@ -23,7 +23,7 @@ import torch
 
 from speakerlab.utils.fileio import load_audio
 
-from .cluster.assigners import build_assigner
+from .cluster.backends import build_assigner
 from .cluster.runner import run_clustering
 from .cluster.rttm_writer import AppendOnlyRTTMWriter
 from .config import ChunkPipelineConfig
@@ -181,6 +181,9 @@ class ChunkDiarizationPipeline:
             debug_info: ChunkDebugInfo,
             emitted_frames: int,
         ) -> None:
+            # 每 chunk 分配完成后的回调：只负责日志与 embedding 收集，
+            # 输出本身由 runner/writer 完成。deferred 后端下 local_to_global
+            # 为 None、emitted_frames 为 0（重放阶段不再回调）。
             if self.config.save_embeddings:
                 collected_observations.extend(
                     obs for obs in chunk.observations if obs.embedding is not None
@@ -217,6 +220,8 @@ class ChunkDiarizationPipeline:
                     emitted_frames=emitted_frames,
                 )
 
+        # 生成器惰性生产 chunk：streaming 后端下输出延迟 ≈ 一个 hop，
+        # 不会因为组合成统一循环而引入额外的缓冲。
         run_clustering(
             self.extractor.iter_chunk_artifacts(waveform),
             self.assigner,

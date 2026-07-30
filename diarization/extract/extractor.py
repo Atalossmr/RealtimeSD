@@ -87,12 +87,15 @@ class ChunkExtractor:
         total_samples = waveform.shape[1]
         pieces: list[torch.Tensor] = []
         for start, end in regions:
+            # region 为绝对秒数，换算成采样点下标并钳制到波形范围内；
+            # 首尾 region 越界（track 时间由帧网格推出，可能略超出实际音频）时截断。
             start_sample = max(0, min(int(round(start * sample_rate)), total_samples))
             end_sample = max(start_sample, min(int(round(end * sample_rate)), total_samples))
             if end_sample > start_sample:
                 pieces.append(waveform[:, start_sample:end_sample])
         if not pieces:
             return None
+        # 同一 track 的多个纯净段直接首尾拼接，作为一次 embedding 的输入。
         return torch.cat(pieces, dim=1)
 
     def _embed_tracks(
@@ -105,6 +108,8 @@ class ChunkExtractor:
         waveforms: list[torch.Tensor] = []
         pending: list[LocalTrack] = []
         for track in tracks:
+            # 从整段波形（而非当前 chunk）裁剪：track 区域可能落在提交区外的
+            # margin 里，但都在本 chunk 覆盖的时间范围内。
             segment = self._slice_regions(waveform, track.regions)
             if segment is None or segment.shape[1] <= 0:
                 continue
@@ -157,18 +162,23 @@ class ChunkExtractor:
         chunk_index = 0
         chunk_start_sample = 0
         while chunk_start_sample < total_samples:
+            # 尾段不足一个 chunk 时补零：segmentation 模型要求固定 10s 输入。
             chunk = waveform[:, chunk_start_sample : chunk_start_sample + chunk_samples]
             if chunk.shape[1] < chunk_samples:
                 chunk = F.pad(chunk, (0, chunk_samples - chunk.shape[1]))
 
             chunk_start = chunk_start_sample / self.config.sample_rate
+            # 提交区 = 窗口中段 hop 秒。首窗没有左邻窗，左侧 margin 也一并提交，
+            # 否则音频开头 (chunk-hop)/2 秒会永远没有输出。
             commit_start = (
                 chunk_start if chunk_index == 0 else chunk_start + margin_duration
             )
+            # 尾窗提交区截到实际音频末尾；相邻窗口的提交区无缝拼接、互不重叠。
             commit_end = min(
                 chunk_start + margin_duration + self.config.hop_duration,
                 total_duration,
             )
+            # 音频尾部剩余不足一个 margin 时，最后一个窗口的提交区为空，直接结束。
             if commit_start >= commit_end - 1e-9:
                 break
 
@@ -180,7 +190,8 @@ class ChunkExtractor:
                 chunk_index += 1
                 chunk_start_sample += hop_samples
                 continue
-            # chunk 已补零到 chunk_duration，帧在窗口内均匀分布。
+            # chunk 已补零到 chunk_duration，帧在窗口内均匀分布；
+            # 帧数由模型输出决定，frame_step 由此反推（约 16.9ms）。
             frame_step = self.config.chunk_duration / seg_scores.shape[0]
 
             # 2) local track 聚合 + embedding。

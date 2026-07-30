@@ -10,14 +10,14 @@
 2. 按 `hop_duration` 沿时间轴推进，每次切出 `chunk_duration`（默认 10s）窗口
 3. 对窗口运行 `pyannote/segmentation-3.0`，得到帧级多标签分数（局部 ≤3 人、帧级 ≤2 人，含重叠）
 4. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding；纯净区不足时回退 `overlap_fallback`
-5. assigner 做 local->global 分配（后端可插拔，见 `diarization/cluster/assigners.py`）：默认 streaming 后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；**身份一次定案，新建 speaker 立即成为永久身份**
+5. assigner 做 local->global 分配（后端可插拔，见 `diarization/cluster/backends/`）：默认 streaming 后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；**身份一次定案，新建 speaker 立即成为永久身份**
 6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线，无缓冲、无延迟确认；deferred（离线）后端逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
 7. 音频结束：闭合全部 open turn，writer 纯追加收尾——全程零重写
 
 链路分层：
 
 - `track_builder`：chunk 内 local track 聚合与 embedding 门控
-- `assigners`：聚类后端接口与工厂（streaming / ahc），`clusterer` 为默认 streaming 后端实现
+- `backends`：聚类后端（streaming / ahc）与工厂，`base` 为后端接口
 - `rttm_writer`：零重写 RTTM 写出（open-turn 管线）
 
 设计要点：
@@ -52,7 +52,7 @@
 
 注意：纯流式架构下 false split 与 false glue 均不可修复，因此 `new_speaker_threshold` 应适当调高，偏保守建簇。
 
-相关代码：`diarization/cluster/clusterer.py`
+相关代码：`diarization/cluster/backends/streaming.py`
 
 ### 3) centroid 更新
 
@@ -88,8 +88,10 @@ diarization/
     models/            #   embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/ hf_resolver
     app.py             #   提取阶段 CLI（extract_chunks.py 入口）
   cluster/             # 子模块 2：聚类与输出
-    assigners.py       #   后端接口 BaseChunkAssigner + 工厂 build_assigner + 离线后端 AHCChunkAssigner
-    clusterer.py       #   ChunkSpeakerClusterer：默认 streaming 后端（Hungarian + SMA，一次定案）
+    base.py            #   后端接口 BaseChunkAssigner
+    backends/          #   内置后端与工厂 build_assigner
+      streaming.py     #     ChunkSpeakerClusterer：默认 streaming 后端（Hungarian + SMA，一次定案）
+      ahc.py           #     AHCChunkAssigner：离线层次聚类后端
     rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加）
     runner.py          #   run_clustering：聚类消费循环（pipeline.py 与 cluster/app 共用）
     app.py             #   聚类阶段 CLI（cluster_chunks.py 入口）
@@ -97,8 +99,9 @@ diarization/
 
 - YAML 是全部调参项的唯一来源；CLI 仅保留 `--wav`、`--output_dir`、`--config`、
   模型/环境参数与 `--debug`、`--verbose`、`--show_rttm`；
-- 新增聚类方法：在 `cluster/assigners.py` 实现 `BaseChunkAssigner` 并在
-  `build_assigner` 注册即可，提取侧与输出侧都不用动。
+- 新增聚类方法：在 `cluster/backends/` 下新建模块实现 `BaseChunkAssigner`
+  （接口见 `cluster/base.py`）并在 `build_assigner` 注册即可，
+  提取侧与输出侧都不用动。
 
 ## 参数分组与作用
 
