@@ -44,18 +44,15 @@ segment_batch_size: 8
 # ------------------------------------------------------------
 # 最多维护多少个全局 speaker
 max_speakers: 50
-# 新建 speaker 的相似度阈值
+# 新建 speaker 的相似度阈值（纯流式下无吸收兜底，false split 不可修复，
+# 应适当高于 global_match_threshold，"宁可 glue 不可 split"）
 new_speaker_threshold: 0.50
 # observation 命中已有 global speaker 的主阈值
 global_match_threshold: 0.50
-# probationary speaker 被最近 confirmed speaker 吸收的相似度阈值
-absorb_threshold: 0.65
 # 仅当 track 时长达到该阈值，才允许新建 speaker（秒）
 min_segment_duration_for_new_speaker: 0.50
 # 仅当 track 时长达到该阈值，才允许更新 centroid（秒）
 min_segment_duration_for_centroid_update: 1.50
-# 新建 speaker 累计匹配语音达到该时长后转正（秒）
-probation_confirm_duration: 10.0
 
 # ------------------------------------------------------------
 # RTTM 输出
@@ -64,9 +61,6 @@ probation_confirm_duration: 10.0
 min_segment_duration: 0.30
 # 同 speaker 相邻片段自动拼接允许的最大间隔（秒，跨 chunk 生效）
 streaming_merge_gap: 0.25
-# 是否在结尾输出未通过试用期（probationary）的不确定说话人的 RTTM 行；
-# false 时这些缓冲在收尾时直接丢弃（被吸收进 confirmed 的语音不受影响）
-output_unresolved_speakers: false
 # 是否同步把新增 RTTM 行打印到控制台
 show_rttm: false
 

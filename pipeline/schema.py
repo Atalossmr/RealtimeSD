@@ -57,6 +57,4 @@ class ChunkDebugInfo(TypedDict):
     new_speakers: list[dict[str, int | float]]
     updated_speakers: list[dict[str, int | float | str]]
     skipped_updates: list[dict[str, int | float | str]]
-    absorb_events: list[dict[str, int | float]]
-    resolved_speakers: list[dict[str, int | float | str]]
-    global_speakers: list[dict[str, int | str]]
+    global_speakers: list[dict[str, int]]

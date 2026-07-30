@@ -5,12 +5,11 @@
 1. 切 chunk（尾部补零到固定长度）；
 2. segmentation-3.0 局部识别，得到帧级多标签分数；
 3. 每个 local slot 聚合纯净语音提 ERes2NetV2 embedding；
-4. `ChunkSpeakerClusterer` Hungarian 分配 local->global，维护全局身份；
-5. 帧级活跃 local 映射 global 后写出：confirmed 即时进入 open-turn 管线，
-   probationary 先入内存缓冲，身份定案（转正/吸收）后 flush 追加；
-6. 音频结束后定案残余 probationary 并 flush（`output_unresolved_speakers=False`
-   时改为丢弃不确定 speaker 的缓冲），writer 纯追加收尾，
-   并在文件末尾以 # 注释写出 log speaker_id -> RTTM speaker 映射表（全程零重写）。
+4. `ChunkSpeakerClusterer` Hungarian 分配 local->global，身份一次定案；
+5. 帧级活跃 local 映射 global 后即时进入 open-turn 写出管线，
+   无试用期缓冲、无身份定案延迟（纯流式）；
+6. 音频结束后闭合全部 open turn，writer 纯追加收尾，
+   并在文件末尾以 # 注释写出内部 global id -> RTTM speaker 映射表（全程零重写）。
 """
 
 from __future__ import annotations
@@ -199,10 +198,6 @@ class ChunkDiarizationPipeline:
         for key in ("new_speakers", "updated_speakers", "skipped_updates"):
             if debug_info[key]:
                 self._log_structured(logging.DEBUG, "[debug]", key, debug_info[key])
-        if debug_info["absorb_events"]:
-            self._log_structured(
-                logging.DEBUG, "[debug]", "absorb_events", debug_info["absorb_events"]
-            )
         if debug_info["global_speakers"]:
             self._log_structured(
                 logging.INFO,
@@ -210,25 +205,6 @@ class ChunkDiarizationPipeline:
                 "current_global_speakers",
                 debug_info["global_speakers"],
             )
-
-    def _apply_resolution(
-        self,
-        writer: AppendOnlyRTTMWriter,
-        resolution: dict[str, int | float | str],
-    ) -> None:
-        """按定案结果处理 probationary 的缓冲输出。
-
-        final_id 沿 redirect 链解析到当前最终 id；其仍是 probationary
-        （probationary 之间相互吸收）时，缓冲改挂到它名下继续等待定案，
-        不提前落盘；否则按最终 id flush 进 open-turn 管线（纯追加）。
-        """
-
-        speaker_id = int(resolution["speaker_id"])
-        final_id = self.clusterer.resolve_final_id(int(resolution["final_id"]))
-        if final_id in self.clusterer.probationary:
-            writer.defer_speaker(speaker_id, final_id)
-        else:
-            writer.flush_speaker(speaker_id, final_id)
 
     # ------------------------------------------------------------------
     # 主流程
@@ -307,22 +283,8 @@ class ChunkDiarizationPipeline:
             )
             observations = self._embed_tracks(waveform, tracks)
 
-            # 3) 全局分配 + 身份定案 flush。
+            # 3) 全局分配（身份一次定案，无后续修正）。
             local_to_global, debug_info = self.clusterer.assign_chunk(observations)
-            if debug_info["resolved_speakers"]:
-                self._log_structured(
-                    logging.INFO,
-                    "[runtime]",
-                    "resolved_speakers",
-                    {
-                        "chunk_index": int(chunk_index),
-                        "resolutions": debug_info["resolved_speakers"],
-                    },
-                )
-            # 定案处理先于本 chunk 帧输出：刚转正/被吸收的 speaker，
-            # 其缓冲帧按最终 id 落盘（或改挂继续缓冲），本 chunk 新帧随后续接。
-            for resolution in debug_info["resolved_speakers"]:
-                self._apply_resolution(writer, resolution)
 
             self._log_structured(
                 logging.INFO,
@@ -342,7 +304,7 @@ class ChunkDiarizationPipeline:
                 },
             )
 
-            # 4) 帧级输出（仅提交区；probationary 仅入缓冲不写出）。
+            # 4) 帧级输出（仅提交区；所有 speaker 即时写出，无缓冲）。
             emitted_frames = writer.consume_chunk(
                 seg_scores,
                 frame_step,
@@ -350,7 +312,6 @@ class ChunkDiarizationPipeline:
                 commit_start,
                 commit_end,
                 local_to_global,
-                deferred_speakers=set(self.clusterer.probationary),
             )
 
             # 5) 闭合提交区末尾已不再活跃的 turn（沉默确认，提前写出）。
@@ -372,37 +333,8 @@ class ChunkDiarizationPipeline:
             chunk_index += 1
             chunk_start_sample += hop_samples
 
-        # 6) 残余 probationary 定案 + 缓冲 flush + 纯追加收尾（零重写）。
-        resolutions = self.clusterer.finalize_redirects()
-        if resolutions:
-            self._log_structured(
-                logging.INFO, "[runtime]", "final_resolutions", resolutions
-            )
-        # 结尾仍未通过试用期、只能以自身 id 保留的 speaker 属于"不确定说话人"；
-        # output_unresolved_speakers=False 时丢弃其缓冲，不输出 RTTM 行
-        # （被吸收进 confirmed 的语音不受影响）。
-        uncertain_ids = {
-            int(resolution["speaker_id"])
-            for resolution in resolutions
-            if resolution["resolution"] == "confirmed"
-            and int(resolution["final_id"]) == int(resolution["speaker_id"])
-        }
-        for resolution in resolutions:
-            final_id = self.clusterer.resolve_final_id(int(resolution["final_id"]))
-            if (
-                not self.config.output_unresolved_speakers
-                and final_id in uncertain_ids
-            ):
-                writer.drop_speaker(int(resolution["speaker_id"]))
-            else:
-                self._apply_resolution(writer, resolution)
-        # 文件末尾以 # 注释写出 log speaker_id -> RTTM speaker 的映射表。
-        known_ids = set(self.clusterer.centroids) | set(self.clusterer.redirect_map)
-        final_id_map = {
-            speaker_id: self.clusterer.resolve_final_id(speaker_id)
-            for speaker_id in known_ids
-        }
-        writer.finalize(final_id_map=final_id_map)
+        # 6) 闭合全部 open turn，纯追加收尾（零重写）。
+        writer.finalize()
 
     def process_file(self, wav_path: str) -> str:
         """处理单个音频文件并返回生成的 RTTM 路径。"""

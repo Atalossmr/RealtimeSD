@@ -3,14 +3,10 @@
 设计要点：
 
 - 处理单元是一个 chunk 的一组 local track observation，而不是 0.5s 滑窗；
-- 不做 speaker merge：confirmed speaker 身份一旦建立永不改变；
-- 新建 speaker 进入 probationary 试用期，累计足够语音才转正；
-  试用期内若与某个 confirmed speaker 足够相似，则被吸收（absorb）；
-  没有达标的 confirmed 时也允许被其他 probationary 吸收，
-  防止同一人在短时间内被反复建簇；
-  吸收只影响后续 chunk 与定案事件（resolved_speakers），
-  probationary 的输出在定案前由 writer 缓冲：目标是 confirmed 时
-  按 final_id flush，目标仍是 probationary 时改挂到目标名下继续缓冲。
+- 纯流式：新建 speaker 立即成为永久身份，无试用期、无吸收、无合并，
+  所有分配判定一次定案，身份一旦建立永不改变；
+- 无身份修正出口：false split 与 false glue 均不可修复，因此阈值策略
+  应为"宁可 glue 不可 split"（new_speaker_threshold 应适当调高）。
 """
 
 from __future__ import annotations
@@ -38,13 +34,6 @@ class ChunkSpeakerClusterer:
         self.centroids: dict[int, np.ndarray] = {}
         self.counts: dict[int, int] = {}
 
-        # probationary 状态： probationary 集合 + 各 speaker 累计匹配语音时长。
-        self.probationary: set[int] = set()
-        self.speaker_speech: dict[int, float] = {}
-
-        # 吸收产生的 global id 重定向（定案信息的记录，供日志与追溯）。
-        self.redirect_map: dict[int, int] = {}
-
         self.next_speaker_id = 0
 
     # ------------------------------------------------------------------
@@ -56,10 +45,10 @@ class ChunkSpeakerClusterer:
 
         return set(self.centroids.keys())
 
-    def current_global_speakers(self) -> list[dict[str, int | str]]:
-        """返回当前全局说话人摘要列表（含 probationary 状态）。"""
+    def current_global_speakers(self) -> list[dict[str, int]]:
+        """返回当前全局说话人摘要列表。"""
 
-        speakers: list[dict[str, int | str]] = []
+        speakers: list[dict[str, int]] = []
         for speaker_id in sorted(self.centroids):
             centroid = self.centroids[speaker_id]
             speakers.append(
@@ -67,9 +56,6 @@ class ChunkSpeakerClusterer:
                     "speaker": int(speaker_id),
                     "count": int(self.counts.get(speaker_id, 0)),
                     "dim": int(centroid.shape[0]),
-                    "status": (
-                        "probationary" if speaker_id in self.probationary else "confirmed"
-                    ),
                 }
             )
         return speakers
@@ -99,7 +85,7 @@ class ChunkSpeakerClusterer:
         return "sma", alpha
 
     def _create_speaker(self, observation: ChunkObservation) -> int:
-        """基于 observation 新建 probationary 全局说话人。"""
+        """基于 observation 新建全局说话人（立即成为永久身份）。"""
 
         if observation.embedding is None:
             raise ValueError("Cannot create speaker from observation without embedding")
@@ -109,28 +95,11 @@ class ChunkSpeakerClusterer:
             observation.embedding.astype(np.float32, copy=False)
         )
         self.counts[speaker_id] = 1
-        self.probationary.add(speaker_id)
-        self.speaker_speech[speaker_id] = float(observation.duration)
         return speaker_id
 
     # ------------------------------------------------------------------
     # 分配
     # ------------------------------------------------------------------
-
-    def _resolve_redirect(self, speaker_id: int) -> int:
-        """沿 redirect_map 解析最终 id（probationary 相互吸收会产生长度 > 1 的链，做通用压缩）。"""
-
-        seen: set[int] = set()
-        current = int(speaker_id)
-        while current in self.redirect_map and current not in seen:
-            seen.add(current)
-            current = int(self.redirect_map[current])
-        return current
-
-    def resolve_final_id(self, speaker_id: int) -> int:
-        """把（可能已被吸收的）speaker id 解析到当前最终 id。"""
-
-        return self._resolve_redirect(speaker_id)
 
     def _build_assignment(
         self,
@@ -176,7 +145,7 @@ class ChunkSpeakerClusterer:
         self,
         observations: list[ChunkObservation],
     ) -> tuple[dict[int, int], ChunkDebugInfo]:
-        """完成一个 chunk 的 local->global 分配、centroid 更新与 probation 维护。"""
+        """完成一个 chunk 的 local->global 分配与 centroid 更新。"""
 
         debug_info: ChunkDebugInfo = {
             "num_centroids_before": len(self.centroids),
@@ -185,8 +154,6 @@ class ChunkSpeakerClusterer:
             "new_speakers": [],
             "updated_speakers": [],
             "skipped_updates": [],
-            "absorb_events": [],
-            "resolved_speakers": [],
             "global_speakers": [],
         }
         local_to_global: dict[int, int] = {}
@@ -198,16 +165,6 @@ class ChunkSpeakerClusterer:
                 self._resolve_observation(
                     observation, assignment, local_to_global, debug_info
                 )
-
-        self._maintain_probation(debug_info)
-
-        # 本 chunk 分配到的 speaker 可能在 probation 维护中被吸收，
-        # 通过 redirect_map 把映射解析到最终 id，避免向已删除的 id 输出。
-        if self.redirect_map:
-            local_to_global = {
-                local_idx: self._resolve_redirect(global_id)
-                for local_idx, global_id in local_to_global.items()
-            }
 
         debug_info["num_centroids_after"] = len(self.centroids)
         debug_info["global_speakers"] = self.current_global_speakers()
@@ -230,8 +187,7 @@ class ChunkSpeakerClusterer:
         if matched_speaker is not None and similarity >= config.global_match_threshold:
             assigned_speaker = matched_speaker
             decision = "matched"
-        # new：相似度低于建簇阈值且时长足够，新建 probationary speaker。
-        # max_speakers 计数包含 probationary，防止试用簇无限制膨胀。
+        # new：相似度低于建簇阈值且时长足够，新建全局 speaker（立即生效）。
         elif (
             len(self.centroids) < config.max_speakers
             and (matched_speaker is None or similarity < config.new_speaker_threshold)
@@ -271,11 +227,6 @@ class ChunkSpeakerClusterer:
                 }
             )
             return
-
-        # matched / fallback 都计入该 speaker 的累计匹配语音（用于转正判定）。
-        self.speaker_speech[assigned_speaker] = self.speaker_speech.get(
-            assigned_speaker, 0.0
-        ) + float(observation.duration)
 
         if not observation.allow_centroid_update:
             # overlap_fallback 片段不参与 centroid 更新。
@@ -324,167 +275,6 @@ class ChunkSpeakerClusterer:
                 "end": float(observation.end),
             }
         )
-
-    # ------------------------------------------------------------------
-    # probationary 维护与终局收尾
-    # ------------------------------------------------------------------
-
-    def _maintain_probation(self, debug_info: ChunkDebugInfo) -> None:
-        """转正累计语音足够的 probationary，并吸收过于相似的（confirmed 优先，其次其他 probationary）。"""
-
-        for speaker_id in sorted(list(self.probationary)):
-            # 累计匹配语音达标即转正；转正不做相似度复查
-            # （probation 期外没有身份修正出口，confirmed 永不回改）。
-            if (
-                self.speaker_speech.get(speaker_id, 0.0)
-                >= self.config.probation_confirm_duration
-            ):
-                self.probationary.discard(speaker_id)
-                debug_info["resolved_speakers"].append(
-                    {
-                        "speaker_id": int(speaker_id),
-                        "final_id": int(speaker_id),
-                        "resolution": "confirmed",
-                    }
-                )
-                continue
-
-            self._try_absorb(speaker_id, debug_info)
-
-    def _best_absorb_target(
-        self, source: np.ndarray, pool: list[int]
-    ) -> tuple[Optional[int], float]:
-        """在候选池里找最优吸收目标：相似度优先，累计语音时长次之。"""
-
-        best_target: Optional[int] = None
-        best_similarity = -1.0
-        best_speech = -1.0
-        for target_id in pool:
-            similarity = float(np.dot(source, self.centroids[target_id]))
-            speech = self.speaker_speech.get(target_id, 0.0)
-            # 相似度明显更高者胜；近似打平时偏向语音积累更多的
-            # （centroid 估计更可靠）。
-            if similarity > best_similarity + 1e-6 or (
-                similarity > best_similarity - 1e-6 and speech > best_speech
-            ):
-                best_target = target_id
-                best_similarity = similarity
-                best_speech = speech
-        return best_target, best_similarity
-
-    def _try_absorb(
-        self,
-        speaker_id: int,
-        debug_info: ChunkDebugInfo,
-    ) -> bool:
-        """若 probationary 与某个已有 speaker 足够相似，则把它吸收掉。
-
-        目标选择分两档：优先 confirmed speaker（身份已稳定）；没有达标的
-        confirmed 时允许吸收进其他 probationary，防止同一人在短时间内
-        被反复建簇。
-
-        吸收只影响后续 chunk 的分配与定案事件（resolved_speakers）；
-        被吸收者的缓冲输出由 writer 处理：目标是 confirmed 时按 final_id
-        flush 落盘，目标仍是 probationary 时改挂到目标名下继续缓冲，
-        全程不回改任何已写出行。
-        """
-
-        if speaker_id not in self.centroids:
-            self.probationary.discard(speaker_id)
-            return False
-
-        source = self.centroids[speaker_id]
-        # confirmed 优先：身份已稳定，吸收进去即终局。
-        confirmed_ids = [
-            sid for sid in self.centroids if sid not in self.probationary
-        ]
-        best_target, best_similarity = self._best_absorb_target(source, confirmed_ids)
-        if best_target is None or best_similarity < self.config.absorb_threshold:
-            # 没有达标的 confirmed：允许吸收进其他 probationary。
-            probationary_ids = [
-                sid
-                for sid in self.centroids
-                if sid in self.probationary and sid != speaker_id
-            ]
-            best_target, best_similarity = self._best_absorb_target(
-                source, probationary_ids
-            )
-            if best_target is None or best_similarity < self.config.absorb_threshold:
-                return False
-
-        target_status = (
-            "probationary" if best_target in self.probationary else "confirmed"
-        )
-
-        # centroid 按 counts 加权并入目标 speaker。
-        source_count = self.counts.get(speaker_id, 1)
-        target_count = self.counts.get(best_target, 1)
-        total = source_count + target_count
-        merged = (
-            self.centroids[best_target] * target_count + source * source_count
-        ) / float(total)
-        self.centroids[best_target] = l2_normalize(merged)
-        self.counts[best_target] = total
-        self.speaker_speech[best_target] = self.speaker_speech.get(
-            best_target, 0.0
-        ) + self.speaker_speech.get(speaker_id, 0.0)
-
-        del self.centroids[speaker_id]
-        del self.counts[speaker_id]
-        self.speaker_speech.pop(speaker_id, None)
-        self.probationary.discard(speaker_id)
-        self.redirect_map[int(speaker_id)] = int(best_target)
-
-        debug_info["absorb_events"].append(
-            {
-                "absorbed": int(speaker_id),
-                "into": int(best_target),
-                "into_status": target_status,
-                "similarity": float(best_similarity),
-            }
-        )
-        debug_info["resolved_speakers"].append(
-            {
-                "speaker_id": int(speaker_id),
-                "final_id": int(best_target),
-                "resolution": "absorbed",
-                "into_status": target_status,
-                "similarity": float(best_similarity),
-            }
-        )
-        return True
-
-    def finalize_redirects(self) -> list[dict[str, int | float | str]]:
-        """音频结束时收尾：定案全部残余 probationary。
-
-        够像某 confirmed 的吸收并入（记录 redirect_map），不够像的转正保留自身 id。
-        返回定案列表（元素含 speaker_id / final_id / resolution），
-        供 writer 逐个 flush 缓冲输出。
-        """
-
-        debug_info: ChunkDebugInfo = {
-            "num_centroids_before": len(self.centroids),
-            "num_centroids_after": len(self.centroids),
-            "local_assignments": [],
-            "new_speakers": [],
-            "updated_speakers": [],
-            "skipped_updates": [],
-            "absorb_events": [],
-            "resolved_speakers": [],
-            "global_speakers": [],
-        }
-        for speaker_id in sorted(list(self.probationary)):
-            absorbed = self._try_absorb(speaker_id, debug_info)
-            if not absorbed:
-                debug_info["resolved_speakers"].append(
-                    {
-                        "speaker_id": int(speaker_id),
-                        "final_id": int(speaker_id),
-                        "resolution": "confirmed",
-                    }
-                )
-            self.probationary.discard(speaker_id)
-        return list(debug_info["resolved_speakers"])
 
 
 __all__ = ["ChunkSpeakerClusterer"]

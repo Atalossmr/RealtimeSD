@@ -1,23 +1,19 @@
-"""零重写的 chunk 级流式 RTTM 写出器。
+"""零重写的 chunk 级纯流式 RTTM 写出器。
 
 语义：
 
-- confirmed speaker 的帧即时进入各自的 open-turn 管线；
-- probationary（试用期）speaker 的帧先在内存 pending 缓冲中拼接，
-  待身份定案（转正/被吸收）后由 `flush_speaker` 一次性追加写出；
-- probationary 之间相互吸收时，被吸收者的 pending 缓冲由
-  `defer_speaker` 改挂到目标名下继续等待，不提前落盘；
+- 所有 speaker 身份在分配时一次定案（无试用期、无吸收），帧判定后
+  即时进入各自的 open-turn 管线，没有任何延迟缓冲；
 - 每个 speaker 维护一个未闭合的 open turn（驻留内存），仅在间隔超过
   merge_gap 或 EOF 时闭合写出——所有拼接都发生在写出之前；
 - 每一行一旦写出即为最终，全程 append-only，`finalize` 也只追加不重写；
-  `finalize` 还可在文件末尾以 # 注释写出 log speaker_id -> RTTM speaker
-  的映射表（含被吸收者的 final id 与被丢弃者的标记）。
+- `finalize` 还可在文件末尾以 # 注释写出内部 global id -> RTTM speaker
+  编号的映射表（RTTM 编号按首次写出顺序分配）。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 
@@ -47,8 +43,6 @@ class AppendOnlyRTTMWriter:
 
         # 每个 speaker 当前未闭合的 turn（活跃记录，驻留内存，写出前可持续拼接）。
         self._open_turns: dict[int, SpeakerTurn] = {}
-        # probationary speaker 的缓冲 turn 列表（身份定案前不写出）。
-        self._pending: dict[int, list[SpeakerTurn]] = {}
         # 内部 global id -> 输出 speaker 编号（按首次写出顺序）。
         self._output_ids: dict[int, int] = {}
         self._next_output_id = 0
@@ -96,14 +90,11 @@ class AppendOnlyRTTMWriter:
         open_turn = self._open_turns.get(speaker_id)
         if open_turn is not None:
             forward_gap = start - open_turn.end
-            backward_gap = open_turn.start - end
-            # 双向间隔都不超过 merge_gap 视为同一 turn（跨 chunk 生效），直接合并；
-            # 缓冲 flush 可能乱序到达，向过去重叠/相邻的段把起点往前拉。
-            if forward_gap <= self.merge_gap and backward_gap <= self.merge_gap:
-                open_turn.start = min(open_turn.start, start)
+            # 间隔不超过 merge_gap 视为同一 turn（跨 chunk 生效），直接合并。
+            if forward_gap <= self.merge_gap:
                 open_turn.end = max(open_turn.end, end)
                 return
-        # 间隔过大（无论方向）：先闭合旧 turn 再开新 turn。
+        # 间隔过大：先闭合旧 turn 再开新 turn。
         self._close_turn(speaker_id)
         self._open_turns[speaker_id] = SpeakerTurn(
             start=float(start), end=float(end), speaker_id=int(speaker_id)
@@ -117,26 +108,6 @@ class AppendOnlyRTTMWriter:
     ) -> None:
         self._feed_turn(speaker_id, frame_start, frame_end)
 
-    def _feed_pending_frame(
-        self,
-        speaker_id: int,
-        frame_start: float,
-        frame_end: float,
-    ) -> None:
-        """probationary 帧进入内存缓冲，按 merge_gap 在缓冲内拼接。"""
-
-        turns = self._pending.setdefault(int(speaker_id), [])
-        if turns and frame_start - turns[-1].end <= self.merge_gap:
-            turns[-1].end = max(turns[-1].end, float(frame_end))
-            return
-        turns.append(
-            SpeakerTurn(
-                start=float(frame_start),
-                end=float(frame_end),
-                speaker_id=int(speaker_id),
-            )
-        )
-
     def consume_chunk(
         self,
         seg_scores: np.ndarray,
@@ -145,17 +116,15 @@ class AppendOnlyRTTMWriter:
         commit_start: float,
         commit_end: float,
         local_to_global: dict[int, int],
-        deferred_speakers: Optional[set[int]] = None,
     ) -> int:
         """消费一个 chunk 的帧级结果（仅 [commit_start, commit_end) 提交区），返回消费的帧数。
 
-        `deferred_speakers` 中的 global id（probationary）只进内存缓冲，不写出。
+        所有已分配 global id 的帧即时进入 open-turn 管线，无延迟缓冲。
         """
 
         if seg_scores.size == 0 or not local_to_global:
             return 0
 
-        deferred = deferred_speakers or set()
         frame_step = max(1e-6, float(frame_step))
         emitted = 0
         num_frames = seg_scores.shape[0]
@@ -183,68 +152,9 @@ class AppendOnlyRTTMWriter:
                 }
             )
             for speaker_id in active_globals:
-                if speaker_id in deferred:
-                    self._feed_pending_frame(speaker_id, frame_start, frame_end)
-                else:
-                    self._feed_frame(speaker_id, frame_start, frame_end)
+                self._feed_frame(speaker_id, frame_start, frame_end)
             emitted += 1
         return emitted
-
-    # ------------------------------------------------------------------
-    # 身份定案后的缓冲 flush（仍是纯追加）
-    # ------------------------------------------------------------------
-
-    def flush_speaker(self, speaker_id: int, final_id: int) -> int:
-        """把 speaker 的 pending 缓冲按时间序送入 final_id 的 open-turn 管线。
-
-        与 final_id 当前 open turn 连续（间隔 ≤ merge_gap）的缓冲段直接拼接；
-        返回 flush 的缓冲 turn 数。
-        """
-
-        turns = self._pending.pop(int(speaker_id), [])
-        for turn in sorted(turns, key=lambda item: (item.start, item.end)):
-            self._feed_turn(int(final_id), turn.start, turn.end)
-        return len(turns)
-
-    def defer_speaker(self, speaker_id: int, final_id: int) -> int:
-        """把 speaker 的 pending 缓冲改挂到 final_id 名下（仍是 probationary）。
-
-        用于 probationary 之间相互吸收：两路缓冲各自按时间有序，
-        合并重排后按 merge_gap 重新拼接，继续等待 final_id 定案，
-        不提前落盘。返回转移的缓冲 turn 数。
-        """
-
-        source_turns = self._pending.pop(int(speaker_id), [])
-        if not source_turns:
-            return 0
-        target_turns = self._pending.pop(int(final_id), [])
-        combined = sorted(
-            source_turns + target_turns, key=lambda item: (item.start, item.end)
-        )
-        merged: list[SpeakerTurn] = []
-        for turn in combined:
-            turn.speaker_id = int(final_id)
-            if merged and turn.start - merged[-1].end <= self.merge_gap:
-                merged[-1].end = max(merged[-1].end, turn.end)
-            else:
-                merged.append(turn)
-        self._pending[int(final_id)] = merged
-        return len(source_turns)
-
-    def drop_speaker(self, speaker_id: int) -> int:
-        """丢弃 speaker 的 pending 缓冲（不输出 RTTM 行），返回丢弃的 turn 数。
-
-        用于 output_unresolved_speakers=False 时清理结尾仍不确定的 speaker。
-        """
-
-        turns = self._pending.pop(int(speaker_id), [])
-        if turns:
-            logger.info(
-                "[streaming] dropped %d pending turns for unresolved speaker %d",
-                len(turns),
-                speaker_id,
-            )
-        return len(turns)
 
     def close_inactive(self, commit_end: float) -> int:
         """闭合已确认沉默的 open turn（chunk 末尾不再活跃者），返回闭合数。
@@ -266,23 +176,9 @@ class AppendOnlyRTTMWriter:
     # 收尾（纯追加，不重写）
     # ------------------------------------------------------------------
 
-    def finalize(self, final_id_map: Optional[dict[int, int]] = None) -> None:
-        """闭合所有活跃 turn；残余 pending 按自身 id 兜底 flush。全程只追加。
+    def finalize(self) -> None:
+        """闭合所有活跃 turn，全程只追加；末尾以 # 注释写出 id 映射表。"""
 
-        给出 `final_id_map`（log speaker_id -> 吸收链解析后的最终内部 id）时，
-        在文件末尾以 # 注释写出 log speaker_id -> RTTM speaker 的映射表。
-        """
-
-        # 正常情况下 orchestrator 已在定案后 flush 全部 pending，这里仅兜底。
-        for speaker_id in sorted(list(self._pending.keys())):
-            flushed = self.flush_speaker(speaker_id, speaker_id)
-            if flushed:
-                logger.warning(
-                    "[streaming] finalize: flushed %d residual pending turns for "
-                    "speaker %d without resolution",
-                    flushed,
-                    speaker_id,
-                )
         for speaker_id in list(self._open_turns.keys()):
             self._close_turn(speaker_id)
 
@@ -291,24 +187,19 @@ class AppendOnlyRTTMWriter:
             self._written_turns,
         )
 
-        if final_id_map:
-            self._write_id_map(final_id_map)
+        if self._output_ids:
+            self._write_id_map()
 
-    def _write_id_map(self, final_id_map: dict[int, int]) -> None:
-        """以 # 注释写出 log speaker_id -> RTTM speaker 编号的映射表。
+    def _write_id_map(self) -> None:
+        """以 # 注释写出内部 global id -> RTTM speaker 编号的映射表。
 
-        RTTM 行内的 speaker 编号按首次写出顺序分配（见 `_output_ids`）；
-        被吸收的 id 标注其 final id，未产生任何输出行（缓冲被丢弃或
-        片段全部短于 min_segment_duration）的 id 标记 <dropped>。
+        RTTM 行内的 speaker 编号按首次写出顺序分配（见 `_output_ids`），
+        因此与内部 global id 并不一致，此表用于追溯对应关系。
         """
 
-        self._append_line("# speaker_id_map: log speaker_id -> rttm_speaker")
-        for speaker_id in sorted(final_id_map):
-            final_id = final_id_map[speaker_id]
-            output_id = self._output_ids.get(final_id)
-            target = str(output_id) if output_id is not None else "<dropped>"
-            note = f" (absorbed into {final_id})" if final_id != speaker_id else ""
-            self._append_line(f"#   {speaker_id} -> {target}{note}")
+        self._append_line("# speaker_id_map: global_id -> rttm_speaker")
+        for speaker_id in sorted(self._output_ids):
+            self._append_line(f"#   {speaker_id} -> {self._output_ids[speaker_id]}")
 
 
 __all__ = ["AppendOnlyRTTMWriter"]
