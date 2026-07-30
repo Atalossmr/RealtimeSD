@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """overlap 版本实时说话人分离脚本兼容入口。"""
 
-from pipeline.app import main
+from diarization.app import main
 
 
 if __name__ == "__main__":

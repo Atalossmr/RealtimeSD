@@ -10,14 +10,14 @@
 2. 按 `hop_duration` 沿时间轴推进，每次切出 `chunk_duration`（默认 10s）窗口
 3. 对窗口运行 `pyannote/segmentation-3.0`，得到帧级多标签分数（局部 ≤3 人、帧级 ≤2 人，含重叠）
 4. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding；纯净区不足时回退 `overlap_fallback`
-5. clustering 用 Hungarian 做 local->global 联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；**身份一次定案，新建 speaker 立即成为永久身份**
-6. 只提交窗口中段 `hop_duration` 秒的帧级结果：所有 speaker 即时进入 open-turn 写出管线，无缓冲、无延迟确认
+5. assigner 做 local->global 分配（后端可插拔，见 `diarization/cluster/assigners.py`）：默认 streaming 后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；**身份一次定案，新建 speaker 立即成为永久身份**
+6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线，无缓冲、无延迟确认；deferred（离线）后端逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
 7. 音频结束：闭合全部 open turn，writer 纯追加收尾——全程零重写
 
 链路分层：
 
 - `track_builder`：chunk 内 local track 聚合与 embedding 门控
-- `clusterer`：local->global 分配 + centroid 维护（一次定案，无修正出口）
+- `assigners`：聚类后端接口与工厂（streaming / ahc），`clusterer` 为默认 streaming 后端实现
 - `rttm_writer`：零重写 RTTM 写出（open-turn 管线）
 
 设计要点：
@@ -38,7 +38,7 @@
 - 纯净区总长 < `min_segment_duration_for_embedding` → 回退全活跃区拼接 → `overlap_fallback`，embedding 可提取但不允许常规更新
 - 回退后仍不足 → 跳过
 
-相关代码：`pipeline/track_builder.py`
+相关代码：`diarization/extract/track_builder.py`
 
 ### 2) 同窗联合分配（Hungarian）
 
@@ -52,7 +52,7 @@
 
 注意：纯流式架构下 false split 与 false glue 均不可修复，因此 `new_speaker_threshold` 应适当调高，偏保守建簇。
 
-相关代码：`pipeline/clusterer.py`
+相关代码：`diarization/cluster/clusterer.py`
 
 ### 3) centroid 更新
 
@@ -68,46 +68,37 @@
 - 短于 `min_segment_duration` 的 turn 在闭合时丢弃
 - `finalize`：闭合全部 open turn，纯追加，不重写文件；最后在文件末尾以 `#` 注释写出内部 global id → RTTM speaker 的映射表（RTTM 编号按首次写出顺序分配）
 
-相关代码：`pipeline/rttm_writer.py`
+相关代码：`diarization/cluster/rttm_writer.py`
 
 ## 模块分工
 
-### `app.py`
+包按两个阶段拆成两个子模块，顶层为共享层与端到端组合：
 
-CLI 主入口：解析参数、加载 YAML 并合并、校验、初始化日志和 pipeline、遍历输入音频。
+```
+diarization/
+  app.py               # 端到端 CLI 主入口
+  pipeline.py          # 端到端组合：ChunkDiarizationPipeline = extract + cluster
+  config.py            # ChunkPipelineConfig + YAML 加载/键名校验 + CLI 定义 + 合并
+  constants.py         # 路径常量
+  schema.py            # 共享数据结构：ChunkObservation / ChunkArtifacts / SpeakerTurn / 调试 TypedDict
+  utils/               # 通用工具子包：log / device / numeric / audio / paths / chunk_io（两阶段中间文件 <stem>.chunks.npz 存取）
+  extract/             # 子模块 1：嵌入提取
+    extractor.py       #   ChunkExtractor：模型加载、波形预处理、chunk 生成器（chunk 生产唯一来源）
+    track_builder.py   #   chunk 内 local track 构造：纯净区优先、overlap_fallback 回退、时长门控
+    models/            #   embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/ hf_resolver
+    app.py             #   提取阶段 CLI（extract_chunks.py 入口）
+  cluster/             # 子模块 2：聚类与输出
+    assigners.py       #   后端接口 BaseChunkAssigner + 工厂 build_assigner + 离线后端 AHCChunkAssigner
+    clusterer.py       #   ChunkSpeakerClusterer：默认 streaming 后端（Hungarian + SMA，一次定案）
+    rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加）
+    runner.py          #   run_clustering：聚类消费循环（pipeline.py 与 cluster/app 共用）
+    app.py             #   聚类阶段 CLI（cluster_chunks.py 入口）
+```
 
-### `config.py`
-
-`ChunkPipelineConfig` + YAML 加载/键名校验 + CLI 定义 + 合并。
-
-- YAML 是全部调参项的唯一来源
-- CLI 仅保留 `--wav`、`--output_dir`、`--config`、模型/环境参数（`--model_path`、`--model_type`、`--segmentation_model`、`--hf_token`、`--hf_cache_dir`、`--device`）与 `--debug`、`--verbose`、`--show_rttm`
-
-### `schema.py`
-
-共享数据结构：`ChunkObservation`、`SpeakerTurn`、调试 TypedDict。
-
-### `orchestrator.py`
-
-chunk 主循环：切窗 → segmentation → track 聚合 → embedding → 全局分配 → 提交输出 → finalize。
-
-### `track_builder.py`
-
-chunk 内 local track 构造：非重叠纯净区优先拼接、overlap_fallback 回退、时长门控。
-
-### `clusterer.py`
-
-Hungarian local->global 分配、SMA 更新；新建 speaker 立即成为永久身份，无试用期与吸收。
-
-### `rttm_writer.py`
-
-零重写 RTTM 写出：所有 speaker 的帧即时进入 open-turn 管线（写出前拼接）；`finalize` 纯追加收尾。
-
-### `models/`
-
-- `embedding_infer.py`：ERes2NetV2 加载与 segment embedding 推理
-- `segmentation_infer.py`：pyannote segmentation 推理封装
-- `hf_resolver.py`：Hugging Face 本地缓存解析
+- YAML 是全部调参项的唯一来源；CLI 仅保留 `--wav`、`--output_dir`、`--config`、
+  模型/环境参数与 `--debug`、`--verbose`、`--show_rttm`；
+- 新增聚类方法：在 `cluster/assigners.py` 实现 `BaseChunkAssigner` 并在
+  `build_assigner` 注册即可，提取侧与输出侧都不用动。
 
 ## 参数分组与作用
 
@@ -133,6 +124,12 @@ Hungarian local->global 分配、SMA 更新；新建 speaker 立即成为永久�
 - `min_segment_duration_for_new_speaker`
 - `min_segment_duration_for_centroid_update`
 
+### 3b) 聚类后端
+
+- `clustering_backend`：`streaming`（默认，增量聚类）/ `ahc`（离线层次聚类）
+- `ahc_similarity_threshold` / `ahc_linkage`：仅 ahc 后端生效
+- `save_embeddings`：把每文件全部 embedding 落盘为 `*.embeddings.npz`，便于离线实验复用
+
 ### 4) RTTM 输出
 
 - `min_segment_duration`
@@ -140,6 +137,23 @@ Hungarian local->global 分配、SMA 更新；新建 speaker 立即成为永久�
 - `show_rttm`
 
 ## 输入输出与调试
+
+### 两阶段独立运行（提取 / 聚类分离）
+
+嵌入提取与聚类可以完全拆开运行，中间产物为 `<stem>.chunks.npz`
+（逐 chunk 的 observations 含 embedding + 帧级输出参数，纯 numpy 无 pickle）：
+
+```bash
+# 阶段 1：嵌入提取（需要音频与模型，产出 chunks.npz）
+python3 extract_chunks.py --wav <音频> --output_dir <dir> --config config.yaml
+
+# 阶段 2：聚类 + RTTM 输出（只需 npz，后端由 YAML 的 clustering_backend 决定）
+python3 cluster_chunks.py --input <dir或npz> --output_dir <dir> --config config.yaml
+```
+
+- 阶段 2 不加载任何模型，换后端/调阈值只需改 YAML 重跑，秒级完成；
+- 两端共用的 chunk 生产逻辑在 `extract/extractor.py` 的 `iter_chunk_artifacts`，保证一致；
+- 端到端用法（`python3 pipeline.py`）行为不变。
 
 ### 输入形式
 
@@ -155,8 +169,9 @@ Hungarian local->global 分配、SMA 更新；新建 speaker 立即成为永久�
 
 每个输入音频默认输出：
 
-- `*.streaming.rttm`
+- `*.<backend_tag>.rttm`（streaming 后端为 `*.streaming.rttm`，ahc 后端为 `*.ahc.rttm`）
 - `run.log`
+- `*.embeddings.npz`（仅 `save_embeddings: true` 时）
 
 ### 调试建议
 

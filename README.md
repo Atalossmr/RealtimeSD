@@ -8,7 +8,7 @@
 
 - 入口脚本：`pipeline.py`
 - 配置文件：`config.yaml`
-- 管线实现：`pipeline/`
+- 管线实现：`diarization/`
 - 运行脚本：`run.sh`、`test_der.sh`
 - DER 评估：`tools/compute_der.py`
 - 运行日志分析：`tools/analyze_run_log.py`
@@ -173,15 +173,15 @@ bash test_der.sh ./examples
 
 ## 仓库结构
 
-- `pipeline/`：主实现（入口 `pipeline.py`）
+- `diarization/`：主实现（端到端组合在 `diarization/pipeline.py`）
 - `speakerlab/`：本地依赖与 `md-eval.pl`
 - `tools/compute_der.py`：DER 统计与批量评估
 - `tools/analyze_run_log.py`：run.log 命中统计分析
 - `run.sh`：基础运行脚本
 - `test_der.sh`：运行 + DER 评估脚本
-- `pipeline/README.md`：按模块组织的详细实现说明
+- `diarization/README.md`：按模块组织的详细实现说明
 
 ## 备注
 
 - 当前仓库偏实验性质，默认参数更贴近中文 16kHz 流式 diarization 场景
-- 更细的模块说明与调参建议见 `pipeline/README.md`
+- 更细的模块说明与调参建议见 `diarization/README.md`

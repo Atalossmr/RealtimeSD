@@ -17,8 +17,8 @@ import logging
 
 import numpy as np
 
-from .schema import SpeakerTurn
-from .utils import ensure_parent_dir
+from ..schema import SpeakerTurn
+from ..utils import ensure_parent_dir
 
 
 logger = logging.getLogger(__name__)

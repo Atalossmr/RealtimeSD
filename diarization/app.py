@@ -12,7 +12,7 @@ from .config import (
     merge_args_with_config,
     validate_runtime_args,
 )
-from .orchestrator import ChunkDiarizationPipeline
+from .pipeline import ChunkDiarizationPipeline
 from .utils import collect_audio_paths, setup_logger
 
 

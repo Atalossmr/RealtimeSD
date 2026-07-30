@@ -55,6 +55,19 @@ min_segment_duration_for_new_speaker: 0.50
 min_segment_duration_for_centroid_update: 1.50
 
 # ------------------------------------------------------------
+# 聚类后端（assigner）
+# ------------------------------------------------------------
+# 聚类后端选择：streaming（增量聚类，纯流式）/ ahc（离线层次聚类，
+# 缓冲全部 embedding，音频结束后一次聚类再重放输出）
+clustering_backend: streaming
+# AHC 相似度阈值（cosine；仅 clustering_backend=ahc 时生效）
+ahc_similarity_threshold: 0.50
+# AHC 连接方式：average / complete / single
+ahc_linkage: average
+# 是否把每个文件提取的全部 embedding 落盘为 <stem>.embeddings.npz（便于离线实验复用）
+save_embeddings: false
+
+# ------------------------------------------------------------
 # RTTM 输出
 # ------------------------------------------------------------
 # RTTM 写出最短片段时长（秒）

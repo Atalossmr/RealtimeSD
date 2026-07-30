@@ -13,8 +13,8 @@ from typing import Optional
 
 import numpy as np
 
-from .config import ChunkPipelineConfig
-from .schema import ChunkObservation
+from ..config import ChunkPipelineConfig
+from ..schema import ChunkObservation
 
 
 @dataclass

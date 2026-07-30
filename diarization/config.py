@@ -125,6 +125,12 @@ class ChunkPipelineConfig:
     min_segment_duration_for_new_speaker: float = 0.50
     min_segment_duration_for_centroid_update: float = 1.50
 
+    # 聚类后端（assigner）选择。
+    clustering_backend: str = "streaming"
+    ahc_similarity_threshold: float = 0.50
+    ahc_linkage: str = "average"
+    save_embeddings: bool = False
+
     # RTTM 输出。
     min_segment_duration: float = 0.30
     streaming_merge_gap: float = 0.25
@@ -263,6 +269,12 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         min_segment_duration_for_centroid_update=float(
             _merged_value(args, "min_segment_duration_for_centroid_update", 1.50)
         ),
+        clustering_backend=str(_merged_value(args, "clustering_backend", "streaming")),
+        ahc_similarity_threshold=float(
+            _merged_value(args, "ahc_similarity_threshold", 0.50)
+        ),
+        ahc_linkage=str(_merged_value(args, "ahc_linkage", "average")),
+        save_embeddings=bool(_merged_value(args, "save_embeddings", False)),
         min_segment_duration=float(_merged_value(args, "min_segment_duration", 0.30)),
         streaming_merge_gap=float(_merged_value(args, "streaming_merge_gap", 0.25)),
         output_dir_for_streaming=_merged_value(args, "output_dir", None),

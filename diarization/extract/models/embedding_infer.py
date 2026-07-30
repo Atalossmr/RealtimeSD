@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..constants import BASE_DIR
+from ...constants import BASE_DIR
 from speakerlab.models.eres2net.ERes2NetV2 import ERes2NetV2
 from speakerlab.process.processor import FBank
 

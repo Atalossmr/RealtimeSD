@@ -16,12 +16,13 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from .config import ChunkPipelineConfig
-from .schema import ChunkDebugInfo, ChunkObservation
-from .utils import l2_normalize
+from ..config import ChunkPipelineConfig
+from .assigners import BaseChunkAssigner
+from ..schema import ChunkDebugInfo, ChunkObservation
+from ..utils import l2_normalize
 
 
-class ChunkSpeakerClusterer:
+class ChunkSpeakerClusterer(BaseChunkAssigner):
     """chunk 粒度的实时全局 speaker 分配器。
 
     每个 chunk 内用 Hungarian algorithm 做 local->global 联合分配，

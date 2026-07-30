@@ -31,6 +31,22 @@ class SpeakerTurn:
     speaker_id: int
 
 
+@dataclass
+class ChunkArtifacts:
+    """一个 chunk 的全部生产物：observations + 帧级输出所需的参数。
+
+    是嵌入提取阶段与聚类阶段之间的交换单元（见 diarization/utils/chunk_io.py）。
+    """
+
+    chunk_index: int
+    seg_scores: np.ndarray
+    frame_step: float
+    chunk_start: float
+    commit_start: float
+    commit_end: float
+    observations: list[ChunkObservation]
+
+
 # 单个 local slot 的分配调试信息。
 # "global" 是 Python 保留字，类语法无法声明该字段，因此用函数式语法定义；
 # 键名与 `ChunkSpeakerClusterer._resolve_observation` 写入的运行时 dict 保持一致。
