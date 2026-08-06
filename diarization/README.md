@@ -34,7 +34,7 @@
 每个 local slot 在 chunk 内：
 
 - 活跃总时长 < `min_local_activity_duration` → 跳过（不建 track、帧也不输出）
-- 优先拼接非重叠纯净区（按平均活跃度降序，封顶 `max_segment_duration_for_embedding`）→ `non_overlap`，允许更新 centroid
+- 优先拼接非重叠纯净区（连通区选取优先级由 `region_priority` 决定：`commit`（默认）提交区内片段优先、不足再从两侧 margin 补齐；`latest` 最新优先，超封顶丢弃最早部分；总长封顶 `max_segment_duration_for_embedding`，压线段保留头部截断）→ `non_overlap`，允许更新 centroid
 - 纯净区总长 < `min_segment_duration_for_embedding` → 回退全活跃区拼接 → `overlap_fallback`，embedding 可提取但不允许常规更新
 - 回退后仍不足 → 跳过
 
@@ -105,21 +105,27 @@ diarization/
 
 ## 参数分组与作用
 
-以下调参项全部通过 `config.yaml` 配置（YAML 是唯一来源）。
+以下调参项全部通过 `config/config.yaml` 配置（YAML 是唯一来源），按模块分组；逐项详细说明见 `config/README.md`
 
-### 1) 调度
+### 1) extract 阶段：调度
 
 - `chunk_duration`：窗口时长（segmentation-3.0 原生为 10s）
 - `hop_duration`：推进步长；等于 chunk 时退化为非重叠
 
-### 2) track 构造与 embedding
+### 2) extract 阶段：track 构造与 embedding
 
 - `min_local_activity_duration`
 - `min_segment_duration_for_embedding`（16k 下建议 ≥ 0.105s，防 NaN embedding）
 - `max_segment_duration_for_embedding`
+- `region_priority`（纯净区选取优先级：`commit` 提交区优先（默认）/ `latest` 最新优先）
 - `segment_batch_size`
 
-### 3) 全局匹配与更新
+### 3) cluster 阶段：后端选择与通用
+
+- `clustering_backend`：`streaming`（默认，增量聚类）/ `ahc`（离线层次聚类）
+- `save_embeddings`：把每文件全部 embedding 落盘为 `*.embeddings.npz`，便于离线实验复用
+
+### 4) cluster 阶段：streaming 后端
 
 - `max_speakers`
 - `new_speaker_threshold`
@@ -127,13 +133,11 @@ diarization/
 - `min_segment_duration_for_new_speaker`
 - `min_segment_duration_for_centroid_update`
 
-### 3b) 聚类后端
+### 5) cluster 阶段：ahc 后端
 
-- `clustering_backend`：`streaming`（默认，增量聚类）/ `ahc`（离线层次聚类）
 - `ahc_similarity_threshold` / `ahc_linkage`：仅 ahc 后端生效
-- `save_embeddings`：把每文件全部 embedding 落盘为 `*.embeddings.npz`，便于离线实验复用
 
-### 4) RTTM 输出
+### 6) RTTM 输出
 
 - `min_segment_duration`
 - `streaming_merge_gap`
@@ -148,10 +152,10 @@ diarization/
 
 ```bash
 # 阶段 1：嵌入提取（需要音频与模型，产出 chunks.npz）
-python3 extract_chunks.py --wav <音频> --output_dir <dir> --config config.yaml
+python3 extract_chunks.py --wav <音频> --output_dir <dir> --config config/config.yaml
 
 # 阶段 2：聚类 + RTTM 输出（只需 npz，后端由 YAML 的 clustering_backend 决定）
-python3 cluster_chunks.py --input <dir或npz> --output_dir <dir> --config config.yaml
+python3 cluster_chunks.py --input <dir或npz> --output_dir <dir> --config config/config.yaml
 ```
 
 - 阶段 2 不加载任何模型，换后端/调阈值只需改 YAML 重跑，秒级完成；

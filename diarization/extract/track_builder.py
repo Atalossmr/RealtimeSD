@@ -60,33 +60,62 @@ class ChunkTrackBuilder:
     def _select_regions(
         self,
         mask: np.ndarray,
-        local_scores: np.ndarray,
         frame_step: float,
         chunk_start_time: float,
+        commit_start: float,
+        commit_end: float,
     ) -> list[tuple[float, float]]:
-        """从掩码中按平均活跃度降序挑选连通区，拼接时长封顶。"""
+        """从掩码中挑选连通区并拼接，总长封顶。
+
+        选取优先级由 region_priority 决定：
+        - "latest"：时间降序（最新优先），纯净音频超过封顶时长时丢弃最早部分；
+          该方向经实验验证优于最早优先（见 exp/threshold_sweep），勿随手改。
+        - "commit"：提交区内的片段优先（按时间升序），不足再用提交区外的
+          两侧片段补齐（先左后右，各自时间升序）。
+        压线的片段保留头部截断；输出区间列表按时间升序（供波形裁剪拼接）。
+        """
 
         regions = self._connected_regions(mask)
         if not regions:
             return []
 
-        # 按平均活跃度（信度）降序挑选连通区：拼接时长有上限，
-        # 优先保留信度最高的段落，而不是简单取时间最长的。
-        scored = []
-        for start_idx, end_idx in regions:
-            scores_slice = local_scores[start_idx:end_idx]
-            mean_score = float(np.mean(scores_slice)) if scores_slice.size else 0.0
-            scored.append((mean_score, start_idx, end_idx))
-        scored.sort(reverse=True)
+        # 帧下标转绝对时间区间（时间升序）。
+        spans = [
+            (
+                chunk_start_time + start_idx * frame_step,
+                chunk_start_time + end_idx * frame_step,
+            )
+            for start_idx, end_idx in regions
+        ]
+
+        if self.config.region_priority == "commit":
+            # 提交区内的部分（按提交区边界裁剪）优先。
+            inside = [
+                (max(start, commit_start), min(end, commit_end))
+                for start, end in spans
+                if end > commit_start and start < commit_end
+            ]
+            inside = [(start, end) for start, end in inside if end > start]
+            # 提交区外的两侧：先左（更早）后右，各自保持时间升序。
+            left = [
+                (start, min(end, commit_start)) for start, end in spans if start < commit_start
+            ]
+            right = [
+                (max(start, commit_end), end) for start, end in spans if end > commit_end
+            ]
+            outside = [
+                (start, end) for start, end in left + right if end > start
+            ]
+            ordered = inside + outside
+        else:
+            ordered = list(reversed(spans))
 
         max_duration = float(self.config.max_segment_duration_for_embedding)
         selected: list[tuple[float, float]] = []
         total = 0.0
-        for _, start_idx, end_idx in scored:
+        for start_time, end_time in ordered:
             if total >= max_duration:
                 break
-            start_time = chunk_start_time + start_idx * frame_step
-            end_time = chunk_start_time + end_idx * frame_step
             remaining = max_duration - total
             if end_time - start_time > remaining:
                 end_time = start_time + remaining
@@ -101,6 +130,8 @@ class ChunkTrackBuilder:
         seg_scores: np.ndarray,
         frame_step: float,
         chunk_start_time: float,
+        commit_start: float,
+        commit_end: float,
     ) -> list[LocalTrack]:
         """为一个 chunk 的全部 local slot 构造 track。"""
 
@@ -136,7 +167,7 @@ class ChunkTrackBuilder:
             # 优先使用非重叠纯净区。
             pure_mask = np.logical_and(local_active, np.logical_not(overlap_frames))
             regions = self._select_regions(
-                pure_mask, local_scores, frame_step, chunk_start_time
+                pure_mask, frame_step, chunk_start_time, commit_start, commit_end
             )
             pure_duration = float(sum(end - start for start, end in regions))
             allow_update = True
@@ -145,7 +176,7 @@ class ChunkTrackBuilder:
             # 纯净区不足时回退到全活跃区。
             if pure_duration < config.min_segment_duration_for_embedding:
                 regions = self._select_regions(
-                    local_active, local_scores, frame_step, chunk_start_time
+                    local_active, frame_step, chunk_start_time, commit_start, commit_end
                 )
                 fallback_duration = float(
                     sum(end - start for start, end in regions)

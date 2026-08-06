@@ -1,0 +1,44 @@
+# RealtimeSD 管线配置文件（全部调参项的唯一来源；逐项说明见本目录 README.md）
+
+# ---- 运行环境 ----
+device: cuda
+hf_cache_dir: ./pretrained/huggingface
+
+# ---- extract 阶段：模型 ----
+model_type: eres2netv2
+model_path:
+segmentation_model: pyannote/segmentation-3.0
+
+# ---- extract 阶段：chunk 调度 ----
+chunk_duration: 10.0
+hop_duration: 5.0
+
+# ---- extract 阶段：local track 构造与 embedding 提取 ----
+min_local_activity_duration: 0.30
+min_segment_duration_for_embedding: 0.30
+max_segment_duration_for_embedding: 4.0
+region_priority: commit
+segment_batch_size: 8
+
+# ---- cluster 阶段：后端选择与通用 ----
+clustering_backend: streaming
+save_embeddings: false
+
+# ---- cluster 阶段：streaming 后端（全局 speaker 匹配与 centroid 维护） ----
+max_speakers: 50
+new_speaker_threshold: 0.50
+global_match_threshold: 0.55
+min_segment_duration_for_new_speaker: 0.50
+min_segment_duration_for_centroid_update: 1.50
+
+# ---- cluster 阶段：ahc 后端（离线层次聚类） ----
+ahc_similarity_threshold: 0.50
+ahc_linkage: average
+
+# ---- RTTM 输出 ----
+min_segment_duration: 0.30
+streaming_merge_gap: 0.25
+show_rttm: false
+
+# ---- 调试 ----
+debug: false

@@ -76,6 +76,24 @@ class ChunkExtractor:
     # 内部工具
     # ------------------------------------------------------------------
 
+    def _slice_region(
+        self,
+        waveform: torch.Tensor,
+        start: float,
+        end: float,
+    ) -> Optional[torch.Tensor]:
+        """按绝对时间从整段波形裁出单个 region；越界截断，空区间返回 None。"""
+
+        sample_rate = self.config.sample_rate
+        total_samples = waveform.shape[1]
+        # region 为绝对秒数，换算成采样点下标并钳制到波形范围内；
+        # 首尾 region 越界（track 时间由帧网格推出，可能略超出实际音频）时截断。
+        start_sample = max(0, min(int(round(start * sample_rate)), total_samples))
+        end_sample = max(start_sample, min(int(round(end * sample_rate)), total_samples))
+        if end_sample <= start_sample:
+            return None
+        return waveform[:, start_sample:end_sample]
+
     def _slice_regions(
         self,
         waveform: torch.Tensor,
@@ -83,16 +101,11 @@ class ChunkExtractor:
     ) -> Optional[torch.Tensor]:
         """按绝对时间从整段波形裁出各 region 并拼接。"""
 
-        sample_rate = self.config.sample_rate
-        total_samples = waveform.shape[1]
         pieces: list[torch.Tensor] = []
         for start, end in regions:
-            # region 为绝对秒数，换算成采样点下标并钳制到波形范围内；
-            # 首尾 region 越界（track 时间由帧网格推出，可能略超出实际音频）时截断。
-            start_sample = max(0, min(int(round(start * sample_rate)), total_samples))
-            end_sample = max(start_sample, min(int(round(end * sample_rate)), total_samples))
-            if end_sample > start_sample:
-                pieces.append(waveform[:, start_sample:end_sample])
+            piece = self._slice_region(waveform, start, end)
+            if piece is not None:
+                pieces.append(piece)
         if not pieces:
             return None
         # 同一 track 的多个纯净段直接首尾拼接，作为一次 embedding 的输入。
@@ -196,7 +209,7 @@ class ChunkExtractor:
 
             # 2) local track 聚合 + embedding。
             tracks = self.track_builder.build_tracks(
-                seg_scores, frame_step, chunk_start
+                seg_scores, frame_step, chunk_start, commit_start, commit_end
             )
             observations = self._embed_tracks(waveform, tracks)
 

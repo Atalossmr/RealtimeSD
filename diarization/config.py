@@ -19,7 +19,7 @@ import yaml
 from .constants import BASE_DIR
 
 
-DEFAULT_CONFIG_PATH = BASE_DIR / "config.yaml"
+DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "config.yaml"
 
 
 def _parser_dest_set(parser: argparse.ArgumentParser) -> set[str]:
@@ -89,53 +89,62 @@ def validate_runtime_args(args: argparse.Namespace) -> None:
 
 @dataclass
 class ChunkPipelineConfig:
-    """chunk 管线的统一配置。"""
+    """chunk 管线的统一配置（字段按模块分组：环境 / extract / cluster / 输出）。"""
 
-    # 音频与调度。
+    # ---- 运行环境 ----
+    device: str = "cpu"
     sample_rate: int = 16000
-    chunk_duration: float = 10.0
-    # 窗口推进步长（秒）。hop == chunk_duration 时退化为非重叠模式；
-    # hop < chunk_duration 时按重叠滑窗运行，每个窗口只提交中段 hop 秒。
-    hop_duration: float = 5.0
+    hf_token: Optional[str] = None
+    hf_cache_dir: str = str(BASE_DIR / "pretrained" / "huggingface")
 
-    # ERes2NetV2 配置。
+    # ---- extract 阶段：模型 ----
+    # ERes2NetV2 说话人 embedding。
     model_type: str = "eres2netv2"
     embedding_size: int = 192
     feat_dim: int = 80
     m_channels: int = 64
     normalize_embeddings: bool = True
-
-    # segmentation-3.0 配置。
+    # pyannote segmentation-3.0 局部识别。
     segmentation_model: str = "pyannote/segmentation-3.0"
     segmentation_batch_size: int = 1
-    hf_token: Optional[str] = None
-    hf_cache_dir: str = str(BASE_DIR / "pretrained" / "huggingface")
-    device: str = "cpu"
 
-    # chunk 内 local track 构造。
+    # ---- extract 阶段：chunk 调度 ----
+    chunk_duration: float = 10.0
+    # 窗口推进步长（秒）。hop == chunk_duration 时退化为非重叠模式；
+    # hop < chunk_duration 时按重叠滑窗运行，每个窗口只提交中段 hop 秒。
+    hop_duration: float = 5.0
+
+    # ---- extract 阶段：local track 构造与 embedding 提取 ----
     min_local_activity_duration: float = 0.30
     min_segment_duration_for_embedding: float = 0.30
     max_segment_duration_for_embedding: float = 4.0
+    # 纯净区选取优先级：commit（提交区内片段优先，不足再从两侧 margin 补齐）
+    # / latest（最新优先，旧默认行为）。
+    region_priority: str = "commit"
     segment_batch_size: int = 8
 
-    # 全局 speaker 匹配与维护。
+    # ---- cluster 阶段：后端选择与通用 ----
+    clustering_backend: str = "streaming"
+    save_embeddings: bool = False
+
+    # ---- cluster 阶段：streaming 后端（全局 speaker 匹配与 centroid 维护） ----
     max_speakers: int = 50
     new_speaker_threshold: float = 0.50
-    global_match_threshold: float = 0.50
+    global_match_threshold: float = 0.55
     min_segment_duration_for_new_speaker: float = 0.50
     min_segment_duration_for_centroid_update: float = 1.50
 
-    # 聚类后端（assigner）选择。
-    clustering_backend: str = "streaming"
+    # ---- cluster 阶段：ahc 后端（离线层次聚类） ----
     ahc_similarity_threshold: float = 0.50
     ahc_linkage: str = "average"
-    save_embeddings: bool = False
 
-    # RTTM 输出。
+    # ---- RTTM 输出 ----
     min_segment_duration: float = 0.30
     streaming_merge_gap: float = 0.25
     output_dir_for_streaming: Optional[str] = None
     show_rttm: bool = False
+
+    # ---- 调试 ----
     debug: bool = False
 
 
@@ -257,11 +266,12 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         max_segment_duration_for_embedding=float(
             _merged_value(args, "max_segment_duration_for_embedding", 4.0)
         ),
+        region_priority=str(_merged_value(args, "region_priority", "commit")),
         segment_batch_size=int(_merged_value(args, "segment_batch_size", 8)),
         max_speakers=int(_merged_value(args, "max_speakers", 50)),
         new_speaker_threshold=float(_merged_value(args, "new_speaker_threshold", 0.50)),
         global_match_threshold=float(
-            _merged_value(args, "global_match_threshold", 0.50)
+            _merged_value(args, "global_match_threshold", 0.55)
         ),
         min_segment_duration_for_new_speaker=float(
             _merged_value(args, "min_segment_duration_for_new_speaker", 0.50)
@@ -285,6 +295,10 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         raise ValueError("chunk_duration must be > 0")
     if config.hop_duration <= 0.0 or config.hop_duration > config.chunk_duration:
         raise ValueError("hop_duration must be in (0, chunk_duration]")
+    if config.region_priority not in {"latest", "commit"}:
+        raise ValueError(
+            f"region_priority must be 'latest' or 'commit', got {config.region_priority!r}"
+        )
 
     hf_cache_dir = _merged_value(args, "hf_cache_dir", None)
     if hf_cache_dir:

@@ -14,7 +14,7 @@ if [ -f ./.venv/bin/activate ]; then
 fi
 
 audio_input=${1:-./datasets/aishell4-test/}
-config_path=${CONFIG_PATH:-./config.yaml}
+config_path=${CONFIG_PATH:-./config/config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}

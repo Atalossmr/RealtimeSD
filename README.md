@@ -7,7 +7,7 @@
 ## 项目内容
 
 - 入口脚本：`pipeline.py`（端到端）、`extract_chunks.py`（嵌入提取阶段）、`cluster_chunks.py`（聚类阶段）
-- 配置文件：`config.yaml`
+- 配置文件：`config/config.yaml`
 - 管线实现：`diarization/`
 - 运行脚本：`run.sh`、`test_der.sh`
 - DER 评估：`tools/compute_der.py`
@@ -44,7 +44,7 @@ pip install -r requirements.txt
 
 默认行为：
 
-- 未提供 `--model_path`（或 `config.yaml` 里的 `model_path`）时，会自动下载并缓存默认 ERes2NetV2 到 `./pretrained/modelscope`
+- 未提供 `--model_path`（或 `config/config.yaml` 里的 `model_path`）时，会自动下载并缓存默认 ERes2NetV2 到 `./pretrained/modelscope`
 - segmentation 模型首次会下载并缓存到 `hf_cache_dir`（默认 `./pretrained/huggingface`）
 
 `pyannote/segmentation-3.0` 需要 Hugging Face 授权。可通过环境变量提供 token：
@@ -61,7 +61,7 @@ export HF_TOKEN=your_token
 python3 pipeline.py \
   --wav ./examples/example.wav \
   --output_dir ./exp/demo \
-  --config ./config.yaml
+  --config ./config/config.yaml
 ```
 
 目录批量：
@@ -70,7 +70,7 @@ python3 pipeline.py \
 python3 pipeline.py \
   --wav ./examples \
   --output_dir ./exp/batch_demo \
-  --config ./config.yaml
+  --config ./config/config.yaml
 ```
 
 常见覆盖参数：
@@ -79,7 +79,7 @@ python3 pipeline.py \
 python3 pipeline.py \
   --wav ./examples \
   --output_dir ./exp/batch_demo \
-  --config ./config.yaml \
+  --config ./config/config.yaml \
   --model_path ./pretrained/examples/example.ckpt \
   --hf_cache_dir ./pretrained/huggingface \
   --verbose
@@ -90,7 +90,7 @@ python3 pipeline.py \
 - `--debug`：输出 chunk 级调试信息
 - `--show_rttm`：运行时把新写出的 RTTM 行同步打印到控制台
 
-说明：全部调参项（阈值、调度、更新策略、输出控制等）只通过 `config.yaml` 配置；CLI 仅保留运行时输入（`--wav`/`--output_dir`/`--config`）、模型/环境参数（`--model_path`/`--model_type`/`--segmentation_model`/`--hf_token`/`--hf_cache_dir`/`--device`）与 `--debug`/`--verbose`/`--show_rttm` 开关。
+说明：全部调参项（阈值、调度、更新策略、输出控制等）只通过 `config/config.yaml` 配置；CLI 仅保留运行时输入（`--wav`/`--output_dir`/`--config`）、模型/环境参数（`--model_path`/`--model_type`/`--segmentation_model`/`--hf_token`/`--hf_cache_dir`/`--device`）与 `--debug`/`--verbose`/`--show_rttm` 开关。
 
 ## 输出说明
 
@@ -153,7 +153,7 @@ bash test_der.sh ./examples
 
 ## 配置重点
 
-核心参数在 `config.yaml`，分组与代码实现一一对应。常用项：
+核心参数在 `config/config.yaml`，全部参数的详细说明见 `config/README.md`。常用项：
 
 - 调度：`chunk_duration`、`hop_duration`
 - track 构造：`min_local_activity_duration`、`min_segment_duration_for_embedding`、`max_segment_duration_for_embedding`
