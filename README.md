@@ -59,7 +59,7 @@ export HF_TOKEN=your_token
 
 ```bash
 python3 pipeline.py \
-  --wav ./examples/example.wav \
+  --wav ./datasets/examples/tingshen_6.wav \
   --output_dir ./exp/demo \
   --config ./config/config.yaml
 ```
@@ -68,7 +68,7 @@ python3 pipeline.py \
 
 ```bash
 python3 pipeline.py \
-  --wav ./examples \
+  --wav ./datasets/examples \
   --output_dir ./exp/batch_demo \
   --config ./config/config.yaml
 ```
@@ -77,7 +77,7 @@ python3 pipeline.py \
 
 ```bash
 python3 pipeline.py \
-  --wav ./examples \
+  --wav ./datasets/examples \
   --output_dir ./exp/batch_demo \
   --config ./config/config.yaml \
   --model_path ./pretrained/examples/example.ckpt \
@@ -106,21 +106,21 @@ python3 pipeline.py \
 基础运行：
 
 ```bash
-bash run.sh ./examples
+bash run.sh ./datasets/examples
 ```
 
 运行时同步在控制台打印 RTTM：
 
 ```bash
-SHOW_RTTM=1 bash run.sh ./examples
+SHOW_RTTM=1 bash run.sh ./datasets/examples
 ```
 
 带 DER 评估：
 
 ```bash
-REF_RTTM=./datasets/rttm \
+REF_RTTM=./datasets/aishell4-test/rttm \
 RUN_NAME=baseline \
-bash test_der.sh ./examples
+bash test_der.sh ./datasets/aishell4-test
 ```
 
 脚本常用环境变量：

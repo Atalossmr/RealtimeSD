@@ -11,7 +11,7 @@
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `device` | `cuda` | 推理设备：`auto` / `cpu` / `cuda` / `cuda:0` |
+| `device` | `cuda`（YAML 生效值；dataclass 默认 `cpu`，CLI 默认 `auto`） | 推理设备：`auto` / `cpu` / `cuda` / `cuda:0` |
 | `hf_cache_dir` | `./pretrained/huggingface` | Hugging Face 缓存目录，相对路径按仓库根目录解析 |
 
 ## extract 阶段：模型

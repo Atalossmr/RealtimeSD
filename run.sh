@@ -13,7 +13,7 @@ if [ -f ./.venv/bin/activate ]; then
     source ./.venv/bin/activate
 fi
 
-audio_input=${1:-./examples/}
+audio_input=${1:-./datasets/examples/}
 config_path=${CONFIG_PATH:-./config/config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
