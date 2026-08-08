@@ -3,14 +3,18 @@
 设计要点：
 
 - 处理单元是一个 chunk 的一组 local track observation，而不是 0.5s 滑窗；
-- 纯流式：新建 speaker 立即成为永久身份，无试用期、无吸收、无合并，
-  所有分配判定一次定案，身份一旦建立永不改变；
-- 无身份修正出口：false split 与 false glue 均不可修复，因此阈值策略
-  应为"宁可 glue 不可 split"（new_speaker_threshold 应适当调高）。
+- 纯流式：新建 speaker 立即成为永久身份，无试用期、无吸收，
+  所有分配判定一次定案；
+- 合并（merge）：每次加入新片段后尝试合并最相似的一对 speaker
+  （count 小者并入大者），由 merge_threshold 控制；合并只影响后续分配，
+  已写出的 RTTM 不改，被合并者从 centroid 集中移除、不再参与后续聚类；
+- false split 可由 merge 事后修复，false glue 仍不可修复，因此阈值策略
+  仍为"宁可 glue 不可 split"（new_speaker_threshold 应适当调高）。
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import numpy as np
@@ -20,6 +24,9 @@ from ...config import ChunkPipelineConfig
 from ..base import BaseChunkAssigner
 from ...schema import ChunkDebugInfo, ChunkObservation
 from ...utils import l2_normalize
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChunkSpeakerClusterer(BaseChunkAssigner):
@@ -34,6 +41,11 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
 
         self.centroids: dict[int, np.ndarray] = {}
         self.counts: dict[int, int] = {}
+        # 被合并 speaker id -> 幸存 speaker id（仅用于追溯，不再参与分配）。
+        self.merged_into: dict[int, int] = {}
+        # speaker 诞生时的 chunk 序号（merge_protect_established 的"年龄"依据）。
+        self.created_at: dict[int, int] = {}
+        self._chunk_counter = 0
 
         self.next_speaker_id = 0
 
@@ -98,7 +110,124 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
             observation.embedding.astype(np.float32, copy=False)
         )
         self.counts[speaker_id] = 1
+        self.created_at[speaker_id] = self._chunk_counter
         return speaker_id
+
+    # ------------------------------------------------------------------
+    # merge：最相似的一对 speaker 合并（小并入大）
+    # ------------------------------------------------------------------
+
+    def _is_probationary(self, speaker_id: int) -> bool:
+        """speaker 是否仍在缓刑期（年龄 ≤ new_speaker_hold_chunks 个 chunk）。"""
+
+        probation = max(0, int(self.config.new_speaker_hold_chunks))
+        return self._chunk_counter - self.created_at.get(speaker_id, 0) <= probation
+
+    def _pick_merge_pair(
+        self, global_ids: list[int], similarities: np.ndarray
+    ) -> Optional[tuple[int, int, int, int, float]]:
+        """选出最相似的一对可合并 speaker。
+
+        返回 (survivor, absorbed, similarity)；无可合并对返回 None。
+        merge_protect_established 开启时，被合并一方必须仍在缓刑期
+        （已存活过缓冲期的 speaker 不允许被并掉）：恰好一方在缓刑期时该方为
+        absorbed（不论 count），双方都在缓刑期时沿用"小并入大"。
+        """
+
+        n = len(global_ids)
+        best: Optional[tuple[int, int, float]] = None
+        for row_idx in range(n):
+            for col_idx in range(row_idx + 1, n):
+                similarity = float(similarities[row_idx, col_idx])
+                if similarity < self.config.merge_threshold:
+                    continue
+                id_a, id_b = global_ids[row_idx], global_ids[col_idx]
+                if self.config.merge_protect_established:
+                    probationary_a = self._is_probationary(id_a)
+                    probationary_b = self._is_probationary(id_b)
+                    if not (probationary_a or probationary_b):
+                        # 双方都已存活过缓冲期：禁止合并。
+                        continue
+                    # 恰好一方在缓刑期时该方必为 absorbed；方向确定后按
+                    # (count, -id) 规则统一求 survivor/absorbed 的优先级。
+                    if probationary_a and not probationary_b:
+                        key_a, key_b = (0, 0), (1, 0)  # id_a 必为 absorbed
+                    elif probationary_b and not probationary_a:
+                        key_a, key_b = (1, 0), (0, 0)  # id_b 必为 absorbed
+                    else:
+                        key_a = (1, self.counts[id_a], -id_a)
+                        key_b = (1, self.counts[id_b], -id_b)
+                else:
+                    key_a = (1, self.counts[id_a], -id_a)
+                    key_b = (1, self.counts[id_b], -id_b)
+                # key 大者为 survivor；缓刑语义下 key 首元素小者必为 absorbed。
+                if key_a >= key_b:
+                    survivor, absorbed = id_a, id_b
+                else:
+                    survivor, absorbed = id_b, id_a
+                if best is None or similarity > best[2]:
+                    best = (survivor, absorbed, similarity)
+        if best is None:
+            return None
+        survivor, absorbed, similarity = best
+        return survivor, absorbed, similarity
+
+    def _try_merge_speakers(
+        self,
+        local_to_global: dict[int, int],
+        debug_info: ChunkDebugInfo,
+    ) -> None:
+        """若最相似的一对可合并 centroid 相似度达到 merge_threshold，则合并（每次最多一对）。
+
+        count 小者并入大者（count 相同保留 id 较小者），centroid 按 count
+        加权平均后重归一化；被合并者从 centroid 集中移除，不再参与后续分配。
+        已写出的 RTTM 不受影响；本 chunk 尚未写出的分配改挂到幸存 id。
+        merge_protect_established 开启时，已存活过缓冲期
+        （new_speaker_hold_chunks）的 speaker 不允许被合并。
+        """
+
+        if len(self.centroids) < 2:
+            return
+
+        global_ids = sorted(self.centroids.keys())
+        centroid_matrix = np.stack([self.centroids[sid] for sid in global_ids])
+        # centroid 均已 L2 归一化， Gram 矩阵即两两余弦相似度。
+        similarities = centroid_matrix @ centroid_matrix.T
+        picked = self._pick_merge_pair(global_ids, similarities)
+        if picked is None:
+            return
+        survivor, absorbed, best_similarity = picked
+
+        count_survivor = self.counts[survivor]
+        count_absorbed = self.counts[absorbed]
+        total = count_survivor + count_absorbed
+        merged = (
+            count_survivor * self.centroids[survivor]
+            + count_absorbed * self.centroids[absorbed]
+        ) / float(total)
+        self.centroids[survivor] = l2_normalize(merged.astype(np.float32, copy=False))
+        self.counts[survivor] = total
+        del self.centroids[absorbed]
+        del self.counts[absorbed]
+        del self.created_at[absorbed]
+        self.merged_into[absorbed] = survivor
+
+        # 本 chunk 的帧尚未写出：把指向被合并者的分配与调试记录改挂到幸存 id。
+        for local_idx, global_id in list(local_to_global.items()):
+            if global_id == absorbed:
+                local_to_global[local_idx] = survivor
+        for record in debug_info["local_assignments"]:
+            if record["global"] == absorbed:
+                record["global"] = survivor
+
+        logger.info(
+            "[merge] speaker %d -> %d (similarity=%.3f, counts=%d+%d)",
+            absorbed,
+            survivor,
+            best_similarity,
+            count_absorbed,
+            count_survivor,
+        )
 
     # ------------------------------------------------------------------
     # 分配
@@ -150,6 +279,7 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
     ) -> tuple[dict[int, int], ChunkDebugInfo]:
         """完成一个 chunk 的 local->global 分配与 centroid 更新。"""
 
+        self._chunk_counter += 1
         debug_info: ChunkDebugInfo = {
             "num_centroids_before": len(self.centroids),
             "num_centroids_after": len(self.centroids),
@@ -168,6 +298,9 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
                 self._resolve_observation(
                     observation, assignment, local_to_global, debug_info
                 )
+                # 每加入一个新片段都尝试合并最相似的一对 speaker；
+                # 合并可能影响本 chunk 后续 observation 的匹配对象。
+                self._try_merge_speakers(local_to_global, debug_info)
 
         debug_info["num_centroids_after"] = len(self.centroids)
         debug_info["global_speakers"] = self.current_global_speakers()
@@ -185,6 +318,10 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
         config = self.config
         local_idx = observation.local_idx
         matched_speaker, similarity = assignment.get(local_idx, (None, -1.0))
+        # assignment 基于本 chunk 开头的 centroid 集计算；若匹配对象在本 chunk
+        # 内已被 merge 掉，改挂到幸存 id（相似度沿用旧值，与幸存 centroid 近似）。
+        if matched_speaker is not None:
+            matched_speaker = self.merged_into.get(matched_speaker, matched_speaker)
 
         # matched：相似度达到主阈值，直接沿用该 global speaker。
         if matched_speaker is not None and similarity >= config.global_match_threshold:

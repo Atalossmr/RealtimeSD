@@ -10,7 +10,7 @@
 2. 按 `hop_duration` 沿时间轴推进，每次切出 `chunk_duration`（默认 10s）窗口
 3. 对窗口运行 `pyannote/segmentation-3.0`，得到帧级多标签分数（局部 ≤3 人、帧级 ≤2 人，含重叠）
 4. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding；纯净区不足时回退 `overlap_fallback`
-5. assigner 做 local->global 分配（后端可插拔，见 `diarization/cluster/backends/`）：默认 streaming 后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；**身份一次定案，新建 speaker 立即成为永久身份**
+5. assigner 做 local->global 分配（后端可插拔，见 `diarization/cluster/backends/`）：默认 streaming 后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；每次加入新片段后按 `merge_threshold` 尝试合并最相似的一对 speaker（小并入大）
 6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线，无缓冲、无延迟确认；deferred（离线）后端逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
 7. 音频结束：闭合全部 open turn，writer 纯追加收尾——全程零重写
 
@@ -22,9 +22,9 @@
 
 设计要点：
 
-- **纯流式：无 speaker merge、无 probationary/确认机制、无 RTTM 重写（含终局）、无 stable/延迟输出机制**
-- speaker 身份一旦建立，流式期间永不改变；false split 与 false glue 均不可修复
-- 因此阈值策略应为"宁可 glue 不可 split"：`new_speaker_threshold` 应适当高于旧版（probationary 架构可靠 absorb 修复 false split，阈值可以贴得很近）
+- **纯流式：无 probationary/确认机制、无 RTTM 重写（含终局）、无 stable/延迟输出机制**
+- 分配一次定案，但支持事后 merge：每次加入新片段后，若最相似的一对 centroid 相似度 ≥ `merge_threshold` 则合并（count 小者并入大者）；已写出的 RTTM 不改，被合并者退出后续聚类
+- false split 可由 merge 修复，false glue 仍不可修复，因此阈值策略仍为"宁可 glue 不可 split"：`new_speaker_threshold` 应适当调高
 - 收益：新 speaker 的首次发言在所属 chunk 提交区写出时即刻出现在输出中，输出延迟 ≈ 一个 hop + 沉默闭合确认
 
 ## 关键策略
@@ -50,17 +50,40 @@
 - `new`：相似度 < `new_speaker_threshold` 且 track 时长 ≥ `min_segment_duration_for_new_speaker`（立即成为永久身份）
 - `fallback`：介于两者之间，沿用最近 centroid，不更新
 
-注意：纯流式架构下 false split 与 false glue 均不可修复，因此 `new_speaker_threshold` 应适当调高，偏保守建簇。
+注意：false split 可由 merge 修复（见下节），false glue 不可修复，因此 `new_speaker_threshold` 应适当调高，偏保守建簇。
 
 相关代码：`diarization/cluster/backends/streaming.py`
 
-### 3) centroid 更新
+### 3) 事后 merge
+
+每次加入新片段（observation 完成分配）后，计算全部 centroid 两两余弦相似度，若最相似的一对 ≥ `merge_threshold` 则合并：count 小者并入大者（count 相同保留 id 较小者），centroid 按 count 加权平均后重归一化。合并只影响后续分配：
+
+- 已写出的 RTTM 行不受影响（writer 全程 append-only）；
+- 被合并 speaker 从 centroid 集中移除，不再参与后续 Hungarian 分配与 merge 判定；
+- 本 chunk 尚未写出的分配（含 Hungarian 结果里指向被合并者的 stale 匹配）改挂到幸存 id；
+- 被合并 id → 幸存 id 记录在 `merged_into`，合并事件以 `[merge]` 日志输出；
+- `merge_protect_established` 开启时，已存活过缓冲期（`new_speaker_hold_chunks` 个 chunk，按 `created_at` 年龄判定）的 speaker 不允许被并掉：只有缓刑期内的 speaker 可以作为 absorbed 方（恰好一方在缓刑期时该方必为 absorbed，不论 count）。用途：配合调低 `merge_threshold`，让 false split 在诞生早期即被并掉，同时杜绝资深 speaker 之间的误并。
+
+相关代码：`diarization/cluster/backends/streaming.py` 的 `_try_merge_speakers`
+
+### 4) new-speaker hold（输出延迟缓冲）
+
+`new_speaker_hold_chunks > 0` 时，runner 在流式路径上加一层输出缓冲（分配逻辑不受影响）：
+
+- 某 chunk 新建了 global speaker 即进入 hold：该 chunk 及后续 chunk 的分配结果先缓存，不喂 writer / chunk_hook（RTTM 写出与 separation exporter 同步等待）；
+- 缓刑中的 speaker 全部被 merge 掉（提前定案）或满 N 个 chunk（超时定案）时，缓存的 chunk 经 `merged_into` 链式重映射后按原序一起输出——false split 的帧在写出前即归属幸存 speaker；
+- 窗口以第一个新 speaker 为锚不再延长，最大额外延迟 = N × hop；无新 speaker 的普通 chunk 零延迟直通；EOF 强制 flush；
+- 已写出的 RTTM 行不受影响（append-only 不变），hold 只改变"何时写、写什么 id"。
+
+相关代码：`diarization/cluster/runner.py` 的 `run_clustering`
+
+### 5) centroid 更新
 
 - 全程 SMA 增量更新：`alpha = 1 / (count + 1)`
 - 常规更新门控：track 时长 ≥ `min_segment_duration_for_centroid_update`
 - `overlap_fallback` 片段可提 embedding 参与分配，但不更新 centroid
 
-### 4) 提交区与零重写输出
+### 6) 提交区与零重写输出
 
 - 重叠滑窗（`hop_duration < chunk_duration`）时，每窗口只提交中段 `hop_duration` 秒，两侧各留 `(chunk-hop)/2` 边界缓冲；首窗从 0 开始
 - 每个 speaker 维护一个未闭合的 open turn（驻留内存）：后续帧/段间隔 ≤ `streaming_merge_gap` 即在写出前扩展拼接，跨 chunk 生效
@@ -132,6 +155,9 @@ diarization/
 - `global_match_threshold`
 - `min_segment_duration_for_new_speaker`
 - `min_segment_duration_for_centroid_update`
+- `merge_threshold`（每次加入新片段后，最相似的一对 centroid 相似度 ≥ 此值即合并，小并入大）
+- `new_speaker_hold_chunks`（新建 speaker 后缓存输出最多 N 个 chunk，merge 定案后经 `merged_into` 重映射一起输出；0 = 关闭）
+- `merge_protect_established`（已存活过缓冲期的 speaker 禁止被并，缓刑期内 speaker 才可作 absorbed 方）
 
 ### 5) cluster 阶段：ahc 后端
 
