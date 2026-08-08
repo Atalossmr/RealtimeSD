@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -29,6 +28,7 @@ from .cluster.rttm_writer import AppendOnlyRTTMWriter
 from .config import ChunkPipelineConfig
 from .extract.extractor import ChunkExtractor
 from .schema import ChunkArtifacts, ChunkDebugInfo, ChunkObservation
+from .utils import log_structured
 
 
 logger = logging.getLogger(__name__)
@@ -56,13 +56,10 @@ class ChunkDiarizationPipeline:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _format_log_payload(payload: object) -> str:
-        return json.dumps(payload, indent=2, ensure_ascii=False)
-
     def _log_structured(
-        self, level: int, prefix: str, title: str, payload: object
+        level: int, prefix: str, title: str, payload: object
     ) -> None:
-        logger.log(level, "%s %s:\n%s", prefix, title, self._format_log_payload(payload))
+        log_structured(logger, level, prefix, title, payload)
 
     def _log_debug_chunk(
         self,
@@ -172,6 +169,27 @@ class ChunkDiarizationPipeline:
             self.config.show_rttm,
         )
 
+        # 分段音频导出（接流式 ASR）：仅 streaming 后端下逐 commit 区生效。
+        exporter = None
+        if self.config.separation_enabled:
+            if self.assigner.deferred:
+                logger.warning(
+                    "[separation] separation_enabled 仅支持 streaming 后端，"
+                    "当前后端 %s 已跳过",
+                    type(self.assigner).__name__,
+                )
+            else:
+                from .separation import StreamingSegmentExporter
+
+                exporter = StreamingSegmentExporter(
+                    self.config,
+                    waveform,
+                    self.extractor.embedder,
+                    self.assigner,
+                    uri=uri or "unknown",
+                    output_dir=str(self.config.output_dir_for_streaming),
+                )
+
         # save_embeddings 开启时收集全部带 embedding 的 observation。
         collected_observations: list[ChunkObservation] = []
 
@@ -188,6 +206,9 @@ class ChunkDiarizationPipeline:
                 collected_observations.extend(
                     obs for obs in chunk.observations if obs.embedding is not None
                 )
+            # 分段音频导出：commit 区音频段输出（重叠区经 TIGER 分离）。
+            if exporter is not None and local_to_global:
+                exporter.handle_chunk(chunk, local_to_global)
             self._log_structured(
                 logging.INFO,
                 "[runtime]",
@@ -228,6 +249,10 @@ class ChunkDiarizationPipeline:
             writer,
             chunk_hook=chunk_log_hook,
         )
+
+        # 闭合 exporter 残余的 open segment（音频结束，与 writer.finalize 同步）。
+        if exporter is not None:
+            exporter.finalize()
 
         if self.config.save_embeddings:
             self._save_embeddings(collected_observations, streaming_log_path)

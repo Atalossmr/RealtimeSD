@@ -6,7 +6,7 @@
 from .audio import resample_waveform_if_needed
 from .chunk_io import load_chunks, save_chunks
 from .device import resolve_device
-from .log import setup_logger
+from .log import log_structured, setup_logger
 from .numeric import l2_normalize
 from .paths import collect_audio_paths, ensure_parent_dir
 
@@ -16,6 +16,7 @@ __all__ = [
     "save_chunks",
     "resolve_device",
     "setup_logger",
+    "log_structured",
     "l2_normalize",
     "collect_audio_paths",
     "ensure_parent_dir",

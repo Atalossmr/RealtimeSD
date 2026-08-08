@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """分析当前管线（diarization 包，chunk 架构）run.log 中各机制命中情况与占比。
 
-当前管线的 marker（见 diarization/pipeline.py 与 diarization/cluster/）：
+结构化事件 marker（见 diarization/utils/log.py 的 log_structured）：
 
 - `[runtime] frame_decision:` 每个 chunk 的 local->global 分配（INFO，始终输出）
+- `[runtime] current_global_speakers:` 当前全局 speaker 快照（INFO）
+- `[separation] energy_gate:` 重叠窗的能量门控结果（INFO）
+- `[separation] pair_match:` 2x2 匹配详情（相似度、映射、是否接受）（INFO）
+- `[separation] gate_fallback:` 单路过门控的回退归属（INFO）
+- `[separation] both_tracks_failed:` / `[separation] separate_too_short:`（WARNING）
 - `[debug] window_summary:` chunk 级汇总（DEBUG，需 --debug）
 - `[debug] new_speakers:` / `[debug] updated_speakers:` / `[debug] skipped_updates:`（DEBUG）
-- `[runtime] current_global_speakers:` 当前全局 speaker 快照（INFO）
-- `[streaming] finalized turns=N` writer 收尾（INFO）
-- `[ahc] observations=N clusters=M ...` AHC 离线后端聚类结果（INFO）
+
+非结构化行（按正则识别）：
+- `[streaming] finalized turns=N`、`[embeddings] saved N embeddings`、`[ahc] ...`
 
 使用方法：
   1) 直接打印分析报告:
@@ -25,11 +30,14 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Iterator, TypedDict, TextIO
+from typing import TypedDict
+
+from run_log_parser import basic_stats, iter_log_events
 
 
 FINALIZED_TURNS_RE = re.compile(r"\[streaming\] finalized turns=(\d+)")
 AHC_RE = re.compile(r"\[ahc\] observations=(\d+) clusters=(\d+)")
+EMBEDDINGS_SAVED_RE = re.compile(r"\[embeddings\] saved (\d+) embeddings")
 
 
 class CounterItem(TypedDict):
@@ -38,128 +46,12 @@ class CounterItem(TypedDict):
     ratio: float
 
 
-class FramesSummary(TypedDict):
-    frame_decisions: int
-    window_summaries: int
-    windows_with_observation: int
-
-
-class ObservationSummary(TypedDict):
-    sum_observations: int
-    sum_embedded: int
-
-
-class AssignmentSummary(TypedDict):
-    total: int
-    by_decision: list[CounterItem]
-    by_decision_and_mode: list[CounterItem]
-    similarity_stats_by_decision: dict[str, dict[str, float]]
-
-
-class UpdatesSummary(TypedDict):
-    total: int
-    by_mode: list[CounterItem]
-    alpha_stats: dict[str, float]
-
-
-class SkipsSummary(TypedDict):
-    total: int
-    by_reason: list[CounterItem]
-
-
-class SpeakersSummary(TypedDict, total=False):
-    new_speakers: int
-    final_global_speakers: int
-    final_observation_counts: dict[str, float]
-
-
-class StreamingSummary(TypedDict, total=False):
-    finalized_turns: int
-    embeddings_saved: int
-
-
-class AhcSummary(TypedDict, total=False):
-    files: int
-    observations: int
-    clusters: int
-
-
-class RunLogSummary(TypedDict):
-    log_path: str
-    frames: FramesSummary
-    observation: ObservationSummary
-    assignment: AssignmentSummary
-    updates: UpdatesSummary
-    skips: SkipsSummary
-    speakers: SpeakersSummary
-    streaming: StreamingSummary
-    ahc: AhcSummary
-
-
-def _iter_lines(file_obj: TextIO) -> Iterator[str]:
-    """按行迭代文本文件内容。"""
-
-    for line in file_obj:
-        yield line
-
-
-def _read_json_block(lines: Iterator[str]) -> object | None:
-    """从日志流中读取 marker 后的 JSON 块。"""
-
-    first = None
-    for line in lines:
-        if line.strip():
-            first = line
-            break
-    if first is None:
-        return None
-
-    first_stripped = first.lstrip()
-    if not first_stripped or first_stripped[0] not in "[{":
-        return None
-
-    buffer = [first]
-    stack: list[str] = []
-    in_string = False
-    escape = False
-
-    def feed(text: str) -> None:
-        nonlocal in_string, escape
-        for ch in text:
-            if in_string:
-                if escape:
-                    escape = False
-                    continue
-                if ch == "\\":
-                    escape = True
-                elif ch == '"':
-                    in_string = False
-                continue
-
-            if ch == '"':
-                in_string = True
-            elif ch in "[{":
-                stack.append(ch)
-            elif ch in "]}":
-                if not stack:
-                    continue
-                left = stack[-1]
-                if (left == "{" and ch == "}") or (left == "[" and ch == "]"):
-                    stack.pop()
-
-    feed(first)
-    while stack:
-        try:
-            nxt = next(lines)
-        except StopIteration:
-            break
-        buffer.append(nxt)
-        feed(nxt)
-
-    try:
-        return json.loads("".join(buffer))
-    except json.JSONDecodeError:
-        return None
+class SeparationSummary(TypedDict, total=False):
+    overlap_windows: int
+    by_disposition: list[CounterItem]
+    energy_ratio_stats: dict[str, float]
+    pair_min_sim_stats: dict[str, float]
+    gate_fallback_sim_stats: dict[str, float]
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -173,43 +65,17 @@ def _ratio(numerator: int, denominator: int) -> float:
 def _counter_with_ratio(counter: Counter[str], total: int) -> list[CounterItem]:
     """把计数器展开为含占比的列表。"""
 
-    items: list[CounterItem] = []
-    for key, value in counter.most_common():
-        items.append(
-            {
-                "name": key,
-                "count": int(value),
-                "ratio": _ratio(int(value), int(total)),
-            }
-        )
-    return items
+    return [
+        {"name": key, "count": int(value), "ratio": _ratio(int(value), int(total))}
+        for key, value in counter.most_common()
+    ]
 
 
-def _basic_stats(values: list[float]) -> dict[str, float]:
-    """计算一组数值的基础统计量（min/mean/p50/p90/max）。"""
-
-    if not values:
-        return {}
-    sorted_values = sorted(values)
-    n = len(sorted_values)
-
-    def q(p: float) -> float:
-        idx = min(n - 1, int((n - 1) * p))
-        return float(sorted_values[idx])
-
-    return {
-        "min": float(sorted_values[0]),
-        "mean": float(sum(sorted_values) / n),
-        "p50": q(0.50),
-        "p90": q(0.90),
-        "max": float(sorted_values[-1]),
-    }
-
-
-def analyze_log(log_path: Path) -> RunLogSummary:
+def analyze_log(log_path: Path) -> dict:
     """扫描 run.log 并汇总机制命中统计。"""
 
     total_frame_decisions = 0
+    commit_coverage = 0.0
     total_windows = 0
     windows_with_observation = 0
 
@@ -231,124 +97,162 @@ def analyze_log(log_path: Path) -> RunLogSummary:
     ahc_observations = 0
     ahc_clusters = 0
 
+    # ---- separation 事件统计 ----
+    sep_disposition_counter: Counter[str] = Counter()
+    sep_energy_ratios: list[float] = []
+    sep_pair_min_sims: list[float] = []
+    sep_gate_fallback_sims: list[float] = []
+
+    def chosen_min_sim(payload: dict) -> float | None:
+        candidates = payload.get("candidates")
+        sims = payload.get("sims")
+        mapping = payload.get("mapping")
+        if not candidates or not sims or not mapping:
+            return None
+        chosen = []
+        for track_key in ("track0", "track1"):
+            global_id = mapping.get(track_key)
+            if global_id not in candidates:
+                return None
+            chosen.append(float(sims[track_key][candidates.index(global_id)]))
+        return min(chosen)
+
     with open(log_path, "r", encoding="utf-8") as file_obj:
-        lines = _iter_lines(file_obj)
-        for line in lines:
-            if "[runtime] frame_decision:" in line:
-                total_frame_decisions += 1
-                _ = _read_json_block(lines)
+        # 结构化事件走 iter_log_events；非结构化行用正则补充，
+        # 因此先读全文再分别扫描（文件不大，run.log 一般 < 几十 MB）。
+        text = file_obj.read()
+
+    for prefix, title, payload in iter_log_events(log_path):
+        if prefix == "runtime" and title == "frame_decision":
+            total_frame_decisions += 1
+            if isinstance(payload, dict) and "commit" in payload:
+                commit = payload["commit"]
+                commit_coverage += float(commit[1]) - float(commit[0])
+            continue
+
+        if prefix == "debug" and title == "window_summary":
+            if not isinstance(payload, dict):
                 continue
-
-            if "[debug] window_summary:" in line:
-                payload = _read_json_block(lines)
-                if not isinstance(payload, dict):
-                    continue
-                total_windows += 1
-
-                window_state = payload.get("window_state", {})
-                if isinstance(window_state, dict):
-                    obs = int(window_state.get("observations", 0))
-                    embedded = int(window_state.get("embedded", 0))
-                    sum_observations += obs
-                    sum_embedded += embedded
-                    if obs > 0:
-                        windows_with_observation += 1
-
-                assignment = payload.get("assignment", {})
-                if isinstance(assignment, dict):
-                    local_assignments = assignment.get("local_assignments", [])
-                    if isinstance(local_assignments, list):
-                        for item in local_assignments:
-                            if not isinstance(item, dict):
-                                continue
-                            decision = str(item.get("decision", "unknown"))
-                            mode = str(item.get("selection_mode", "unknown"))
-                            decision_counter[decision] += 1
-                            decision_mode_counter[f"{decision} | {mode}"] += 1
-                            try:
-                                similarity = float(item.get("similarity"))
-                            except (TypeError, ValueError):
-                                continue
-                            if similarity >= 0.0:
-                                similarity_by_decision.setdefault(
-                                    decision, []
-                                ).append(similarity)
-                continue
-
-            if "[debug] skipped_updates:" in line:
-                payload = _read_json_block(lines)
-                if isinstance(payload, list):
-                    for item in payload:
-                        if isinstance(item, dict):
-                            reason = str(item.get("reason", "unknown"))
-                            skipped_reason_counter[reason] += 1
-                continue
-
-            if "[debug] updated_speakers:" in line:
-                payload = _read_json_block(lines)
-                if isinstance(payload, list):
-                    for item in payload:
+            total_windows += 1
+            window_state = payload.get("window_state", {})
+            if isinstance(window_state, dict):
+                obs = int(window_state.get("observations", 0))
+                sum_observations += obs
+                sum_embedded += int(window_state.get("embedded", 0))
+                if obs > 0:
+                    windows_with_observation += 1
+            assignment = payload.get("assignment", {})
+            if isinstance(assignment, dict):
+                local_assignments = assignment.get("local_assignments", [])
+                if isinstance(local_assignments, list):
+                    for item in local_assignments:
                         if not isinstance(item, dict):
                             continue
-                        mode = str(item.get("mode", "unknown"))
-                        update_mode_counter[mode] += 1
+                        decision = str(item.get("decision", "unknown"))
+                        mode = str(item.get("selection_mode", "unknown"))
+                        decision_counter[decision] += 1
+                        decision_mode_counter[f"{decision} | {mode}"] += 1
                         try:
-                            update_alphas.append(float(item.get("alpha")))
+                            similarity = float(item.get("similarity"))
                         except (TypeError, ValueError):
-                            pass
-                continue
+                            continue
+                        if similarity >= 0.0:
+                            similarity_by_decision.setdefault(decision, []).append(
+                                similarity
+                            )
+            continue
 
-            if "[debug] new_speakers:" in line:
-                payload = _read_json_block(lines)
-                if isinstance(payload, list):
-                    new_speaker_count += len(payload)
-                continue
+        if prefix == "debug" and title == "skipped_updates":
+            if isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        skipped_reason_counter[str(item.get("reason", "unknown"))] += 1
+            continue
 
-            if "[runtime] current_global_speakers:" in line:
-                payload = _read_json_block(lines)
-                if isinstance(payload, list):
-                    # 每个 chunk 都会打一次快照，只保留最后一次。
-                    final_speakers = [
-                        item for item in payload if isinstance(item, dict)
-                    ]
-                continue
+        if prefix == "debug" and title == "updated_speakers":
+            if isinstance(payload, list):
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    update_mode_counter[str(item.get("mode", "unknown"))] += 1
+                    try:
+                        update_alphas.append(float(item.get("alpha")))
+                    except (TypeError, ValueError):
+                        pass
+            continue
 
-            turns_match = FINALIZED_TURNS_RE.search(line)
-            if turns_match:
-                # 每个输入文件 finalize 一次，跨文件累加。
-                finalized_turns += int(turns_match.group(1))
-                continue
+        if prefix == "debug" and title == "new_speakers":
+            if isinstance(payload, list):
+                new_speaker_count += len(payload)
+            continue
 
-            ahc_match = AHC_RE.search(line)
-            if ahc_match:
-                ahc_files += 1
-                ahc_observations += int(ahc_match.group(1))
-                ahc_clusters += int(ahc_match.group(2))
-                continue
+        if prefix == "runtime" and title == "current_global_speakers":
+            if isinstance(payload, list):
+                # 每个 chunk 都会打一次快照，只保留最后一次。
+                final_speakers = [item for item in payload if isinstance(item, dict)]
+            continue
 
-            if "[embeddings] saved" in line:
-                saved_match = re.search(r"saved (\d+) embeddings", line)
-                if saved_match:
-                    embeddings_saved += int(saved_match.group(1))
-                continue
+        if prefix == "separation" and isinstance(payload, dict):
+            if title == "energy_gate":
+                sep_disposition_counter["overlap_windows"] += 1
+                for track in payload.get("tracks", []):
+                    try:
+                        sep_energy_ratios.append(float(track.get("ratio")))
+                    except (TypeError, ValueError):
+                        pass
+            elif title == "pair_match":
+                sep_disposition_counter[
+                    "separated" if payload.get("accepted") else "sim_fallback"
+                ] += 1
+                min_sim = chosen_min_sim(payload)
+                if min_sim is not None:
+                    sep_pair_min_sims.append(min_sim)
+            elif title == "gate_fallback":
+                sep_disposition_counter["gate_fallback"] += 1
+                try:
+                    sep_gate_fallback_sims.append(float(payload.get("similarity")))
+                except (TypeError, ValueError):
+                    pass
+            elif title == "both_tracks_failed":
+                sep_disposition_counter["both_tracks_failed"] += 1
+            elif title == "separate_too_short":
+                sep_disposition_counter["separate_too_short"] += 1
+            continue
+
+    # ---- 非结构化行 ----
+    for line in text.splitlines():
+        turns_match = FINALIZED_TURNS_RE.search(line)
+        if turns_match:
+            finalized_turns += int(turns_match.group(1))
+            continue
+        ahc_match = AHC_RE.search(line)
+        if ahc_match:
+            ahc_files += 1
+            ahc_observations += int(ahc_match.group(1))
+            ahc_clusters += int(ahc_match.group(2))
+            continue
+        saved_match = EMBEDDINGS_SAVED_RE.search(line)
+        if saved_match:
+            embeddings_saved += int(saved_match.group(1))
+            continue
 
     total_assignments = int(sum(decision_counter.values()))
     total_skips = int(sum(skipped_reason_counter.values()))
     total_updates = int(sum(update_mode_counter.values()))
 
-    speakers: SpeakersSummary = {"new_speakers": int(new_speaker_count)}
+    speakers: dict = {"new_speakers": int(new_speaker_count)}
     if final_speakers:
         counts = [float(item.get("count", 0)) for item in final_speakers]
         speakers["final_global_speakers"] = len(final_speakers)
-        speakers["final_observation_counts"] = _basic_stats(counts)
+        speakers["final_observation_counts"] = basic_stats(counts)
 
-    streaming: StreamingSummary = {}
+    streaming: dict = {}
     if finalized_turns:
         streaming["finalized_turns"] = int(finalized_turns)
     if embeddings_saved:
         streaming["embeddings_saved"] = int(embeddings_saved)
 
-    ahc: AhcSummary = {}
+    ahc: dict = {}
     if ahc_files:
         ahc = {
             "files": ahc_files,
@@ -356,10 +260,25 @@ def analyze_log(log_path: Path) -> RunLogSummary:
             "clusters": int(ahc_clusters),
         }
 
+    separation: dict = {}
+    if sep_disposition_counter:
+        overlap_windows = sep_disposition_counter.pop("overlap_windows")
+        total_events = int(sum(sep_disposition_counter.values()))
+        separation = {
+            "overlap_windows": int(overlap_windows),
+            "by_disposition": _counter_with_ratio(
+                sep_disposition_counter, total_events
+            ),
+            "energy_ratio_stats": basic_stats(sep_energy_ratios),
+            "pair_min_sim_stats": basic_stats(sep_pair_min_sims),
+            "gate_fallback_sim_stats": basic_stats(sep_gate_fallback_sims),
+        }
+
     return {
         "log_path": str(log_path),
         "frames": {
             "frame_decisions": total_frame_decisions,
+            "commit_coverage_seconds": round(commit_coverage, 3),
             "window_summaries": total_windows,
             "windows_with_observation": windows_with_observation,
         },
@@ -374,14 +293,14 @@ def analyze_log(log_path: Path) -> RunLogSummary:
                 decision_mode_counter, total_assignments
             ),
             "similarity_stats_by_decision": {
-                decision: _basic_stats(values)
+                decision: basic_stats(values)
                 for decision, values in sorted(similarity_by_decision.items())
             },
         },
         "updates": {
             "total": total_updates,
             "by_mode": _counter_with_ratio(update_mode_counter, total_updates),
-            "alpha_stats": _basic_stats(update_alphas),
+            "alpha_stats": basic_stats(update_alphas),
         },
         "skips": {
             "total": total_skips,
@@ -390,6 +309,7 @@ def analyze_log(log_path: Path) -> RunLogSummary:
         "speakers": speakers,
         "streaming": streaming,
         "ahc": ahc,
+        "separation": separation,
     }
 
 
@@ -402,7 +322,7 @@ def _print_stats(title: str, stats: dict[str, float]) -> None:
     )
 
 
-def _print_report(summary: RunLogSummary) -> None:
+def _print_report(summary: dict) -> None:
     """以可读文本打印分析结果。"""
 
     frames = summary["frames"]
@@ -413,11 +333,14 @@ def _print_report(summary: RunLogSummary) -> None:
     speakers = summary.get("speakers", {})
     streaming = summary.get("streaming", {})
     ahc = summary.get("ahc", {})
+    separation = summary.get("separation", {})
 
     print("== Run Log Analysis ==")
     print(f"log_path: {summary['log_path']}")
     print(
-        f"frames: decisions={frames['frame_decisions']} windows={frames['window_summaries']} "
+        f"frames: decisions={frames['frame_decisions']} "
+        f"commit_coverage={frames['commit_coverage_seconds']}s "
+        f"windows={frames['window_summaries']} "
         f"windows_with_observation={frames['windows_with_observation']}"
     )
 
@@ -464,6 +387,18 @@ def _print_report(summary: RunLogSummary) -> None:
             f"files={ahc['files']} observations={ahc['observations']} "
             f"clusters={ahc['clusters']}"
         )
+
+    if separation:
+        print("\n-- separation --")
+        print(f"overlap_windows={separation['overlap_windows']}")
+        for item in separation["by_disposition"]:
+            print(
+                f"{item['name']}: {item['count']} "
+                f"({100.0 * float(item['ratio']):.2f}%)"
+            )
+        _print_stats("energy_ratio", separation["energy_ratio_stats"])
+        _print_stats("pair_min_sim", separation["pair_min_sim_stats"])
+        _print_stats("gate_fallback_sim", separation["gate_fallback_sim_stats"])
 
 
 def main() -> None:

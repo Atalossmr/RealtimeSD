@@ -76,6 +76,20 @@ track 构造逻辑（`diarization/extract/track_builder.py`）：纯净帧 = 本
 | `ahc_similarity_threshold` | `0.50` | AHC 余弦相似度阈值 |
 | `ahc_linkage` | `average` | AHC 连接方式：`average` / `complete` / `single` |
 
+## 分段音频导出（接流式 ASR）
+
+以下参数仅 `separation_enabled: true` 且 `clustering_backend: streaming` 时生效。
+每个 commit 区检测重叠帧：无重叠直接按 speaker 切片输出；有重叠则用 TIGER
+分离整个 commit 区，能量门控 + embedding 匹配归属后按 speaker 输出音频段。
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `separation_enabled` | `false` | 是否启用分段音频导出 |
+| `separation_model` | `JusperLee/TIGER-speech` | TIGER 分离模型（HF，固定 2 路输出、16kHz），缓存到 `hf_cache_dir` |
+| `separation_energy_ratio` | `0.10` | 能量门控：分离音轨在重叠帧区间的 RMS / 混合音频同区间 RMS，低于判为伪源（OSD 疑似误报），整窗回退原始音频 |
+| `separation_min_match_similarity` | `0.10` | 2x2 匹配结果的最小余弦相似度，低于判分离质量不可靠，回退原始音频。aishell4 全量标定表明真/假重叠窗的 min_sim 分布高度重合（中位数 0.406 vs 0.388），该阈值无法区分 OSD 误报，仅防极端分离崩溃，不宜调高（0.30 时误伤 27.7% 真重叠窗） |
+| `separation_match_reference` | `observation` | 分离音轨归属匹配的参照 embedding：`observation`（默认，本 chunk 观测，与分离音轨同时间窗、域最接近；候选 speaker 必有观测）/ `centroid`（全局质心，不受本 chunk 观测质量影响，更稳但分数偏低） |
+
 ## RTTM 输出
 
 | 参数 | 默认 | 说明 |

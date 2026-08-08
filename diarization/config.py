@@ -138,6 +138,26 @@ class ChunkPipelineConfig:
     ahc_similarity_threshold: float = 0.50
     ahc_linkage: str = "average"
 
+    # ---- 分段音频导出（接流式 ASR；仅 streaming 后端生效） ----
+    # 每个 commit 区检测重叠帧：无重叠直接按 speaker 切片输出；
+    # 有重叠则用 TIGER 分离整个 commit 区，能量门控 + embedding 匹配归属。
+    separation_enabled: bool = False
+    # TIGER 分离模型（Hugging Face，固定 2 路输出、16kHz）。
+    separation_model: str = "JusperLee/TIGER-speech"
+    # 能量门控：分离音轨在重叠帧区间的 RMS / 混合音频同区间 RMS，
+    # 低于该比值判为伪源（OSD 疑似误报），整窗回退为原始音频。
+    separation_energy_ratio: float = 0.10
+    # 2x2 匹配结果的最小余弦相似度，低于则判分离质量不可靠，回退原始音频。
+    # 注意：aishell4 全量标定（exp/sep_export_full）表明真/假重叠窗的 min_sim
+    # 分布高度重合（中位数 0.406 vs 0.388），该阈值无法区分 OSD 误报，
+    # 仅用于防极端分离崩溃，不宜调高（0.30 时误伤 27.7% 真重叠窗）。
+    separation_min_match_similarity: float = 0.10
+    # 分离音轨归属匹配的参照 embedding：
+    # observation（默认）：用本 chunk 的观测 embedding，与分离音轨同时间窗、
+    #   域最接近（按 assigner 契约，候选 speaker 在本 chunk 必有观测）；
+    # centroid：一律用全局质心，不受本 chunk 观测质量影响，更稳但分数偏低。
+    separation_match_reference: str = "observation"
+
     # ---- RTTM 输出 ----
     min_segment_duration: float = 0.30
     streaming_merge_gap: float = 0.25
@@ -284,6 +304,19 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
             _merged_value(args, "ahc_similarity_threshold", 0.50)
         ),
         ahc_linkage=str(_merged_value(args, "ahc_linkage", "average")),
+        separation_enabled=bool(_merged_value(args, "separation_enabled", False)),
+        separation_model=str(
+            _merged_value(args, "separation_model", "JusperLee/TIGER-speech")
+        ),
+        separation_energy_ratio=float(
+            _merged_value(args, "separation_energy_ratio", 0.10)
+        ),
+        separation_min_match_similarity=float(
+            _merged_value(args, "separation_min_match_similarity", 0.10)
+        ),
+        separation_match_reference=str(
+            _merged_value(args, "separation_match_reference", "observation")
+        ),
         save_embeddings=bool(_merged_value(args, "save_embeddings", False)),
         min_segment_duration=float(_merged_value(args, "min_segment_duration", 0.30)),
         streaming_merge_gap=float(_merged_value(args, "streaming_merge_gap", 0.25)),
@@ -298,6 +331,11 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
     if config.region_priority not in {"latest", "commit"}:
         raise ValueError(
             f"region_priority must be 'latest' or 'commit', got {config.region_priority!r}"
+        )
+    if config.separation_match_reference not in {"centroid", "observation"}:
+        raise ValueError(
+            "separation_match_reference must be 'centroid' or 'observation', "
+            f"got {config.separation_match_reference!r}"
         )
 
     hf_cache_dir = _merged_value(args, "hf_cache_dir", None)
