@@ -93,6 +93,23 @@ track 构造逻辑（`diarization/extract/track_builder.py`）：纯净帧 = 本
 | `separation_min_match_similarity` | `0.10` | 2x2 匹配结果的最小余弦相似度，低于判分离质量不可靠，回退原始音频。aishell4 全量标定表明真/假重叠窗的 min_sim 分布高度重合（中位数 0.406 vs 0.388），该阈值无法区分 OSD 误报，仅防极端分离崩溃，不宜调高（0.30 时误伤 27.7% 真重叠窗） |
 | `separation_match_reference` | `observation` | 分离音轨归属匹配的参照 embedding：`observation`（默认，本 chunk 观测，与分离音轨同时间窗、域最接近；候选 speaker 必有观测）/ `centroid`（全局质心，不受本 chunk 观测质量影响，更稳但分数偏低） |
 
+## ASR 转写（Fun-ASR-Nano）
+
+以下参数仅 `asr_enabled: true` 且 `clustering_backend: streaming` 时生效。
+开启后构造分段导出器（与 separation 同链路：无重叠纯切片、有重叠 TIGER
+分离），闭合的逐 speaker 音频段推给后台 ASR worker 线程逐段转写，音频结束
+后按 start 排序写 `<uri>.transcript.jsonl` / `<uri>.transcript.txt`。
+`asr_enabled` 不要求 `separation_enabled`（exporter 会随 ASR 一起构造），
+但重叠区想拿到分离后的干净音轨仍需打开 `separation_enabled`。
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `asr_enabled` | `false` | 是否启用 Fun-ASR-Nano 段级转写 |
+| `asr_model` | `FunAudioLLM/Fun-ASR-Nano-2512` | ASR 模型：本地目录 / ModelScope id（下载缓存到 `pretrained/modelscope`） |
+| `asr_prev_text_max_tokens` | `0` | 长段窗切续写时 prev_text 的 token 预算（取本段已累计文本尾部）。`0` = 自动（≈ `asr_window_overlap` × 4 token/s，刚好覆盖重叠区）。prev_text 语义是"本段音频前缀的转写"，仅长段窗切内部使用——跨段上下文不成立（文本与音频对不上时模型判转写完成而提前 EOS）；预算也不要手动调大：prev 估计覆盖 ≥ 窗口音频总长时同样提前 EOS（均实测确认） |
+| `asr_max_segment_duration` | `30.0` | 长段滑窗的窗口总长（秒）。超过该时长的段按窗口滑窗推理，每次推进（窗口 − 重叠）秒，单次推理成本有界 |
+| `asr_window_overlap` | `10.0` | 长段滑窗的重叠时长（秒）：窗口头部带这段已转写音频供 prev 尾部对齐，模型跳过重叠区只续写新内容；必须小于 `asr_max_segment_duration` |
+
 ## RTTM 输出
 
 | 参数 | 默认 | 说明 |

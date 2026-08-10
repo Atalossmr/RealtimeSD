@@ -8,7 +8,7 @@
    分配（后端可插拔），流式后端逐 chunk 即时写出，离线后端音频结束后统一
    聚类重放；
 3. 音频结束后 writer 纯追加收尾，并在文件末尾以 # 注释写出内部
-   global id -> RTTM speaker 映射表（全程零重写）。
+   global id -> RTTM speaker 映射表。
 """
 
 from __future__ import annotations
@@ -56,9 +56,7 @@ class ChunkDiarizationPipeline:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _log_structured(
-        level: int, prefix: str, title: str, payload: object
-    ) -> None:
+    def _log_structured(level: int, prefix: str, title: str, payload: object) -> None:
         log_structured(logger, level, prefix, title, payload)
 
     def _log_debug_chunk(
@@ -74,7 +72,7 @@ class ChunkDiarizationPipeline:
         debug_info: ChunkDebugInfo,
         emitted_frames: int,
     ) -> None:
-        """输出 chunk 级调试信息（字段与旧版 window_summary 对齐，便于日志分析工具复用）。"""
+        """输出 chunk 级调试信息"""
 
         debug_summary = {
             "chunk_index": int(chunk_index),
@@ -133,8 +131,8 @@ class ChunkDiarizationPipeline:
         if not observations:
             return
         # streaming_log_path 形如 <stem>.<tag>.rttm，去掉两段后缀换成 .embeddings.npz。
-        embeddings_path = Path(streaming_log_path).with_suffix("").with_suffix(
-            ".embeddings.npz"
+        embeddings_path = (
+            Path(streaming_log_path).with_suffix("").with_suffix(".embeddings.npz")
         )
         np.savez(
             embeddings_path,
@@ -170,16 +168,30 @@ class ChunkDiarizationPipeline:
         )
 
         # 分段音频导出（接流式 ASR）：仅 streaming 后端下逐 commit 区生效。
+        # asr_enabled 时同样构造 exporter（ASR 的音频段来源），并把
+        # ASRWorker.submit 作为 on_segment 注入；TIGER 仍是按需惰性加载。
         exporter = None
-        if self.config.separation_enabled:
+        asr_worker = None
+        if self.config.separation_enabled or self.config.asr_enabled:
             if self.assigner.deferred:
                 logger.warning(
-                    "[separation] separation_enabled 仅支持 streaming 后端，"
+                    "[separation] separation/asr 仅支持 streaming 后端，"
                     "当前后端 %s 已跳过",
                     type(self.assigner).__name__,
                 )
             else:
                 from .separation import StreamingSegmentExporter
+
+                on_segment = None
+                if self.config.asr_enabled:
+                    from .asr import ASRWorker
+
+                    asr_worker = ASRWorker(
+                        self.config,
+                        uri or "unknown",
+                        str(self.config.output_dir_for_streaming),
+                    )
+                    on_segment = asr_worker.submit
 
                 exporter = StreamingSegmentExporter(
                     self.config,
@@ -188,6 +200,7 @@ class ChunkDiarizationPipeline:
                     self.assigner,
                     uri=uri or "unknown",
                     output_dir=str(self.config.output_dir_for_streaming),
+                    on_segment=on_segment,
                 )
 
         # save_embeddings 开启时收集全部带 embedding 的 observation。
@@ -253,6 +266,9 @@ class ChunkDiarizationPipeline:
         # 闭合 exporter 残余的 open segment（音频结束，与 writer.finalize 同步）。
         if exporter is not None:
             exporter.finalize()
+        # exporter 闭合完所有段后，等 ASR 队列消费完并落盘 transcript。
+        if asr_worker is not None:
+            asr_worker.finalize()
 
         if self.config.save_embeddings:
             self._save_embeddings(collected_observations, streaming_log_path)

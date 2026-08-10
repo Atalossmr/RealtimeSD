@@ -169,6 +169,25 @@ class ChunkPipelineConfig:
     # centroid：一律用全局质心，不受本 chunk 观测质量影响，更稳但分数偏低。
     separation_match_reference: str = "observation"
 
+    # ---- ASR 转写（Fun-ASR-Nano；依赖分段导出，仅 streaming 后端生效） ----
+    # 开启后构造 exporter 并把段推给 ASR worker（on_segment 回调），无重叠时
+    # 走纯切片路径、有重叠时仍走 TIGER 分离（与 separation_enabled 同链路）。
+    asr_enabled: bool = False
+    # Fun-ASR-Nano 模型：本地目录 / ModelScope id（缓存到 pretrained/modelscope）。
+    asr_model: str = "FunAudioLLM/Fun-ASR-Nano-2512"
+    # 长段窗切续写时 prev_text 的 token 预算（取本段已累计文本尾部）。
+    # 注意 prev_text 语义是"本段音频前缀的转写"，仅长段窗切内部使用；
+    # 跨段上下文不成立（文本与音频对不上时模型会判转写完成而提前 EOS）。
+    # 预算过大（prev 估计覆盖 ≥ 窗口音频总长）同样会提前 EOS；0 = 自动
+    # （≈ 窗口重叠时长 × 4 token/s，刚好覆盖重叠区）。
+    asr_prev_text_max_tokens: int = 0
+    # 超过该时长的段按窗口滑窗推理：每次推进（窗口 - 重叠）秒，
+    # prev = 本段已累计文本尾部（token 预算封顶），单次推理成本有界。
+    asr_max_segment_duration: float = 30.0
+    # 长段滑窗的重叠时长（秒）：窗口头部带这段已转写音频供 prev 对齐，
+    # 必须小于 asr_max_segment_duration。
+    asr_window_overlap: float = 10.0
+
     # ---- RTTM 输出 ----
     min_segment_duration: float = 0.30
     streaming_merge_gap: float = 0.25
@@ -334,6 +353,17 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
             _merged_value(args, "separation_match_reference", "observation")
         ),
         save_embeddings=bool(_merged_value(args, "save_embeddings", False)),
+        asr_enabled=bool(_merged_value(args, "asr_enabled", False)),
+        asr_model=str(
+            _merged_value(args, "asr_model", "FunAudioLLM/Fun-ASR-Nano-2512")
+        ),
+        asr_prev_text_max_tokens=int(
+            _merged_value(args, "asr_prev_text_max_tokens", 0)
+        ),
+        asr_max_segment_duration=float(
+            _merged_value(args, "asr_max_segment_duration", 30.0)
+        ),
+        asr_window_overlap=float(_merged_value(args, "asr_window_overlap", 10.0)),
         min_segment_duration=float(_merged_value(args, "min_segment_duration", 0.30)),
         streaming_merge_gap=float(_merged_value(args, "streaming_merge_gap", 0.25)),
         output_dir_for_streaming=_merged_value(args, "output_dir", None),
@@ -354,6 +384,15 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         raise ValueError(
             "separation_match_reference must be 'centroid' or 'observation', "
             f"got {config.separation_match_reference!r}"
+        )
+    if config.asr_prev_text_max_tokens < 0:
+        raise ValueError("asr_prev_text_max_tokens must be >= 0")
+    if config.asr_max_segment_duration <= 0.0:
+        raise ValueError("asr_max_segment_duration must be > 0")
+    if not 0.0 <= config.asr_window_overlap < config.asr_max_segment_duration:
+        raise ValueError(
+            "asr_window_overlap must be in [0, asr_max_segment_duration), "
+            f"got {config.asr_window_overlap!r}"
         )
 
     hf_cache_dir = _merged_value(args, "hf_cache_dir", None)

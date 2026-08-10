@@ -13,12 +13,12 @@ if [ -f ./.venv/bin/activate ]; then
     source ./.venv/bin/activate
 fi
 
-audio_input=${1:-./datasets/aishell4-test/}
+audio_input=${1:-./datasets/任务1-6/}
 config_path=${CONFIG_PATH:-./config/config.yaml}
 model_path=${MODEL_PATH:-}
 hf_token=${HF_TOKEN:-}
 hf_cache_dir=${HF_CACHE_DIR:-}
-ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/aishell4-test/rttm/}}
+ref_path=${REF_RTTM:-${REF_RTTM_DIR:-./datasets/任务1-6/rttm/}}
 debug_flag=${DEBUG:-1}
 show_rttm_flag=${SHOW_RTTM:-0}
 der_verbose_flag=${DER_VERBOSE:-1}
