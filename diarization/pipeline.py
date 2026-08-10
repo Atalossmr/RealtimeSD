@@ -167,11 +167,11 @@ class ChunkDiarizationPipeline:
             self.config.show_rttm,
         )
 
-        # 分段音频导出（接流式 ASR）：仅 streaming 后端下逐 commit 区生效。
-        # asr_enabled 时同样构造 exporter（ASR 的音频段来源），并把
-        # ASRWorker.submit 作为 on_segment 注入；TIGER 仍是按需惰性加载。
+        # 分段音频导出：仅 streaming 后端下逐 commit 区生效。
+        # asr_enabled 时同样构造 exporter（默认 WavSegmentSink 落盘 wav +
+        # manifest），转写由离线阶段 transcribe.py 读取输出目录独立完成；
+        # TIGER 仍是按需惰性加载。
         exporter = None
-        asr_worker = None
         if self.config.separation_enabled or self.config.asr_enabled:
             if self.assigner.deferred:
                 logger.warning(
@@ -182,17 +182,6 @@ class ChunkDiarizationPipeline:
             else:
                 from .separation import StreamingSegmentExporter
 
-                on_segment = None
-                if self.config.asr_enabled:
-                    from .asr import ASRWorker
-
-                    asr_worker = ASRWorker(
-                        self.config,
-                        uri or "unknown",
-                        str(self.config.output_dir_for_streaming),
-                    )
-                    on_segment = asr_worker.submit
-
                 exporter = StreamingSegmentExporter(
                     self.config,
                     waveform,
@@ -200,7 +189,6 @@ class ChunkDiarizationPipeline:
                     self.assigner,
                     uri=uri or "unknown",
                     output_dir=str(self.config.output_dir_for_streaming),
-                    on_segment=on_segment,
                 )
 
         # save_embeddings 开启时收集全部带 embedding 的 observation。
@@ -266,9 +254,6 @@ class ChunkDiarizationPipeline:
         # 闭合 exporter 残余的 open segment（音频结束，与 writer.finalize 同步）。
         if exporter is not None:
             exporter.finalize()
-        # exporter 闭合完所有段后，等 ASR 队列消费完并落盘 transcript。
-        if asr_worker is not None:
-            asr_worker.finalize()
 
         if self.config.save_embeddings:
             self._save_embeddings(collected_observations, streaming_log_path)

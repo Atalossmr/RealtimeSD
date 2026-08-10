@@ -18,12 +18,10 @@ from pathlib import Path
 
 import torch
 
-from ..constants import BASE_DIR
+from .constants import MODELSCOPE_CACHE_DIR
 
 
 logger = logging.getLogger(__name__)
-
-MODELSCOPE_CACHE_DIR = BASE_DIR / "pretrained" / "modelscope"
 
 
 def _resolve_model_path(model: str) -> str:
@@ -50,7 +48,8 @@ class FunASRNanoASR:
         self._tokenizer = None
 
     def _resolve_device(self) -> str:
-        device = str(self.config.device)
+        # asr_device 独立于 diarization 的 device，缺省跟随 device。
+        device = str(self.config.asr_device or self.config.device)
         if device == "auto":
             return "cuda:0" if torch.cuda.is_available() else "cpu"
         return device

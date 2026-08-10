@@ -45,9 +45,11 @@ separation_energy_ratio: 0.05
 separation_min_match_similarity: 0.10
 separation_match_reference: observation
 
-# ---- ASR 转写（Fun-ASR-Nano；依赖分段导出，仅 streaming 后端生效） ----
+# ---- ASR 转写（Fun-ASR-Nano；导出分段供离线 transcribe.py，仅 streaming 后端生效） ----
 asr_enabled: false
 asr_model: FunAudioLLM/Fun-ASR-Nano-2512
+# ASR 推理设备（如 cuda:0 / cpu），独立于上面的 device；缺省跟随 device
+asr_device:
 asr_prev_text_max_tokens: 0
 asr_max_segment_duration: 30.0
 asr_window_overlap: 10.0

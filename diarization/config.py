@@ -169,12 +169,17 @@ class ChunkPipelineConfig:
     # centroid：一律用全局质心，不受本 chunk 观测质量影响，更稳但分数偏低。
     separation_match_reference: str = "observation"
 
-    # ---- ASR 转写（Fun-ASR-Nano；依赖分段导出，仅 streaming 后端生效） ----
-    # 开启后构造 exporter 并把段推给 ASR worker（on_segment 回调），无重叠时
-    # 走纯切片路径、有重叠时仍走 TIGER 分离（与 separation_enabled 同链路）。
+    # ---- ASR 转写（Fun-ASR-Nano；离线阶段，依赖分段导出，仅 streaming 后端生效） ----
+    # 开启后构造 exporter 导出逐 speaker 音频段（wav + manifest，无重叠时
+    # 走纯切片路径、有重叠时仍走 TIGER 分离，与 separation_enabled 同链路）；
+    # pipeline 内不做 ASR，转写由离线入口 transcribe.py 读取输出目录独立完成。
     asr_enabled: bool = False
     # Fun-ASR-Nano 模型：本地目录 / ModelScope id（缓存到 pretrained/modelscope）。
     asr_model: str = "FunAudioLLM/Fun-ASR-Nano-2512"
+    # ASR 推理设备（如 cuda:0 / cpu），独立于 diarization 的 device：
+    # 跟随模式下两个进程可同时占卡，显存紧张时可把 ASR 单独放到别的卡或 CPU。
+    # 缺省（None）跟随 device。
+    asr_device: Optional[str] = None
     # 长段窗切续写时 prev_text 的 token 预算（取本段已累计文本尾部）。
     # 注意 prev_text 语义是"本段音频前缀的转写"，仅长段窗切内部使用；
     # 跨段上下文不成立（文本与音频对不上时模型会判转写完成而提前 EOS）。
@@ -357,6 +362,7 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         asr_model=str(
             _merged_value(args, "asr_model", "FunAudioLLM/Fun-ASR-Nano-2512")
         ),
+        asr_device=_merged_value(args, "asr_device", None),
         asr_prev_text_max_tokens=int(
             _merged_value(args, "asr_prev_text_max_tokens", 0)
         ),
