@@ -168,14 +168,13 @@ class ChunkDiarizationPipeline:
         )
 
         # 分段音频导出：仅 streaming 后端下逐 commit 区生效。
-        # asr_enabled 时同样构造 exporter（默认 WavSegmentSink 落盘 wav +
-        # manifest），转写由离线阶段 python -m asr.app 读取输出目录独立完成；
-        # TIGER 仍是按需惰性加载。
+        # 默认 WavSegmentSink 落盘 wav + manifest，转写由离线阶段
+        # python -m asr.app 读取输出目录独立完成；TIGER 仍是按需惰性加载。
         exporter = None
-        if self.config.separation_enabled or self.config.asr_enabled:
+        if self.config.separation_enabled:
             if self.assigner.deferred:
                 logger.warning(
-                    "[separation] separation/asr 仅支持 streaming 后端，"
+                    "[separation] separation 仅支持 streaming 后端，"
                     "当前后端 %s 已跳过",
                     type(self.assigner).__name__,
                 )

@@ -100,12 +100,10 @@ track 构造逻辑（`diarization/extract/track_builder.py`）：纯净帧 = 本
 
 ASR 是独立于 pipeline 的离线阶段，分两步：
 
-1. pipeline 侧（`config.yaml`）：`asr_enabled: true`（且
-   `clustering_backend: streaming`）时构造分段导出器（与 separation 同链路：
-   无重叠纯切片、有重叠 TIGER 分离），闭合的逐 speaker 音频段落盘为
+1. pipeline 侧（`config.yaml`）：`separation_enabled: true`（且
+   `clustering_backend: streaming`）时构造分段导出器（无重叠纯切片、有重叠
+   TIGER 分离，惰性加载），闭合的逐 speaker 音频段落盘为
    `segments/<uri>/*.wav` + `<uri>.segments.jsonl`，pipeline 内不做转写。
-   `asr_enabled` 不要求 `separation_enabled`（exporter 会随 ASR 一起构造），
-   但重叠区想拿到分离后的干净音轨仍需打开 `separation_enabled`。
 2. 转写侧（`asr.yaml`）：对输出目录跑转写入口，逐段转写并按 start 排序写
    `<uri>.transcript.jsonl`：
 
@@ -120,12 +118,6 @@ ASR 是独立于 pipeline 的离线阶段，分两步：
    转写调参项全部在 `config/asr.yaml`（不在 CLI 上，字段见 `asr/config.py`
    的 `AsrConfig`）。`python3 run.py ...` 默认即跟随模式：run.py 负责拉起
    ASR 进程、等待模型就绪后再启动管线，并在管线退出后落 done 哨兵。
-
-pipeline 侧（`config.yaml`）：
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `asr_enabled` | `false` | 是否导出分段音频供离线 ASR；离线转写不读此开关 |
 
 转写侧（`asr.yaml`）：
 

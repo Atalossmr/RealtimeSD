@@ -107,13 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _check_asr_config(config_path: Path) -> None:
-    """WITH_ASR 需要 config 里开启分段导出（asr_enabled 或 separation_enabled）。"""
+    """WITH_ASR 需要 config 里开启分段导出（separation_enabled）。"""
 
     with open(config_path, encoding="utf-8") as file_obj:
         data = yaml.safe_load(file_obj) or {}
-    if not (data.get("asr_enabled") or data.get("separation_enabled")):
+    if not data.get("separation_enabled"):
         raise SystemExit(
-            f"ERROR: ASR 跟随需要 {config_path} 中 asr_enabled 或 separation_enabled 为 true"
+            f"ERROR: ASR 跟随需要 {config_path} 中 separation_enabled 为 true"
         )
 
 

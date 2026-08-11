@@ -1,7 +1,7 @@
-# RealtimeSD 管线配置文件（全部调参项的唯一来源；逐项说明见本目录 README.md）
+# RealtimeSD diarization 管线配置（管线调参项的唯一来源；ASR 转写调参在 asr.yaml；逐项说明见本目录 README.md）
 
 # ---- 运行环境 ----
-device: cpu
+device: cuda
 hf_cache_dir: ./pretrained/huggingface
 
 # ---- extract 阶段：模型 ----
@@ -18,7 +18,7 @@ min_local_activity_duration: 0.30
 min_segment_duration_for_embedding: 0.30
 max_segment_duration_for_embedding: 4.0
 region_priority: commit
-segment_batch_size: 8
+segment_batch_size: 4
 
 # ---- cluster 阶段：后端选择与通用 ----
 clustering_backend: streaming
@@ -44,10 +44,6 @@ separation_model: JusperLee/TIGER-speech
 separation_energy_ratio: 0.05
 separation_min_match_similarity: 0.10
 separation_match_reference: observation
-
-# ---- 分段音频导出（供 python -m asr.app 转写；仅 streaming 后端生效） ----
-# 转写本身的调参（模型/设备/滑窗）已拆到 config/asr.yaml
-asr_enabled: true
 
 # ---- RTTM 输出 ----
 min_segment_duration: 0.30

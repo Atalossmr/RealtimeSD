@@ -1,6 +1,6 @@
 """ASR 转写 CLI 入口编排模块：读 exporter 输出目录的音频段 manifest，逐段转写并落盘。
 
-输入是 pipeline 分段导出（`asr_enabled` / `separation_enabled`）的产物：
+输入是 pipeline 分段导出（`separation_enabled`）的产物：
 
 - `{segments_dir}/{uri}.segments.jsonl`：逐行 {"uri", "speaker_id", "start",
   "end", "path"}；

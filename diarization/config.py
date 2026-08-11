@@ -150,8 +150,10 @@ class ChunkPipelineConfig:
     ahc_linkage: str = "average"
 
     # ---- 分段音频导出（接流式 ASR；仅 streaming 后端生效） ----
-    # 每个 commit 区检测重叠帧：无重叠直接按 speaker 切片输出；
-    # 有重叠则用 TIGER 分离整个 commit 区，能量门控 + embedding 匹配归属。
+    # 开启后构造 exporter 导出逐 speaker 音频段（wav + manifest）：每个 commit
+    # 区检测重叠帧，无重叠直接按 speaker 切片输出，有重叠则用 TIGER 分离整个
+    # commit 区（能量门控 + embedding 匹配归属）。pipeline 内不做 ASR，转写由
+    # python -m asr.app 读取输出目录独立完成，转写调参项在 config/asr.yaml。
     separation_enabled: bool = False
     # TIGER 分离模型（Hugging Face，固定 2 路输出、16kHz）。
     separation_model: str = "JusperLee/TIGER-speech"
@@ -168,13 +170,6 @@ class ChunkPipelineConfig:
     #   域最接近（按 assigner 契约，候选 speaker 在本 chunk 必有观测）；
     # centroid：一律用全局质心，不受本 chunk 观测质量影响，更稳但分数偏低。
     separation_match_reference: str = "observation"
-
-    # ---- 分段音频导出（供 ASR 离线转写；仅 streaming 后端生效） ----
-    # 开启后构造 exporter 导出逐 speaker 音频段（wav + manifest，无重叠时
-    # 走纯切片路径、有重叠时仍走 TIGER 分离，与 separation_enabled 同链路）；
-    # pipeline 内不做 ASR，转写由 python -m asr.app 读取输出目录独立完成，
-    # 转写调参项在 config/asr.yaml（asr/config.py 的 AsrConfig）。
-    asr_enabled: bool = False
 
     # ---- RTTM 输出 ----
     min_segment_duration: float = 0.30
@@ -341,7 +336,6 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
             _merged_value(args, "separation_match_reference", "observation")
         ),
         save_embeddings=bool(_merged_value(args, "save_embeddings", False)),
-        asr_enabled=bool(_merged_value(args, "asr_enabled", False)),
         min_segment_duration=float(_merged_value(args, "min_segment_duration", 0.30)),
         streaming_merge_gap=float(_merged_value(args, "streaming_merge_gap", 0.25)),
         output_dir_for_streaming=_merged_value(args, "output_dir", None),
