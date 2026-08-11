@@ -1,9 +1,12 @@
 # 配置参数说明
 
-`config.yaml` 是全部调参项的唯一来源；CLI 仅保留运行时输入（`--wav` /
-`--output_dir` / `--config`）、模型/环境参数与 `--debug` / `--verbose` /
-`--show_rttm` 开关。YAML 键名会校验：合法键 = `ChunkPipelineConfig` 字段名
-∪ CLI 参数名，写错键名会直接报错。
+`config.yaml` 是 diarization 管线全部调参项的唯一来源；CLI 仅保留运行时输入
+（`--wav` / `--output_dir` / `--config`）、模型/环境参数与 `--debug` /
+`--verbose` / `--show_rttm` 开关。YAML 键名会校验：合法键 =
+`ChunkPipelineConfig` 字段名 ∪ CLI 参数名，写错键名会直接报错。
+
+ASR 转写的调参项已拆到独立的 `asr.yaml`（`python3 -m asr.app` 读取，
+字段定义见 `asr/config.py` 的 `AsrConfig`），说明见文末"ASR 转写"一节。
 
 参数按模块分组，与 `diarization/config.py` 的 `ChunkPipelineConfig` 字段一一对应。
 
@@ -97,35 +100,43 @@ track 构造逻辑（`diarization/extract/track_builder.py`）：纯净帧 = 本
 
 ASR 是独立于 pipeline 的离线阶段，分两步：
 
-1. pipeline 侧：`asr_enabled: true`（且 `clustering_backend: streaming`）时构造
-   分段导出器（与 separation 同链路：无重叠纯切片、有重叠 TIGER 分离），
-   闭合的逐 speaker 音频段落盘为 `segments/<uri>/*.wav` + `<uri>.segments.jsonl`，
-   pipeline 内不做转写。`asr_enabled` 不要求 `separation_enabled`（exporter
-   会随 ASR 一起构造），但重叠区想拿到分离后的干净音轨仍需打开
-   `separation_enabled`。
-2. 转写侧：对输出目录跑转写入口，逐段转写并按 start 排序写
+1. pipeline 侧（`config.yaml`）：`asr_enabled: true`（且
+   `clustering_backend: streaming`）时构造分段导出器（与 separation 同链路：
+   无重叠纯切片、有重叠 TIGER 分离），闭合的逐 speaker 音频段落盘为
+   `segments/<uri>/*.wav` + `<uri>.segments.jsonl`，pipeline 内不做转写。
+   `asr_enabled` 不要求 `separation_enabled`（exporter 会随 ASR 一起构造），
+   但重叠区想拿到分离后的干净音轨仍需打开 `separation_enabled`。
+2. 转写侧（`asr.yaml`）：对输出目录跑转写入口，逐段转写并按 start 排序写
    `<uri>.transcript.jsonl`：
 
    ```bash
    # 一次性：管线结束后整体转写
-   python3 -m asr.app --segments_dir <exp_dir> --config config/config.yaml
+   python3 -m asr.app --segments_dir <exp_dir> --config config/asr.yaml
    # 跟随：与管线同时启动，新段即出即转，done 哨兵出现后收尾
-   python3 -m asr.app --segments_dir <exp_dir> --config config/config.yaml \
+   python3 -m asr.app --segments_dir <exp_dir> --config config/asr.yaml \
        --follow --done_file <exp_dir>/.diarization_done
    ```
 
-   asr_* 参数同样从该 YAML 读取（调参项不在 CLI 上）。
-   `python3 run.py ...` 默认即跟随模式：run.py 负责拉起 ASR 进程、等待模型
-   就绪后再启动管线，并在管线退出后落 done 哨兵。
+   转写调参项全部在 `config/asr.yaml`（不在 CLI 上，字段见 `asr/config.py`
+   的 `AsrConfig`）。`python3 run.py ...` 默认即跟随模式：run.py 负责拉起
+   ASR 进程、等待模型就绪后再启动管线，并在管线退出后落 done 哨兵。
+
+pipeline 侧（`config.yaml`）：
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `asr_enabled` | `false` | 是否导出分段音频供离线 ASR（pipeline 侧）；离线转写不读此开关 |
-| `asr_model` | `FunAudioLLM/Fun-ASR-Nano-2512` | ASR 模型：本地目录 / ModelScope id（下载缓存到 `pretrained/modelscope`） |
-| `asr_device` | 空 | ASR 推理设备（如 `cuda:0` / `cpu`），独立于 diarization 的 `device`：跟随模式下两进程同时占卡，显存紧张时可将 ASR 单独放到其他卡或 CPU；缺省跟随 `device` |
-| `asr_prev_text_max_tokens` | `0` | 长段窗切续写时 prev_text 的 token 预算（取本段已累计文本尾部）。`0` = 自动（≈ `asr_window_overlap` × 4 token/s，刚好覆盖重叠区）。prev_text 语义是"本段音频前缀的转写"，仅长段窗切内部使用——跨段上下文不成立（文本与音频对不上时模型判转写完成而提前 EOS）；预算也不要手动调大：prev 估计覆盖 ≥ 窗口音频总长时同样提前 EOS（均实测确认） |
-| `asr_max_segment_duration` | `30.0` | 长段滑窗的窗口总长（秒）。超过该时长的段按窗口滑窗推理，每次推进（窗口 − 重叠）秒，单次推理成本有界 |
-| `asr_window_overlap` | `10.0` | 长段滑窗的重叠时长（秒）：窗口头部带这段已转写音频供 prev 尾部对齐，模型跳过重叠区只续写新内容；必须小于 `asr_max_segment_duration` |
+| `asr_enabled` | `false` | 是否导出分段音频供离线 ASR；离线转写不读此开关 |
+
+转写侧（`asr.yaml`）：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `sample_rate` | `16000` | 输入音频段的采样率，须与 pipeline 的 `sample_rate` 一致 |
+| `device` | `auto`（YAML 生效值 `cuda`） | ASR 推理设备，独立于 diarization 的 `device`：跟随模式下两进程同时占卡，显存紧张时可将 ASR 单独放到其他卡或 CPU |
+| `model` | `FunAudioLLM/Fun-ASR-Nano-2512` | ASR 模型：本地目录 / ModelScope id（下载缓存到 `pretrained/modelscope`；缓存目录需含 `model.pt` + 配置才算命中，否则回退下载） |
+| `prev_text_max_tokens` | `0` | 长段窗切续写时 prev_text 的 token 预算（取本段已累计文本尾部）。`0` = 自动（≈ `window_overlap` × 4 token/s，刚好覆盖重叠区）。prev_text 语义是"本段音频前缀的转写"，仅长段窗切内部使用——跨段上下文不成立（文本与音频对不上时模型判转写完成而提前 EOS）；预算也不要手动调大：prev 估计覆盖 ≥ 窗口音频总长时同样提前 EOS（均实测确认） |
+| `max_segment_duration` | `30.0` | 长段滑窗的窗口总长（秒）。超过该时长的段按窗口滑窗推理，每次推进（窗口 − 重叠）秒，单次推理成本有界 |
+| `window_overlap` | `10.0` | 长段滑窗的重叠时长（秒）：窗口头部带这段已转写音频供 prev 尾部对齐，模型跳过重叠区只续写新内容；必须小于 `max_segment_duration` |
 
 ## RTTM 输出
 

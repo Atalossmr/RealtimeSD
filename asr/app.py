@@ -12,16 +12,17 @@
   已有的全部段即落盘返回；
 - 跟随（`--follow --done_file <path>`）：与管线同时启动，轮询 manifest 增量
   读取新追加的段、即出即转（manifest 行在 wav 落盘之后才追加，读到行即
-  可读音频）；done 哨兵文件出现且积压清空后，统一落盘并退出。
+  可读音频）；每轮把有新结果的 uri 重写落盘（供 viewer 实时展示），done
+  哨兵文件出现且积压清空后做最后一次落盘并退出。
 
 输出：`{uri}.transcript.jsonl`（按 start 排序）。
 
 用法：
 
     # 管线结束后一次性转写
-    python3 -m asr.app --segments_dir exp/common/default --config config/config.yaml
+    python3 -m asr.app --segments_dir exp/common/default --config config/asr.yaml
     # 与管线同时启动，跟随转写
-    python3 -m asr.app --segments_dir exp/common/default --config config/config.yaml \
+    python3 -m asr.app --segments_dir exp/common/default --config config/asr.yaml \
         --follow --done_file exp/common/default/.diarization_done
 """
 
@@ -35,14 +36,13 @@ from pathlib import Path
 
 import torchaudio
 
-from diarization.config import (
+from .config import (
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
 )
-from diarization.utils import setup_logger
-
 from .transcriber import SegmentTranscriber
+from .utils import setup_logger
 
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,8 @@ def consume_segments_dir(
     两种模式只是终止条件不同，全量读 = offset 全从 0 开始的第一轮增量读：
 
     - 一次性（done_file=None）：单遍消费当前已有段即退出；
-    - 跟随（done_file 给定）：轮询直到哨兵出现且本轮无新段（积压清空）。
+    - 跟随（done_file 给定）：轮询直到哨兵出现且本轮无新段（积压清空），
+      每轮把有新结果的 uri 即时重写落盘（供 viewer 实时读取）。
 
     退出后按 uri 统一落盘 transcript。
     """
@@ -152,6 +153,7 @@ def consume_segments_dir(
     results_by_uri: dict[str, list[tuple[float, float, int, str]]] = {}
     while True:
         progressed = False
+        dirty_uris: set[str] = set()
         for manifest_path in sorted(segments_dir.glob(f"*{_MANIFEST_SUFFIX}")):
             uri = manifest_path.name[: -len(_MANIFEST_SUFFIX)]
             entries, new_offset = _read_new_entries(
@@ -162,6 +164,13 @@ def consume_segments_dir(
             for entry in entries:
                 _transcribe_entry(config, transcriber, entry, results)
                 progressed = True
+                dirty_uris.add(uri)
+        # 跟随模式即出即写：每轮把有新结果的 uri 重写落盘（文件小、幂等），
+        # 供 viewer 等消费者在管线运行期间实时读取；退出前的统一落盘只是
+        # 最后一次重写。
+        if done_file is not None:
+            for uri in dirty_uris:
+                _write_transcript(uri, results_by_uri[uri], output_dir)
         if done_file is None:
             break
         # 哨兵出现 = 管线已结束，不会再有新段；本轮无进展说明积压已清空。
@@ -181,7 +190,6 @@ def main() -> None:
     """CLI 入口。"""
 
     parser = build_arg_parser()
-    parser.description = "exporter 音频段目录的离线/跟随 ASR 转写"
     parser.add_argument(
         "--segments_dir",
         required=True,

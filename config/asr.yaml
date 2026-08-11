@@ -1,0 +1,16 @@
+# ASR 转写配置（python -m asr.app 的唯一调参来源；独立于 diarization 的 config.yaml）
+# 分段音频的导出开关在 config/config.yaml（asr_enabled / separation_enabled），本文件只管转写。
+
+# 输入音频段的采样率（须与 pipeline 的 sample_rate 一致）
+sample_rate: 16000
+# ASR 推理设备（auto/cuda:0/cpu 等）；跟随模式下与 diarization 同时占卡，
+# 显存紧张时可单独放到别的卡或 CPU
+device: cuda
+# Fun-ASR-Nano 模型：本地目录 / ModelScope id（下载缓存到 pretrained/modelscope）
+model: FunAudioLLM/Fun-ASR-Nano-2512
+# 长段窗切续写时 prev_text 的 token 预算；0 = 自动（≈ window_overlap × 4 token/s）
+prev_text_max_tokens: 0
+# 长段滑窗的窗口总长（秒）：超过该时长的段按窗口滑窗推理
+max_segment_duration: 30.0
+# 长段滑窗的重叠时长（秒），必须小于 max_segment_duration
+window_overlap: 10.0

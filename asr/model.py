@@ -24,6 +24,14 @@ from .constants import MODELSCOPE_CACHE_DIR
 logger = logging.getLogger(__name__)
 
 
+def _is_complete_model_dir(path: Path) -> bool:
+    """模型目录完整性检查：权重 + 配置齐全才算命中（防止半成品缓存被当作可用）。"""
+
+    return (path / "model.pt").is_file() and (
+        (path / "config.yaml").is_file() or (path / "configuration.json").is_file()
+    )
+
+
 def _resolve_model_path(model: str) -> str:
     """把模型标识解析为本地路径：本地目录 > 仓库缓存 > ModelScope 下载。"""
 
@@ -31,7 +39,13 @@ def _resolve_model_path(model: str) -> str:
         return model
     cached = MODELSCOPE_CACHE_DIR / model
     if cached.is_dir():
-        return str(cached)
+        if _is_complete_model_dir(cached):
+            return str(cached)
+        logger.warning(
+            "[asr] cached model dir %s is incomplete (need model.pt + config), "
+            "falling back to download",
+            cached,
+        )
     logger.info("[asr] downloading model %s to %s", model, MODELSCOPE_CACHE_DIR)
     from modelscope.hub.snapshot_download import snapshot_download
 
@@ -48,8 +62,7 @@ class FunASRNanoASR:
         self._tokenizer = None
 
     def _resolve_device(self) -> str:
-        # asr_device 独立于 diarization 的 device，缺省跟随 device。
-        device = str(self.config.asr_device or self.config.device)
+        device = str(self.config.device)
         if device == "auto":
             return "cuda:0" if torch.cuda.is_available() else "cpu"
         return device
@@ -57,7 +70,7 @@ class FunASRNanoASR:
     def _load(self) -> None:
         from funasr.models.fun_asr_nano.model import FunASRNano
 
-        model_path = _resolve_model_path(str(self.config.asr_model))
+        model_path = _resolve_model_path(str(self.config.model))
         device = self._resolve_device()
         logger.info(
             "[asr] loading Fun-ASR-Nano from %s (device=%s)", model_path, device

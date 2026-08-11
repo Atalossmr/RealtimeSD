@@ -156,6 +156,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     "uri": uri,
                     "transcript_url": f"/api/transcript/{uri}",
                     "audio_url": f"/api/audio/{uri}" if s["audio"] else None,
+                    # 跟随模式下 done 哨兵未出现 = 管线/ASR 仍在运行，
+                    # transcript 还会增量增长，前端据此持续轮询。
+                    "live": not (
+                        s["transcript"].parent / ".diarization_done"
+                    ).exists(),
                 }
                 for uri, s in sorted(self.index.sessions.items())
             ])

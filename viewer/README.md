@@ -3,6 +3,11 @@
 展示管线产物 `{uri}.transcript.jsonl`（`asr/app.py` 落盘）与原始整段音频：
 波形 + 按说话人着色的时间线 + 同步高亮的转写列表。零第三方依赖。
 
+**实时模式**：与管线同时启动时（`run.py` 默认行为），ASR follow 进程每轮
+把新转写结果即时落盘，页面每 2s 轮询增量刷新——时间线随管线运行逐段
+生长，顶栏 `● LIVE` 亮起表示仍在运行；管线结束（`.diarization_done` 哨兵
+出现）后 LIVE 熄灭，结果为最终完整版。
+
 ## 服务器模式（推荐）
 
 ```bash
@@ -18,7 +23,7 @@ python3 viewer/server.py --exp_root exp --audio_root datasets --port 8000
 ## 静态模式（无服务器）
 
 直接用浏览器打开 `viewer/static/index.html`，手动选择音频文件和
-`*.transcript.jsonl` 文件即可。
+`*.transcript.jsonl` 文件即可（静态模式无实时刷新）。
 
 ## 页面操作
 

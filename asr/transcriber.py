@@ -4,7 +4,7 @@
 
 - 段独立转写，不跨段传 prev_text（实测：prev_text 语义是"本段音频前缀
   的转写"，跨段文本与音频对不上时模型会判转写完成而提前 EOS）；
-- 超过 asr_max_segment_duration 的长段按固定窗口 + asr_window_overlap
+- 超过 max_segment_duration 的长段按固定窗口 + window_overlap
   重叠滑窗推理：每片 prev = 本段已累计文本尾部（token 预算封顶），模型
   把 prev 尾部与窗口重叠区对齐、只续写新内容，单次推理成本有界；拼接处
   做后缀-前缀去重兜底。
@@ -39,7 +39,7 @@ class SegmentTranscriber:
         """转写一段音频 [1, T]（16k 单声道），返回文本（空串表示无内容）。"""
 
         duration = waveform.shape[1] / self.sample_rate
-        if duration <= float(self.config.asr_max_segment_duration):
+        if duration <= float(self.config.max_segment_duration):
             return self._asr.transcribe(waveform).strip()
         return self._transcribe_long(waveform).strip()
 
@@ -62,14 +62,14 @@ class SegmentTranscriber:
         overlap 秒的已转写前缀。
         """
 
-        window = int(float(self.config.asr_max_segment_duration) * self.sample_rate)
-        overlap = int(float(self.config.asr_window_overlap) * self.sample_rate)
+        window = int(float(self.config.max_segment_duration) * self.sample_rate)
+        overlap = int(float(self.config.window_overlap) * self.sample_rate)
         step = window - overlap  # 每次推进的新增音频（采样点）
         if step <= 0:
             raise ValueError(
-                "asr_window_overlap must be smaller than asr_max_segment_duration"
+                "window_overlap must be smaller than max_segment_duration"
             )
-        budget = int(self.config.asr_prev_text_max_tokens)
+        budget = int(self.config.prev_text_max_tokens)
         if budget <= 0:
             # 自动预算：prev 只需覆盖窗口头部的 overlap 区，按中文会话
             # ~4 token/s 估计。预算过大（prev 估计覆盖 ≥ 窗口音频总长）

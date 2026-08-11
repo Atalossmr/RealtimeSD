@@ -45,13 +45,9 @@ separation_energy_ratio: 0.05
 separation_min_match_similarity: 0.10
 separation_match_reference: observation
 
-# ---- ASR 转写（Fun-ASR-Nano；导出分段供 python -m asr.app 离线转写，仅 streaming 后端生效） ----
+# ---- 分段音频导出（供 python -m asr.app 转写；仅 streaming 后端生效） ----
+# 转写本身的调参（模型/设备/滑窗）已拆到 config/asr.yaml
 asr_enabled: true
-asr_model: FunAudioLLM/Fun-ASR-Nano-2512
-asr_device: cuda
-asr_prev_text_max_tokens: 0
-asr_max_segment_duration: 30.0
-asr_window_overlap: 10.0
 
 # ---- RTTM 输出 ----
 min_segment_duration: 0.30

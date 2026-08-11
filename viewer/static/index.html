@@ -56,6 +56,9 @@
   }
   .file-label:hover { border-color: var(--accent); color: var(--text); }
   audio { width: 320px; height: 32px; }
+  #liveBadge { color: #56d4a0; font-weight: 600; font-size: 12px;
+    animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
 </style>
 </head>
 <body>
@@ -67,6 +70,7 @@
   </span>
   <audio id="player" controls></audio>
   <button id="fitBtn" title="重置缩放">适配全段</button>
+  <span id="liveBadge" hidden>● LIVE</span>
   <span id="speakers"></span>
 </div>
 <div id="stage">
@@ -107,27 +111,103 @@ const fmtTime = t => {
   return h ? `${h}:${base}` : base;
 };
 
-// ---------- 数据加载 ----------
+// ---------- 数据加载（服务器模式：轮询增量刷新，跟随管线实时更新） ----------
+const POLL_INTERVAL = 2000;
+const liveBadge = document.getElementById("liveBadge");
+
+function setLiveBadge(live) { liveBadge.hidden = !live; }
+
+// 用最新的会话列表刷新下拉框（新增会话、audio/live 状态变化），保留当前选择
+function updateSessionSelect(sessions) {
+  const select = document.getElementById("sessionSelect");
+  for (const s of sessions) {
+    let opt = select.querySelector(`option[value="${CSS.escape(s.uri)}"]`);
+    if (!opt) {
+      opt = document.createElement("option");
+      opt.value = s.uri;
+      select.appendChild(opt);
+    }
+    opt.textContent = s.uri + (s.audio_url ? "" : "（无匹配音频）");
+    opt.dataset.audioUrl = s.audio_url || "";
+    opt.dataset.live = s.live ? "1" : "";
+  }
+  select.hidden = select.options.length === 0;
+  if (!select.value && select.options.length) {
+    select.selectedIndex = 0;
+    loadServerSession(select.value);
+  }
+}
+
 async function loadServerSessions() {
   try {
     const resp = await fetch("/api/sessions");
     if (!resp.ok) return false;
     const sessions = await resp.json();
-    if (!sessions.length) return false;
     const select = document.getElementById("sessionSelect");
-    select.innerHTML = "";
-    for (const s of sessions) {
-      const opt = document.createElement("option");
-      opt.value = s.uri;
-      opt.textContent = s.uri + (s.audio_url ? "" : "（无匹配音频）");
-      opt.dataset.audioUrl = s.audio_url || "";
-      select.appendChild(opt);
-    }
-    select.hidden = false;
+    updateSessionSelect(sessions);
     select.onchange = () => loadServerSession(select.value);
-    await loadServerSession(select.value);
+    if (select.value) {
+      await loadServerSession(select.value);
+    } else {
+      statusEl.textContent = "等待管线产出…";
+    }
+    setTimeout(pollUpdate, POLL_INTERVAL);
     return true;
   } catch { return false; } // file:// 打开时 fetch 必失败 → 静态模式
+}
+
+function currentOption() {
+  const select = document.getElementById("sessionSelect");
+  return select.value
+    ? select.querySelector(`option[value="${CSS.escape(select.value)}"]`)
+    : null;
+}
+
+async function pollUpdate() {
+  try {
+    const resp = await fetch("/api/sessions");
+    if (resp.ok) {
+      const sessions = await resp.json();
+      updateSessionSelect(sessions);
+      const opt = currentOption();
+      if (opt) {
+        // 音频可能晚于 transcript 被匹配到，出现后补挂
+        if (opt.dataset.audioUrl && !player.getAttribute("src")) {
+          player.src = opt.dataset.audioUrl;
+        }
+        const tResp = await fetch(
+          `/api/transcript/${encodeURIComponent(opt.value)}`);
+        if (tResp.ok) {
+          const segments = await tResp.json();
+          if (segments.length !== state.segments.length) mergeSegments(segments);
+        }
+        setLiveBadge(opt.dataset.live === "1");
+      }
+    }
+  } catch { /* 服务器暂时不可达，下轮重试 */ }
+  setTimeout(pollUpdate, POLL_INTERVAL);
+}
+
+// 增量合并新的转写结果（跟随落盘是全量排序重写，旧段通常是新段的前缀）
+function mergeSegments(segments) {
+  const old = state.segments;
+  const isPrefix = old.every((s, i) => {
+    const n = segments[i];
+    return n && n.start === s.start && n.end === s.end
+      && n.speaker_id === s.speaker_id;
+  });
+  const knownSpeakers = new Set(state.speakerVisible.keys());
+  const hasNewSpeaker = segments.some(s => !knownSpeakers.has(s.speaker_id));
+  state.segments = segments;
+  if (hasNewSpeaker) buildSpeakerChips(); // 新说话人需要补 chip（保留已有可见性）
+  if (isPrefix && !hasNewSpeaker) {
+    for (let i = old.length; i < segments.length; i++) {
+      appendTranscriptRow(segments[i], i);
+    }
+  } else {
+    renderTranscript();
+  }
+  statusEl.textContent = `${state.uri}: ${segments.length} 段`;
 }
 
 async function loadServerSession(uri) {
@@ -137,6 +217,7 @@ async function loadServerSession(uri) {
   const resp = await fetch(`/api/transcript/${encodeURIComponent(uri)}`);
   const segments = await resp.json();
   const audioUrl = opt && opt.dataset.audioUrl;
+  setLiveBadge(opt && opt.dataset.live === "1");
   setSession(uri, segments, audioUrl || null);
 }
 
@@ -144,6 +225,7 @@ function setSession(uri, segments, audioUrl) {
   state.uri = uri;
   state.segments = segments;
   state.activeIdx = -1;
+  state.speakerVisible = new Map(); // 切换会话时重置说话人可见性
   buildSpeakerChips();
   renderTranscript();
   if (audioUrl) {
@@ -374,12 +456,16 @@ function draw() {
 // ---------- 说话人筛选 ----------
 function buildSpeakerChips() {
   const ids = [...new Set(state.segments.map(s => s.speaker_id))].sort((a, b) => a - b);
-  state.speakerVisible = new Map(ids.map(id => [id, true]));
+  // 保留已有可见性设置（增量刷新时新说话人默认可见，旧设置不丢）
+  state.speakerVisible = new Map(
+    ids.map(id => [id, state.speakerVisible.get(id) !== false])
+  );
   const box = document.getElementById("speakers");
   box.innerHTML = "";
   for (const id of ids) {
     const chip = document.createElement("span");
     chip.className = "spk-chip";
+    if (state.speakerVisible.get(id) === false) chip.classList.add("off");
     chip.innerHTML = `<span class="spk-dot" style="background:${spkColor(id)}"></span>spk${id}`;
     chip.onclick = () => {
       state.speakerVisible.set(id, !state.speakerVisible.get(id));
@@ -391,20 +477,22 @@ function buildSpeakerChips() {
 }
 
 // ---------- 转写列表 ----------
+function appendTranscriptRow(s, i) {
+  if (state.speakerVisible.get(s.speaker_id) === false) return;
+  const row = document.createElement("div");
+  row.className = "seg"; row.dataset.idx = i;
+  row.innerHTML =
+    `<span class="time">${fmtTime(s.start)} - ${fmtTime(s.end)}</span>` +
+    `<span class="spk" style="color:${spkColor(s.speaker_id)}">spk${s.speaker_id}</span>` +
+    `<span></span>`;
+  row.lastChild.textContent = s.text;
+  row.onclick = () => { player.currentTime = s.start + 1e-3; player.play().catch(() => {}); };
+  transcriptEl.appendChild(row);
+}
+
 function renderTranscript() {
   transcriptEl.innerHTML = "";
-  state.segments.forEach((s, i) => {
-    if (state.speakerVisible.get(s.speaker_id) === false) return;
-    const row = document.createElement("div");
-    row.className = "seg"; row.dataset.idx = i;
-    row.innerHTML =
-      `<span class="time">${fmtTime(s.start)} - ${fmtTime(s.end)}</span>` +
-      `<span class="spk" style="color:${spkColor(s.speaker_id)}">spk${s.speaker_id}</span>` +
-      `<span></span>`;
-    row.lastChild.textContent = s.text;
-    row.onclick = () => { player.currentTime = s.start + 1e-3; player.play().catch(() => {}); };
-    transcriptEl.appendChild(row);
-  });
+  state.segments.forEach((s, i) => appendTranscriptRow(s, i));
 }
 
 function syncActiveRow() {

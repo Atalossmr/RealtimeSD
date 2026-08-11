@@ -16,6 +16,7 @@
     HF_CACHE_DIR    → --hf_cache_dir  DEBUG=1      → --debug
     SHOW_RTTM=1     → --show_rttm     OUTPUT_ROOT  → --output_root
     RUN_NAME        → --run_name      VIEWER_PORT  → --viewer_port
+    ASR_CONFIG_PATH → --asr_config
 
 用法：
 
@@ -60,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config", default=os.environ.get("CONFIG_PATH", "./config/config.yaml")
+    )
+    parser.add_argument(
+        "--asr_config",
+        default=os.environ.get("ASR_CONFIG_PATH", "./config/asr.yaml"),
+        help="ASR 转写的 YAML 配置（传给 python -m asr.app）",
     )
     parser.add_argument("--output_root", default=os.environ.get("OUTPUT_ROOT", "./exp"))
     parser.add_argument("--run_name", default=os.environ.get("RUN_NAME", "default"))
@@ -198,7 +204,7 @@ def main() -> int:
         "--segments_dir",
         str(exp_dir),
         "--config",
-        str(config_path),
+        str(args.asr_config),
         "--follow",
         "--done_file",
         str(done_file),

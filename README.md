@@ -7,7 +7,7 @@
 ## 项目内容
 
 - 入口：`python3 -m diarization.app`（端到端）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）
-- 配置文件：`config/config.yaml`
+- 配置文件：`config/config.yaml`（diarization）、`config/asr.yaml`（ASR 转写）
 - 管线实现：`diarization/`
 - 运行脚本：`run.py`（一键编排：ASR 先就绪，再启管线与 viewer）、`test_der.py`
 - DER 评估：`tools/compute_der.py`
@@ -135,6 +135,7 @@ python3 test_der.py ./datasets/aishell4-test
 - `DEBUG`
 - `SHOW_RTTM`
 - `WITH_ASR`（=0 时不启动 ASR 跟随进程）
+- `ASR_CONFIG_PATH`（ASR 转写配置，默认 `./config/asr.yaml`）
 - `WITH_VIEWER`（=0 时不启动结果可视化服务器）
 - `VIEWER_PORT`（默认 8000）
 - `REF_RTTM`
