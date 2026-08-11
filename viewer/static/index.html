@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>RealtimeSD · ASR 结果时间线</title>
+<style>
+  :root {
+    --bg: #1e1f24; --panel: #26272e; --border: #3a3b44;
+    --text: #e6e6ea; --dim: #9a9ba5; --accent: #4f9cf9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #topbar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  #topbar select, #topbar button {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font: inherit;
+  }
+  #topbar button { cursor: pointer; }
+  #topbar button:hover { border-color: var(--accent); }
+  #speakers { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .spk-chip {
+    display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+    padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border);
+    user-select: none; font-size: 12px;
+  }
+  .spk-chip.off { opacity: 0.35; }
+  .spk-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  #stage { position: relative; padding: 8px 12px 0; }
+  #timeline { width: 100%; height: 220px; display: block; cursor: crosshair;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
+  #tooltip {
+    position: fixed; display: none; pointer-events: none; z-index: 10;
+    background: #111; border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 8px; font-size: 12px; max-width: 420px; color: var(--text);
+  }
+  #status { color: var(--dim); font-size: 12px; padding: 4px 12px; }
+  #transcript { overflow-y: auto; height: calc(100vh - 330px); padding: 0 12px 12px; }
+  .seg {
+    padding: 6px 8px; border-radius: 4px; cursor: pointer; display: flex; gap: 8px;
+    border-left: 3px solid transparent;
+  }
+  .seg:hover { background: var(--panel); }
+  .seg.active { background: var(--panel); border-left-color: var(--accent); }
+  .seg .time { color: var(--dim); font-family: ui-monospace, monospace; font-size: 12px;
+    white-space: nowrap; padding-top: 1px; }
+  .seg .spk { font-weight: 600; white-space: nowrap; }
+  .file-label {
+    border: 1px dashed var(--border); border-radius: 4px; padding: 4px 8px;
+    cursor: pointer; color: var(--dim);
+  }
+  .file-label:hover { border-color: var(--accent); color: var(--text); }
+  audio { width: 320px; height: 32px; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <select id="sessionSelect" hidden></select>
+  <span id="fileMode">
+    <label class="file-label">选择音频…<input type="file" id="audioFile" accept="audio/*" hidden></label>
+    <label class="file-label">选择 transcript.jsonl…<input type="file" id="transcriptFile" accept=".jsonl" hidden></label>
+  </span>
+  <audio id="player" controls></audio>
+  <button id="fitBtn" title="重置缩放">适配全段</button>
+  <span id="speakers"></span>
+</div>
+<div id="stage">
+  <canvas id="timeline"></canvas>
+  <div id="status">加载中…</div>
+</div>
+<div id="transcript"></div>
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+
+// ---------- 全局状态 ----------
+const state = {
+  uri: null,
+  segments: [],            // [{speaker_id, start, end, text}]
+  duration: 0,             // 音频总时长（秒）
+  viewStart: 0, viewEnd: 0, // 当前可视时间窗（秒）
+  peaks: null,             // 波形 min/max 桶
+  speakerVisible: new Map(),
+  activeIdx: -1,
+};
+
+const PALETTE = ["#4f9cf9","#f97583","#56d4a0","#e3b341","#b083f0","#ff9f43",
+                 "#39c5cf","#f778ba","#7ee787","#ffa657","#76a8ff","#d2a8ff"];
+
+const player = document.getElementById("player");
+const canvas = document.getElementById("timeline");
+const ctx = canvas.getContext("2d");
+const tooltip = document.getElementById("tooltip");
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+
+const spkColor = id => PALETTE[id % PALETTE.length];
+const fmtTime = t => {
+  const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
+  const base = `${String(m).padStart(2,"0")}:${s.toFixed(3).padStart(6,"0")}`;
+  return h ? `${h}:${base}` : base;
+};
+
+// ---------- 数据加载 ----------
+async function loadServerSessions() {
+  try {
+    const resp = await fetch("/api/sessions");
+    if (!resp.ok) return false;
+    const sessions = await resp.json();
+    if (!sessions.length) return false;
+    const select = document.getElementById("sessionSelect");
+    select.innerHTML = "";
+    for (const s of sessions) {
+      const opt = document.createElement("option");
+      opt.value = s.uri;
+      opt.textContent = s.uri + (s.audio_url ? "" : "（无匹配音频）");
+      opt.dataset.audioUrl = s.audio_url || "";
+      select.appendChild(opt);
+    }
+    select.hidden = false;
+    select.onchange = () => loadServerSession(select.value);
+    await loadServerSession(select.value);
+    return true;
+  } catch { return false; } // file:// 打开时 fetch 必失败 → 静态模式
+}
+
+async function loadServerSession(uri) {
+  const select = document.getElementById("sessionSelect");
+  const opt = select.querySelector(`option[value="${CSS.escape(uri)}"]`);
+  statusEl.textContent = `加载 ${uri} …`;
+  const resp = await fetch(`/api/transcript/${encodeURIComponent(uri)}`);
+  const segments = await resp.json();
+  const audioUrl = opt && opt.dataset.audioUrl;
+  setSession(uri, segments, audioUrl || null);
+}
+
+function setSession(uri, segments, audioUrl) {
+  state.uri = uri;
+  state.segments = segments;
+  state.activeIdx = -1;
+  buildSpeakerChips();
+  renderTranscript();
+  if (audioUrl) {
+    player.src = audioUrl;
+  } else {
+    player.removeAttribute("src");
+    player.load();
+  }
+  statusEl.textContent = `${uri}: ${segments.length} 段` +
+    (audioUrl ? "" : "（无音频，仅时间线；音频时长按最后一段估计）");
+  // 时长以音频为准；无音频时用最后一段的 end 兜底
+  const lastEnd = segments.length ? segments[segments.length - 1].end : 0;
+  state.duration = player.duration && isFinite(player.duration) ? player.duration : lastEnd;
+  fitView();
+}
+
+// 静态模式：本地文件
+document.getElementById("audioFile").onchange = e => {
+  const file = e.target.files[0];
+  if (file) player.src = URL.createObjectURL(file);
+};
+document.getElementById("transcriptFile").onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  const segments = text.split("\n").filter(l => l.trim()).map(l => {
+    const o = JSON.parse(l);
+    return { speaker_id: o.speaker_id, start: o.start, end: o.end, text: o.text };
+  }).sort((a, b) => a.start - b.start || a.end - b.end);
+  setSession(file.name.replace(/\.transcript\.jsonl$/, ""), segments, null);
+};
+
+player.addEventListener("loadedmetadata", () => {
+  if (isFinite(player.duration) && player.duration > 0) {
+    state.duration = player.duration;
+    if (state.viewEnd === 0 || state.viewEnd > state.duration) fitView();
+    buildWaveform();
+  }
+});
+
+// ---------- 波形 ----------
+const PEAK_BUCKETS = 8192;
+async function buildWaveform() {
+  state.peaks = null;
+  try {
+    const resp = await fetch(player.src);
+    const buf = await resp.arrayBuffer();
+    const audio = await new AudioContext().decodeAudioData(buf);
+    const data = audio.getChannelData(0);
+    const per = Math.max(1, Math.floor(data.length / PEAK_BUCKETS));
+    const peaks = new Float32Array(PEAK_BUCKETS * 2);
+    for (let b = 0; b < PEAK_BUCKETS; b++) {
+      let lo = 0, hi = 0;
+      const from = b * per, to = Math.min(data.length, from + per);
+      for (let i = from; i < to; i++) {
+        if (data[i] < lo) lo = data[i];
+        if (data[i] > hi) hi = data[i];
+      }
+      peaks[b * 2] = lo; peaks[b * 2 + 1] = hi;
+    }
+    state.peaks = { peaks, buckets: PEAK_BUCKETS, duration: audio.duration };
+  } catch (err) {
+    console.warn("波形解码失败，仅画时间线", err);
+  }
+}
+
+// ---------- 视图（缩放/平移） ----------
+function fitView() {
+  state.viewStart = 0;
+  state.viewEnd = state.duration || 1;
+}
+document.getElementById("fitBtn").onclick = fitView;
+
+const t2x = t => (t - state.viewStart) / (state.viewEnd - state.viewStart) * canvas.width;
+const x2t = x => state.viewStart + x / canvas.width * (state.viewEnd - state.viewStart);
+
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  if (!state.duration) return;
+  const anchor = x2t(e.offsetX * devicePixelRatio);
+  const factor = e.deltaY > 0 ? 1.25 : 0.8;
+  let span = (state.viewEnd - state.viewStart) * factor;
+  span = Math.min(Math.max(span, 0.05), state.duration);
+  const ratio = (anchor - state.viewStart) / (state.viewEnd - state.viewStart);
+  state.viewStart = Math.max(0, Math.min(anchor - span * ratio, state.duration - span));
+  state.viewEnd = state.viewStart + span;
+}, { passive: false });
+
+let drag = null;
+canvas.addEventListener("mousedown", e => {
+  drag = { x: e.clientX, vs: state.viewStart, ve: state.viewEnd, moved: false };
+});
+window.addEventListener("mousemove", e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x;
+  if (Math.abs(dx) > 3) drag.moved = true;
+  if (drag.moved && state.duration) {
+    const dt = dx / canvas.clientWidth * (drag.ve - drag.vs);
+    let vs = drag.vs - dt;
+    vs = Math.max(0, Math.min(vs, state.duration - (drag.ve - drag.vs)));
+    state.viewStart = vs; state.viewEnd = vs + (drag.ve - drag.vs);
+  }
+});
+window.addEventListener("mouseup", e => {
+  if (drag && !drag.moved && e.target === canvas) {
+    // 单击：seek（优先命中段块，其余位置直接按时间 seek）
+    player.currentTime = x2t(e.offsetX * devicePixelRatio);
+    player.play().catch(() => {});
+  }
+  drag = null;
+});
+
+canvas.addEventListener("mousemove", e => {
+  const t = x2t(e.offsetX * devicePixelRatio);
+  const seg = state.segments.find(s =>
+    state.speakerVisible.get(s.speaker_id) !== false && s.start <= t && t <= s.end);
+  if (seg) {
+    tooltip.style.display = "block";
+    tooltip.style.left = (e.clientX + 12) + "px";
+    tooltip.style.top = (e.clientY + 12) + "px";
+    tooltip.textContent = `[${fmtTime(seg.start)} - ${fmtTime(seg.end)}] spk${seg.speaker_id}: ${seg.text}`;
+  } else {
+    tooltip.style.display = "none";
+  }
+});
+canvas.addEventListener("mouseleave", () => tooltip.style.display = "none");
+
+// ---------- 渲染 ----------
+function resizeCanvas() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * devicePixelRatio || canvas.height !== h * devicePixelRatio) {
+    canvas.width = w * devicePixelRatio;
+    canvas.height = h * devicePixelRatio;
+  }
+}
+
+function pickTickStep(span) {
+  const steps = [0.1,0.2,0.5,1,2,5,10,15,30,60,120,300,600,1800,3600];
+  for (const s of steps) {
+    if (s / span * canvas.width >= 90 * devicePixelRatio) return s;
+  }
+  return 7200;
+}
+
+function draw() {
+  resizeCanvas();
+  const W = canvas.width, H = canvas.height;
+  const dpr = devicePixelRatio;
+  ctx.clearRect(0, 0, W, H);
+  if (!(state.viewEnd > state.viewStart)) return; // 尚未加载会话
+
+  const rulerH = 22 * dpr;
+  const waveH = Math.floor((H - rulerH) * 0.45);
+  const segTop = rulerH + waveH + 4 * dpr;
+  const segH = H - segTop - 4 * dpr;
+
+  // 波形
+  ctx.fillStyle = "#565a68";
+  if (state.peaks) {
+    const { peaks, buckets, duration } = state.peaks;
+    const mid = rulerH + waveH / 2;
+    for (let x = 0; x < W; x++) {
+      const tA = x2t(x), tB = x2t(x + 1);
+      const i0 = Math.max(0, Math.floor(tA / duration * buckets));
+      const i1 = Math.min(buckets - 1, Math.ceil(tB / duration * buckets));
+      let lo = 0, hi = 0;
+      for (let i = i0; i <= i1; i++) {
+        if (peaks[i*2] < lo) lo = peaks[i*2];
+        if (peaks[i*2+1] > hi) hi = peaks[i*2+1];
+      }
+      ctx.fillRect(x, mid - hi * waveH / 2, 1, Math.max(1, (hi - lo) * waveH / 2));
+    }
+  }
+
+  // 段块（时间线轨道）
+  const laneH = Math.max(8 * dpr, Math.min(16 * dpr, segH / 3));
+  const laneGap = 2 * dpr;
+  const lanes = new Map(); // speaker_id -> lane idx
+  for (const s of state.segments) {
+    if (state.speakerVisible.get(s.speaker_id) === false) continue;
+    if (s.end < state.viewStart || s.start > state.viewEnd) continue;
+    if (!lanes.has(s.speaker_id)) lanes.set(s.speaker_id, lanes.size);
+    const lane = lanes.get(s.speaker_id) % 3;
+    const x0 = Math.max(0, t2x(s.start)), x1 = Math.min(W, t2x(s.end));
+    ctx.fillStyle = spkColor(s.speaker_id);
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(x0, segTop + lane * (laneH + laneGap), Math.max(2, x1 - x0), laneH);
+    ctx.globalAlpha = 1;
+    if (x1 - x0 > 60 * dpr) {
+      ctx.fillStyle = "#111";
+      ctx.font = `${11 * dpr}px sans-serif`;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0, segTop + lane * (laneH + laneGap), x1 - x0, laneH);
+      ctx.clip();
+      ctx.fillText(s.text, x0 + 3 * dpr, segTop + lane * (laneH + laneGap) + laneH - 3 * dpr);
+      ctx.restore();
+    }
+  }
+
+  // 刻度尺
+  ctx.fillStyle = "#9a9ba5";
+  ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+  const span = state.viewEnd - state.viewStart;
+  const step = pickTickStep(span);
+  ctx.strokeStyle = "#3a3b44";
+  ctx.beginPath();
+  ctx.moveTo(0, rulerH - 0.5); ctx.lineTo(W, rulerH - 0.5); ctx.stroke();
+  for (let t = Math.ceil(state.viewStart / step) * step; t <= state.viewEnd; t += step) {
+    const x = t2x(t);
+    ctx.fillText(fmtTime(t), x + 2 * dpr, rulerH - 8 * dpr);
+    ctx.beginPath(); ctx.moveTo(x, rulerH - 5 * dpr); ctx.lineTo(x, rulerH); ctx.stroke();
+  }
+
+  // 播放头
+  if (state.duration) {
+    const t = player.currentTime;
+    if (t >= state.viewStart && t <= state.viewEnd) {
+      const x = t2x(t);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  }
+}
+
+// ---------- 说话人筛选 ----------
+function buildSpeakerChips() {
+  const ids = [...new Set(state.segments.map(s => s.speaker_id))].sort((a, b) => a - b);
+  state.speakerVisible = new Map(ids.map(id => [id, true]));
+  const box = document.getElementById("speakers");
+  box.innerHTML = "";
+  for (const id of ids) {
+    const chip = document.createElement("span");
+    chip.className = "spk-chip";
+    chip.innerHTML = `<span class="spk-dot" style="background:${spkColor(id)}"></span>spk${id}`;
+    chip.onclick = () => {
+      state.speakerVisible.set(id, !state.speakerVisible.get(id));
+      chip.classList.toggle("off");
+      renderTranscript();
+    };
+    box.appendChild(chip);
+  }
+}
+
+// ---------- 转写列表 ----------
+function renderTranscript() {
+  transcriptEl.innerHTML = "";
+  state.segments.forEach((s, i) => {
+    if (state.speakerVisible.get(s.speaker_id) === false) return;
+    const row = document.createElement("div");
+    row.className = "seg"; row.dataset.idx = i;
+    row.innerHTML =
+      `<span class="time">${fmtTime(s.start)} - ${fmtTime(s.end)}</span>` +
+      `<span class="spk" style="color:${spkColor(s.speaker_id)}">spk${s.speaker_id}</span>` +
+      `<span></span>`;
+    row.lastChild.textContent = s.text;
+    row.onclick = () => { player.currentTime = s.start + 1e-3; player.play().catch(() => {}); };
+    transcriptEl.appendChild(row);
+  });
+}
+
+function syncActiveRow() {
+  const t = player.currentTime;
+  let idx = -1;
+  for (let i = 0; i < state.segments.length; i++) {
+    const s = state.segments[i];
+    if (s.start <= t && t <= s.end) { idx = i; break; }
+    if (s.start > t) break;
+  }
+  if (idx === state.activeIdx) return;
+  state.activeIdx = idx;
+  transcriptEl.querySelectorAll(".seg.active").forEach(el => el.classList.remove("active"));
+  if (idx >= 0) {
+    const row = transcriptEl.querySelector(`.seg[data-idx="${idx}"]`);
+    if (row) {
+      row.classList.add("active");
+      row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
+}
+
+// 播放时播放头接近视口右缘 → 视图跟随
+function followPlayhead() {
+  if (player.paused || !state.duration) return;
+  const span = state.viewEnd - state.viewStart;
+  if (player.currentTime > state.viewEnd - span * 0.1) {
+    state.viewStart = Math.min(player.currentTime - span * 0.1, state.duration - span);
+    state.viewStart = Math.max(0, state.viewStart);
+    state.viewEnd = state.viewStart + span;
+  }
+}
+
+// ---------- 主循环 ----------
+function tick() {
+  followPlayhead();
+  syncActiveRow();
+  draw();
+  requestAnimationFrame(tick);
+}
+
+// ---------- 启动 ----------
+(async function init() {
+  const ok = await loadServerSessions();
+  if (!ok) {
+    statusEl.textContent = "静态模式：请手动选择音频与 transcript.jsonl 文件";
+  }
+  tick();
+})();
+</script>
+</body>
+</html>

@@ -109,7 +109,7 @@ diarization/
     extractor.py       #   ChunkExtractor：模型加载、波形预处理、chunk 生成器（chunk 生产唯一来源）
     track_builder.py   #   chunk 内 local track 构造：纯净区优先、overlap_fallback 回退、时长门控
     models/            #   embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/ hf_resolver
-    app.py             #   提取阶段 CLI（extract_chunks.py 入口）
+    app.py             #   提取阶段 CLI（python3 -m diarization.extract.app）
   cluster/             # 子模块 2：聚类与输出
     base.py            #   后端接口 BaseChunkAssigner
     backends/          #   内置后端与工厂 build_assigner
@@ -117,7 +117,7 @@ diarization/
       ahc.py           #     AHCChunkAssigner：离线层次聚类后端
     rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加）
     runner.py          #   run_clustering：聚类消费循环（pipeline.py 与 cluster/app 共用）
-    app.py             #   聚类阶段 CLI（cluster_chunks.py 入口）
+    app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
 ```
 
 - YAML 是全部调参项的唯一来源；CLI 仅保留 `--wav`、`--output_dir`、`--config`、
@@ -178,15 +178,15 @@ diarization/
 
 ```bash
 # 阶段 1：嵌入提取（需要音频与模型，产出 chunks.npz）
-python3 extract_chunks.py --wav <音频> --output_dir <dir> --config config/config.yaml
+python3 -m diarization.extract.app --wav <音频> --output_dir <dir> --config config/config.yaml
 
 # 阶段 2：聚类 + RTTM 输出（只需 npz，后端由 YAML 的 clustering_backend 决定）
-python3 cluster_chunks.py --input <dir或npz> --output_dir <dir> --config config/config.yaml
+python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --config config/config.yaml
 ```
 
 - 阶段 2 不加载任何模型，换后端/调阈值只需改 YAML 重跑，秒级完成；
 - 两端共用的 chunk 生产逻辑在 `extract/extractor.py` 的 `iter_chunk_artifacts`，保证一致；
-- 端到端用法（`python3 pipeline.py`）行为不变。
+- 端到端用法（`python3 -m diarization.app`）行为不变。
 
 ### 输入形式
 
@@ -211,7 +211,7 @@ python3 cluster_chunks.py --input <dir或npz> --output_dir <dir> --config config
 常用启动：
 
 ```bash
-python3 pipeline.py --debug --verbose --show_rttm ...
+python3 -m diarization.app --debug --verbose --show_rttm ...
 ```
 
 重点日志字段：
@@ -224,5 +224,5 @@ python3 pipeline.py --debug --verbose --show_rttm ...
 可用工具：
 
 ```bash
-python3 tools/analyze_run_log.py --log ./exp/demo/run.log
+python3 tools/analyze_log.py ./exp/demo/run.log
 ```

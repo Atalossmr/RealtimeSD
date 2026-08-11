@@ -1,6 +1,6 @@
 """聚类阶段 CLI：<stem>.chunks.npz -> 聚类 + RTTM 输出。
 
-读取嵌入提取阶段（extract_chunks.py）产出的中间文件，用 YAML 配置的聚类后端
+读取嵌入提取阶段（python -m diarization.extract.app）产出的中间文件，用 YAML 配置的聚类后端
 （clustering_backend: streaming / ahc）做 local->global 分配并输出 RTTM。
 不依赖音频与模型，可独立运行。
 """

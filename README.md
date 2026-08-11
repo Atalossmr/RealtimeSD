@@ -2,16 +2,17 @@
 
 基于 `pyannote/segmentation-3.0`(<https://github.com/pyannote/pyannote-audio>) 与 `3D-Speaker/ERes2NetV2`(<https://github.com/modelscope/3D-Speaker>) 的实时说话人分离（speaker diarization）管线。
 
-架构：segmentation-3.0 在 10s chunk 内做局部说话人识别，ERes2NetV2 + 可插拔聚类后端实现全局 speaker ID 一致（默认 streaming 后端：Hungarian 分配 + SMA centroid，身份一次定案）。无 merge、无 RTTM 重写，输出 append-only。嵌入提取与聚类可拆成两个阶段独立运行（`extract_chunks.py` / `cluster_chunks.py`）。
+架构：segmentation-3.0 在 10s chunk 内做局部说话人识别，ERes2NetV2 + 可插拔聚类后端实现全局 speaker ID 一致（默认 streaming 后端：Hungarian 分配 + SMA centroid，身份一次定案）。无 merge、无 RTTM 重写，输出 append-only。嵌入提取与聚类可拆成两个阶段独立运行（`python3 -m diarization.extract.app` / `python3 -m diarization.cluster.app`）。
 
 ## 项目内容
 
-- 入口脚本：`pipeline.py`（端到端）、`extract_chunks.py`（嵌入提取阶段）、`cluster_chunks.py`（聚类阶段）
+- 入口：`python3 -m diarization.app`（端到端）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）
 - 配置文件：`config/config.yaml`
 - 管线实现：`diarization/`
-- 运行脚本：`run.sh`、`test_der.sh`
+- 运行脚本：`run.py`（一键编排：ASR 先就绪，再启管线与 viewer）、`test_der.py`
 - DER 评估：`tools/compute_der.py`
-- 运行日志分析：`tools/analyze_run_log.py`
+- 运行日志分析：`tools/analyze_log.py`
+- 结果可视化：`viewer/`（波形 + ASR 时间线）
 
 ## 环境要求
 
@@ -58,7 +59,7 @@ export HF_TOKEN=your_token
 单文件：
 
 ```bash
-python3 pipeline.py \
+python3 -m diarization.app \
   --wav ./datasets/examples/tingshen_6.wav \
   --output_dir ./exp/demo \
   --config ./config/config.yaml
@@ -67,7 +68,7 @@ python3 pipeline.py \
 目录批量：
 
 ```bash
-python3 pipeline.py \
+python3 -m diarization.app \
   --wav ./datasets/examples \
   --output_dir ./exp/batch_demo \
   --config ./config/config.yaml
@@ -76,7 +77,7 @@ python3 pipeline.py \
 常见覆盖参数：
 
 ```bash
-python3 pipeline.py \
+python3 -m diarization.app \
   --wav ./datasets/examples \
   --output_dir ./exp/batch_demo \
   --config ./config/config.yaml \
@@ -99,20 +100,20 @@ python3 pipeline.py \
 - `*.<backend_tag>.rttm`：RTTM 结果（streaming 后端为 `*.streaming.rttm`，ahc 后端为 `*.ahc.rttm`；chunk 提交即最终，全程 append-only 零重写）
 - `run.log`：运行日志
 - `*.embeddings.npz`：全部 observation 的 embedding（仅 `save_embeddings: true` 时）
-- `*.chunks.npz`：chunk 中间产物（仅 `extract_chunks.py` 提取阶段产出）
+- `*.chunks.npz`：chunk 中间产物（仅提取阶段 `python3 -m diarization.extract.app` 产出）
 
 ## 脚本使用
 
 基础运行：
 
 ```bash
-bash run.sh ./datasets/examples
+python3 run.py ./datasets/examples
 ```
 
 运行时同步在控制台打印 RTTM：
 
 ```bash
-SHOW_RTTM=1 bash run.sh ./datasets/examples
+SHOW_RTTM=1 python3 run.py ./datasets/examples
 ```
 
 带 DER 评估：
@@ -120,10 +121,10 @@ SHOW_RTTM=1 bash run.sh ./datasets/examples
 ```bash
 REF_RTTM=./datasets/aishell4-test/rttm \
 RUN_NAME=baseline \
-bash test_der.sh ./datasets/aishell4-test
+python3 test_der.py ./datasets/aishell4-test
 ```
 
-脚本常用环境变量：
+脚本常用环境变量（在 `run.py` 中作为对应命令行参数的缺省值）：
 
 - `CONFIG_PATH`
 - `MODEL_PATH`
@@ -133,13 +134,20 @@ bash test_der.sh ./datasets/aishell4-test
 - `RUN_NAME`
 - `DEBUG`
 - `SHOW_RTTM`
+- `WITH_ASR`（=0 时不启动 ASR 跟随进程）
+- `WITH_VIEWER`（=0 时不启动结果可视化服务器）
+- `VIEWER_PORT`（默认 8000）
 - `REF_RTTM`
 - `DER_VERBOSE`
 
 脚本行为说明：
 
-- `run.sh` 每次运行会清理 `${OUTPUT_ROOT:-./exp}/common`
-- `test_der.sh` 每次运行会清理 `${OUTPUT_ROOT:-./exp}/der_test`
+- `run.py` 的启动顺序为：先启动 ASR 跟随进程并等待模型就绪（就绪哨兵
+  `.asr_ready`），再启动 viewer 服务器（`viewer/server.py`，浏览器打开
+  http://127.0.0.1:${VIEWER_PORT:-8000} 查看波形 + ASR 时间线）与
+  diarization 管线
+- `run.py` 每次运行会清理 `${OUTPUT_ROOT:-./exp}/common`
+- `test_der.py` 每次运行会清理 `${OUTPUT_ROOT:-./exp}/der_test`
 
 ## pipeline 行为概览
 
@@ -174,12 +182,13 @@ bash test_der.sh ./datasets/aishell4-test
 
 ## 仓库结构
 
-- `diarization/`：主实现（端到端组合在 `diarization/pipeline.py`）
+- `diarization/`：主实现（端到端组合在 `diarization/pipeline.py`，入口 `python3 -m diarization.app`）
 - `speakerlab/`：本地依赖与 `md-eval.pl`
 - `tools/compute_der.py`：DER 统计与批量评估
-- `tools/analyze_run_log.py`：run.log 命中统计分析
-- `run.sh`：基础运行脚本
-- `test_der.sh`：运行 + DER 评估脚本
+- `tools/analyze_log.py`：运行日志事件统计（模块 × 事件 × 级别）
+- `run.py`：运行编排脚本（ASR 先就绪，再启管线与 viewer）
+- `viewer/`：ASR 结果时间线可视化（`viewer/server.py`，见 `viewer/README.md`）
+- `test_der.py`：运行 + DER 评估脚本
 - `diarization/README.md`：按模块组织的详细实现说明
 
 ## 备注

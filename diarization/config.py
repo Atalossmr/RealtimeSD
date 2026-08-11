@@ -172,7 +172,7 @@ class ChunkPipelineConfig:
     # ---- ASR 转写（Fun-ASR-Nano；离线阶段，依赖分段导出，仅 streaming 后端生效） ----
     # 开启后构造 exporter 导出逐 speaker 音频段（wav + manifest，无重叠时
     # 走纯切片路径、有重叠时仍走 TIGER 分离，与 separation_enabled 同链路）；
-    # pipeline 内不做 ASR，转写由离线入口 transcribe.py 读取输出目录独立完成。
+    # pipeline 内不做 ASR，转写由离线入口 python -m asr.app 读取输出目录独立完成。
     asr_enabled: bool = False
     # Fun-ASR-Nano 模型：本地目录 / ModelScope id（缓存到 pretrained/modelscope）。
     asr_model: str = "FunAudioLLM/Fun-ASR-Nano-2512"

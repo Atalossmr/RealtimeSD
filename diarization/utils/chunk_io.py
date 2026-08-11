@@ -1,6 +1,7 @@
 """chunk artifacts 中间文件（<stem>.chunks.npz）的存取。
 
-嵌入提取阶段（extract_chunks.py）写入，聚类阶段（cluster_chunks.py）读取。
+嵌入提取阶段（python -m diarization.extract.app）写入，聚类阶段
+（python -m diarization.cluster.app）读取。
 纯 numpy npz，无 pickle，可跨进程/跨机器传递。
 
 文件布局：

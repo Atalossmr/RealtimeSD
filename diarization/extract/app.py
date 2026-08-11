@@ -1,7 +1,7 @@
 """嵌入提取阶段 CLI：音频 -> <stem>.chunks.npz。
 
 只运行 segmentation + embedding 并把 chunk artifacts 落盘，不做聚类与 RTTM 输出；
-产物由 cluster_chunks.py（聚类阶段）消费。
+产物由聚类阶段（python -m diarization.cluster.app）消费。
 """
 
 from __future__ import annotations

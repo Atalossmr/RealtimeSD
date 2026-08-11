@@ -104,19 +104,19 @@ ASR 是独立于 pipeline 的离线阶段，分两步：
    会随 ASR 一起构造），但重叠区想拿到分离后的干净音轨仍需打开
    `separation_enabled`。
 2. 转写侧：对输出目录跑转写入口，逐段转写并按 start 排序写
-   `<uri>.transcript.jsonl` / `<uri>.transcript.txt`：
+   `<uri>.transcript.jsonl`：
 
    ```bash
    # 一次性：管线结束后整体转写
-   python3 transcribe.py --segments_dir <exp_dir> --config config/config.yaml
+   python3 -m asr.app --segments_dir <exp_dir> --config config/config.yaml
    # 跟随：与管线同时启动，新段即出即转，done 哨兵出现后收尾
-   python3 transcribe.py --segments_dir <exp_dir> --config config/config.yaml \
+   python3 -m asr.app --segments_dir <exp_dir> --config config/config.yaml \
        --follow --done_file <exp_dir>/.diarization_done
    ```
 
    asr_* 参数同样从该 YAML 读取（调参项不在 CLI 上）。
-   `WITH_ASR=1 bash run.sh ...` 即跟随模式：run.sh 负责同时拉起两个进程，
-   并在管线退出后落 done 哨兵。
+   `python3 run.py ...` 默认即跟随模式：run.py 负责拉起 ASR 进程、等待模型
+   就绪后再启动管线，并在管线退出后落 done 哨兵。
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
@@ -148,7 +148,7 @@ ASR 是独立于 pipeline 的离线阶段，分两步：
 
 ```bash
 # 1) 提取（产出 chunks.npz）
-python3 extract_chunks.py --wav <音频> --output_dir <dir> --config config/config.yaml
+python3 -m diarization.extract.app --wav <音频> --output_dir <dir> --config config/config.yaml
 # 2) 阈值扫描（不加载模型，秒级重跑）
 python3 tools/sweep_thresholds.py --input <dir> --ref <ref_rttm_dir> \
     --config config/config.yaml --output <结果.csv>
