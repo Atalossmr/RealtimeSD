@@ -1,7 +1,7 @@
 # RealtimeSD diarization 管线配置（管线调参项的唯一来源；ASR 转写调参在 asr.yaml；逐项说明见本目录 README.md）
 
 # ---- 运行环境 ----
-device: cuda
+device: cpu
 hf_cache_dir: ./pretrained/huggingface
 
 # ---- extract 阶段：模型 ----

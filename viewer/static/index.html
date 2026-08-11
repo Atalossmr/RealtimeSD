@@ -50,6 +50,10 @@
   .seg .time { color: var(--dim); font-family: ui-monospace, monospace; font-size: 12px;
     white-space: nowrap; padding-top: 1px; }
   .seg .spk { font-weight: 600; white-space: nowrap; }
+  .overlap-badge {
+    color: #f97583; border: 1px solid #f97583; border-radius: 8px;
+    font-size: 11px; padding: 0 6px; white-space: nowrap; align-self: center;
+  }
   .file-label {
     border: 1px dashed var(--border); border-radius: 4px; padding: 4px 8px;
     cursor: pointer; color: var(--dim);
@@ -92,6 +96,7 @@ const state = {
   peaks: null,             // 波形 min/max 桶
   speakerVisible: new Map(),
   activeIdx: -1,
+  overlapFlags: [],          // 每段是否与其他说话人存在时间重叠
 };
 
 const PALETTE = ["#4f9cf9","#f97583","#56d4a0","#e3b341","#b083f0","#ff9f43",
@@ -110,6 +115,20 @@ const fmtTime = t => {
   const base = `${String(m).padStart(2,"0")}:${s.toFixed(3).padStart(6,"0")}`;
   return h ? `${h}:${base}` : base;
 };
+
+// 不同说话人的段时间相交 = 语音重叠（segments 已按 start 排序，内层可提前 break）
+function computeOverlapFlags(segments) {
+  const flags = new Array(segments.length).fill(false);
+  for (let i = 0; i < segments.length; i++) {
+    for (let j = i + 1; j < segments.length; j++) {
+      if (segments[j].start >= segments[i].end) break;
+      if (segments[j].speaker_id !== segments[i].speaker_id) {
+        flags[i] = flags[j] = true;
+      }
+    }
+  }
+  return flags;
+}
 
 // ---------- 数据加载（服务器模式：轮询增量刷新，跟随管线实时更新） ----------
 const POLL_INTERVAL = 2000;
@@ -199,6 +218,7 @@ function mergeSegments(segments) {
   const knownSpeakers = new Set(state.speakerVisible.keys());
   const hasNewSpeaker = segments.some(s => !knownSpeakers.has(s.speaker_id));
   state.segments = segments;
+  state.overlapFlags = computeOverlapFlags(segments);
   if (hasNewSpeaker) buildSpeakerChips(); // 新说话人需要补 chip（保留已有可见性）
   if (isPrefix && !hasNewSpeaker) {
     for (let i = old.length; i < segments.length; i++) {
@@ -224,6 +244,7 @@ async function loadServerSession(uri) {
 function setSession(uri, segments, audioUrl) {
   state.uri = uri;
   state.segments = segments;
+  state.overlapFlags = computeOverlapFlags(segments);
   state.activeIdx = -1;
   state.speakerVisible = new Map(); // 切换会话时重置说话人可见性
   buildSpeakerChips();
@@ -340,13 +361,15 @@ window.addEventListener("mouseup", e => {
 
 canvas.addEventListener("mousemove", e => {
   const t = x2t(e.offsetX * devicePixelRatio);
-  const seg = state.segments.find(s =>
+  const idx = state.segments.findIndex(s =>
     state.speakerVisible.get(s.speaker_id) !== false && s.start <= t && t <= s.end);
-  if (seg) {
+  if (idx >= 0) {
+    const seg = state.segments[idx];
     tooltip.style.display = "block";
     tooltip.style.left = (e.clientX + 12) + "px";
     tooltip.style.top = (e.clientY + 12) + "px";
-    tooltip.textContent = `[${fmtTime(seg.start)} - ${fmtTime(seg.end)}] spk${seg.speaker_id}: ${seg.text}`;
+    tooltip.textContent = `[${fmtTime(seg.start)} - ${fmtTime(seg.end)}] spk${seg.speaker_id}` +
+      (state.overlapFlags[idx] ? "（与其他说话人重叠）" : "") + `: ${seg.text}`;
   } else {
     tooltip.style.display = "none";
   }
@@ -404,24 +427,32 @@ function draw() {
   const laneH = Math.max(8 * dpr, Math.min(16 * dpr, segH / 3));
   const laneGap = 2 * dpr;
   const lanes = new Map(); // speaker_id -> lane idx
-  for (const s of state.segments) {
+  for (let i = 0; i < state.segments.length; i++) {
+    const s = state.segments[i];
     if (state.speakerVisible.get(s.speaker_id) === false) continue;
     if (s.end < state.viewStart || s.start > state.viewEnd) continue;
     if (!lanes.has(s.speaker_id)) lanes.set(s.speaker_id, lanes.size);
     const lane = lanes.get(s.speaker_id) % 3;
     const x0 = Math.max(0, t2x(s.start)), x1 = Math.min(W, t2x(s.end));
+    const y0 = segTop + lane * (laneH + laneGap);
     ctx.fillStyle = spkColor(s.speaker_id);
     ctx.globalAlpha = 0.85;
-    ctx.fillRect(x0, segTop + lane * (laneH + laneGap), Math.max(2, x1 - x0), laneH);
+    ctx.fillRect(x0, y0, Math.max(2, x1 - x0), laneH);
     ctx.globalAlpha = 1;
+    if (state.overlapFlags[i]) { // 重叠段：红色描边提示
+      ctx.strokeStyle = "#f97583";
+      ctx.lineWidth = 2 * dpr;
+      ctx.strokeRect(x0 + 1, y0 + 1, Math.max(2, x1 - x0) - 2, laneH - 2);
+      ctx.lineWidth = 1;
+    }
     if (x1 - x0 > 60 * dpr) {
       ctx.fillStyle = "#111";
       ctx.font = `${11 * dpr}px sans-serif`;
       ctx.save();
       ctx.beginPath();
-      ctx.rect(x0, segTop + lane * (laneH + laneGap), x1 - x0, laneH);
+      ctx.rect(x0, y0, x1 - x0, laneH);
       ctx.clip();
-      ctx.fillText(s.text, x0 + 3 * dpr, segTop + lane * (laneH + laneGap) + laneH - 3 * dpr);
+      ctx.fillText(s.text, x0 + 3 * dpr, y0 + laneH - 3 * dpr);
       ctx.restore();
     }
   }
@@ -484,6 +515,7 @@ function appendTranscriptRow(s, i) {
   row.innerHTML =
     `<span class="time">${fmtTime(s.start)} - ${fmtTime(s.end)}</span>` +
     `<span class="spk" style="color:${spkColor(s.speaker_id)}">spk${s.speaker_id}</span>` +
+    (state.overlapFlags[i] ? `<span class="overlap-badge">重叠</span>` : "") +
     `<span></span>`;
   row.lastChild.textContent = s.text;
   row.onclick = () => { player.currentTime = s.start + 1e-3; player.play().catch(() => {}); };

@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "audio",
         nargs="?",
-        default="./datasets/aishell4-test/L_R003S01C02.wav",
+        default="./datasets/examples/tingshen_6.wav",
         help="输入音频（wav）",
     )
     parser.add_argument(
