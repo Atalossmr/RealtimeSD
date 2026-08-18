@@ -7,7 +7,8 @@
   所有分配判定一次定案；
 - 合并（merge）：每次加入新片段后尝试合并最相似的一对 speaker
   （count 小者并入大者），由 merge_threshold 控制；合并只影响后续分配，
-  已写出的 RTTM 不改，被合并者从 centroid 集中移除、不再参与后续聚类；
+  raw RTTM 已写出行不改（历史行由 refined 级重生成时修正），被合并者
+  从 centroid 集中移除、不再参与后续聚类；
 - false split 可由 merge 事后修复，false glue 仍不可修复，因此阈值策略
   仍为"宁可 glue 不可 split"（new_speaker_threshold 应适当调高）。
 """
@@ -35,6 +36,10 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
     每个 chunk 内用 Hungarian algorithm 做 local->global 联合分配，
     隐式提供 cannot-link 约束：同一 chunk 的不同 local slot 不会分配给同一 global speaker。
     """
+
+    # 流式输出为 raw 级（append-only）；修正后的最终输出为 refined 级
+    # （见 cluster/post_merge.py 的 RefinedRTTMWriter）。
+    output_tag = "raw"
 
     def __init__(self, config: ChunkPipelineConfig):
         self.config = config
@@ -181,7 +186,8 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
 
         count 小者并入大者（count 相同保留 id 较小者），centroid 按 count
         加权平均后重归一化；被合并者从 centroid 集中移除，不再参与后续分配。
-        已写出的 RTTM 不受影响；本 chunk 尚未写出的分配改挂到幸存 id。
+        raw RTTM 已写出行不受影响（历史行由 refined 级修正）；本 chunk 尚未
+        写出的分配改挂到幸存 id。
         merge_protect_established 开启时，已存活过缓冲期
         （new_speaker_hold_chunks）的 speaker 不允许被合并。
         """

@@ -5,8 +5,9 @@
 1. `extract.ChunkExtractor` 切 chunk、跑 segmentation-3.0、聚合 track 并提
    ERes2NetV2 embedding，产出 ChunkArtifacts；
 2. `cluster.runner.run_clustering` 消费 chunk 序列：assigner 做 local->global
-   分配（后端可插拔），流式后端逐 chunk 即时写出，离线后端音频结束后统一
-   聚类重放；
+   分配（后端可插拔），流式后端逐 chunk 即时写出 raw RTTM 并由 refined 级
+   逐 chunk 重生成 refined RTTM + speaker 状态 sidecar，离线后端音频结束后
+   统一聚类重放；
 3. 音频结束后 writer 纯追加收尾，并在文件末尾以 # 注释写出内部
    global id -> RTTM speaker 映射表。
 """
@@ -241,6 +242,21 @@ class ChunkDiarizationPipeline:
                     emitted_frames=emitted_frames,
                 )
 
+        # refined 级（仅流式后端）：merge 事件动态重生成，EOF 叠加小样本合并。
+        refiner = None
+        if not self.assigner.deferred:
+            from .cluster.post_merge import RefinedRTTMWriter
+
+            base = streaming_log_path[: -len(f".{self.assigner.output_tag}.rttm")]
+            refiner = RefinedRTTMWriter(
+                streaming_log_path,
+                f"{base}.refined.rttm",
+                writer,
+                self.assigner,
+                min_duration=self.config.post_merge_min_speech_duration,
+                min_similarity=self.config.post_merge_min_similarity,
+            )
+
         # 生成器惰性生产 chunk：streaming 后端下输出延迟 ≈ 一个 hop，
         # 不会因为组合成统一循环而引入额外的缓冲。
         run_clustering(
@@ -248,6 +264,7 @@ class ChunkDiarizationPipeline:
             self.assigner,
             writer,
             chunk_hook=chunk_log_hook,
+            refiner=refiner,
         )
 
         # 闭合 exporter 残余的 open segment（音频结束，与 writer.finalize 同步）。

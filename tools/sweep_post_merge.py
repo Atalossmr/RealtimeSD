@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""阈值扫描：复用 chunks.npz，对 streaming 后端的两阈值做网格实验并算 DER。
+"""post-merge 参数扫描：复用 chunks.npz，对小样本簇合并参数做网格实验并算 DER。
 
-只跑聚类阶段（不加载任何模型），每个 (global_match_threshold, new_speaker_threshold)
-组合重放全部 npz 生成 RTTM，再用本目录 compute_der.py 的批量评测算 global DER。
+只跑聚类阶段（不加载任何模型）。ahc 后端在 finalize 内重映射标签，输出
+仍为 .ahc.rttm；streaming 后端输出 .raw.rttm（append-only）并动态重生成
+.refined.rttm（merge 修正 + final 时叠加小样本合并），评估 refined。
+min_duration = 0 的组合即基线。
 
 用法：
-  .venv/bin/python tools/sweep_thresholds.py \
-      --input exp/seg_duration_stat \
+  .venv/bin/python tools/sweep_post_merge.py \
+      --input exp/der_full/extract \
       --ref datasets/aishell4-test/rttm \
-      --config config/config.yaml \
-      --output exp/threshold_sweep/baseline.csv
+      --config tmp/config_der_ahc.yaml --backend ahc \
+      --durations 0,5,10,15,30 --similarities 0.0,0.3,0.5 \
+      --output exp/der_full/post_merge_ahc.csv
 """
 
 from __future__ import annotations
@@ -29,13 +32,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from compute_der import compute_der_batch  # noqa: E402
 
 from diarization.cluster.backends import build_assigner  # noqa: E402
+from diarization.cluster.post_merge import write_refined_rttm  # noqa: E402
 from diarization.cluster.runner import run_clustering  # noqa: E402
 from diarization.cluster.rttm_writer import AppendOnlyRTTMWriter  # noqa: E402
 from diarization.config import ChunkPipelineConfig  # noqa: E402
 from diarization.utils.chunk_io import load_chunks  # noqa: E402
 
 
-logger = logging.getLogger("sweep_thresholds")
+logger = logging.getLogger("sweep_post_merge")
 
 
 def load_base_config(config_path: str) -> ChunkPipelineConfig:
@@ -52,33 +56,54 @@ def load_base_config(config_path: str) -> ChunkPipelineConfig:
 def run_one_combo(
     base_config: ChunkPipelineConfig,
     chunks_files: list[Path],
-    match_thr: float,
-    new_thr: float,
+    backend: str,
+    min_duration: float,
+    min_similarity: float,
     work_dir: Path,
+    ref_dir: Path,
 ) -> dict[str, float]:
-    """用一组阈值重放全部 chunk artifacts，返回 DER 摘要。"""
+    """用一组 post-merge 参数重放全部 chunk artifacts，返回 DER 摘要。"""
 
     config = dataclasses.replace(
         base_config,
-        global_match_threshold=match_thr,
-        new_speaker_threshold=new_thr,
+        clustering_backend=backend,
+        post_merge_min_speech_duration=min_duration,
+        post_merge_min_similarity=min_similarity,
     )
+    output_tag = ""
     for chunks_path in chunks_files:
         uri, artifacts = load_chunks(str(chunks_path))
+        assigner = build_assigner(config)
+        output_tag = assigner.output_tag
+        rttm_path = work_dir / f"{uri}.{output_tag}.rttm"
         writer = AppendOnlyRTTMWriter(
-            str(work_dir / f"{uri}.raw.rttm"),
+            str(rttm_path),
             uri,
             config.min_segment_duration,
             config.streaming_merge_gap,
             False,
         )
-        run_clustering(artifacts, build_assigner(config), writer)
+        run_clustering(artifacts, assigner, writer)
+        # streaming 后端：refined 为最终输出（merge 修正 + final 小样本合并）。
+        if not assigner.deferred:
+            write_refined_rttm(
+                str(rttm_path),
+                str(work_dir / f"{uri}.refined.rttm"),
+                centroids=getattr(assigner, "centroids", {}),
+                merged_into=getattr(assigner, "merged_into", {}),
+                min_duration=min_duration,
+                min_similarity=min_similarity,
+            )
+    # streaming 一律评估 refined（最终输出）；ahc 评估后端原生输出。
+    sys_suffix = (
+        ".refined.rttm" if backend == "streaming" else f".{output_tag}.rttm"
+    )
     _, _, global_result = compute_der_batch(
-        ref_path=str(REF_DIR),
+        ref_path=str(ref_dir),
         sys_path=str(work_dir),
         collar=0.0,
         ignore_overlap=False,
-        sys_suffix=".raw.rttm",
+        sys_suffix=sys_suffix,
         ref_suffix=".rttm",
     )
     assert global_result is not None
@@ -90,49 +115,65 @@ def run_one_combo(
     }
 
 
-REF_DIR: Path
-
-
 def main() -> None:
-    global REF_DIR
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, help="chunks.npz 目录")
     parser.add_argument("--ref", required=True, help="参考 RTTM 目录")
     parser.add_argument("--config", default="config/config.yaml")
+    parser.add_argument(
+        "--backend", default="ahc", choices=["ahc", "streaming"],
+    )
+    parser.add_argument(
+        "--durations",
+        default="0,5,10,15,30",
+        help="post_merge_min_speech_duration 网格（逗号分隔，含 0=基线）",
+    )
+    parser.add_argument(
+        "--similarities",
+        default="0.0,0.3,0.5",
+        help="post_merge_min_similarity 网格（逗号分隔）",
+    )
     parser.add_argument("--output", required=True, help="结果 CSV 路径")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    REF_DIR = Path(args.ref)
+    ref_dir = Path(args.ref)
+    durations = [float(x) for x in args.durations.split(",")]
+    similarities = [float(x) for x in args.similarities.split(",")]
 
     chunks_files = sorted(Path(args.input).glob("*.chunks.npz"))
     if not chunks_files:
         raise SystemExit(f"no chunks.npz under {args.input}")
     base_config = load_base_config(args.config)
 
-    grid = [0.40, 0.45, 0.50, 0.55, 0.60]
     rows: list[dict[str, float]] = []
-    for match_thr in grid:
-        for new_thr in grid:
-            with tempfile.TemporaryDirectory(prefix="sweep_rttm_") as tmp_dir:
+    for min_duration in durations:
+        for min_similarity in similarities:
+            if min_duration == 0.0 and min_similarity != similarities[0]:
+                continue  # 基线与 similarity 无关，只跑一组
+            with tempfile.TemporaryDirectory(prefix="post_merge_rttm_") as tmp_dir:
                 metrics = run_one_combo(
                     base_config,
                     chunks_files,
-                    match_thr,
-                    new_thr,
+                    args.backend,
+                    min_duration,
+                    min_similarity,
                     Path(tmp_dir),
+                    ref_dir,
                 )
             row = {
-                "global_match_threshold": match_thr,
-                "new_speaker_threshold": new_thr,
+                "backend": args.backend,
+                "min_speech_duration": min_duration,
+                "min_similarity": min_similarity,
                 **metrics,
             }
             rows.append(row)
             logger.info(
-                "match=%.2f new=%.2f -> MS=%.2f FA=%.2f SER=%.2f DER=%.2f",
-                match_thr,
-                new_thr,
+                "backend=%s min_dur=%.1f min_sim=%.2f -> MS=%.2f FA=%.2f "
+                "SER=%.2f DER=%.2f",
+                args.backend,
+                min_duration,
+                min_similarity,
                 metrics["ms"],
                 metrics["fa"],
                 metrics["ser"],
@@ -147,6 +188,8 @@ def main() -> None:
         writer.writerows(rows)
 
     best = min(rows, key=lambda r: r["der"])
+    baseline = next(r for r in rows if r["min_speech_duration"] == 0.0)
+    logger.info("baseline: %s", baseline)
     logger.info("best: %s", best)
     logger.info("wrote %s", output_path)
 

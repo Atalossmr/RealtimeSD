@@ -134,7 +134,8 @@ class ChunkPipelineConfig:
     min_segment_duration_for_new_speaker: float = 0.50
     min_segment_duration_for_centroid_update: float = 1.50
     # 每次加入新片段后，若最相似的一对 centroid 相似度 ≥ 该阈值则合并
-    # （count 小者并入大者）；已写出的 RTTM 不受影响，被合并者退出后续聚类。
+    # （count 小者并入大者）；raw RTTM 已写出行不受影响（历史行由 refined 级
+    # 修正），被合并者退出后续聚类。
     merge_threshold: float = 0.70
     # new-speaker hold：某 chunk 新建 speaker 后，缓存该 chunk 及后续最多
     # N 个 chunk 的输出（RTTM 与 exporter 同步等待），缓刑 speaker 被全部
@@ -148,6 +149,16 @@ class ChunkPipelineConfig:
     # ---- cluster 阶段：ahc 后端（离线层次聚类） ----
     ahc_similarity_threshold: float = 0.50
     ahc_linkage: str = "average"
+
+    # ---- cluster 阶段：后处理（小样本簇强制合并，ahc / streaming refined 共用） ----
+    # 总发声时长低于该值的簇/speaker 视为小样本：ahc 在 finalize 统一并入质心
+    # 最相似的达标簇；streaming 由 refined 级在 EOF 最终刷新时叠加合并
+    # （raw RTTM 保持 append-only 不动），speaker 未达标期间在前端标记为
+    # uncertain（见 speakers.json sidecar）。0 = 关闭。
+    post_merge_min_speech_duration: float = 0.0
+    # 强制合并的相似度下限：小样本簇与目标簇质心余弦相似度低于该值时保留
+    # 原身份不并（防止把说得少的真实独立 speaker 错并）。
+    post_merge_min_similarity: float = 0.0
 
     # ---- 分段音频导出（接流式 ASR；仅 streaming 后端生效） ----
     # 开启后构造 exporter 导出逐 speaker 音频段（wav + manifest）：每个 commit
@@ -195,7 +206,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output_dir",
         default=None,
-        help="输出目录，每个文件会写一个 .streaming.rttm",
+        help="输出目录，每个文件会写一个 .raw.rttm（流式后端另有 .refined.rttm）",
     )
     parser.add_argument(
         "--config",
@@ -322,6 +333,12 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
             _merged_value(args, "ahc_similarity_threshold", 0.50)
         ),
         ahc_linkage=str(_merged_value(args, "ahc_linkage", "average")),
+        post_merge_min_speech_duration=float(
+            _merged_value(args, "post_merge_min_speech_duration", 0.0)
+        ),
+        post_merge_min_similarity=float(
+            _merged_value(args, "post_merge_min_similarity", 0.0)
+        ),
         separation_enabled=bool(_merged_value(args, "separation_enabled", False)),
         separation_model=str(
             _merged_value(args, "separation_model", "JusperLee/TIGER-speech")
@@ -346,6 +363,10 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
         raise ValueError("chunk_duration must be > 0")
     if config.new_speaker_hold_chunks < 0:
         raise ValueError("new_speaker_hold_chunks must be >= 0")
+    if config.post_merge_min_speech_duration < 0:
+        raise ValueError("post_merge_min_speech_duration must be >= 0")
+    if config.post_merge_min_similarity < 0:
+        raise ValueError("post_merge_min_similarity must be >= 0")
     if config.hop_duration <= 0.0 or config.hop_duration > config.chunk_duration:
         raise ValueError("hop_duration must be in (0, chunk_duration]")
     if config.region_priority not in {"latest", "commit"}:

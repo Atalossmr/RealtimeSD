@@ -11,19 +11,21 @@
 3. 对窗口运行 `pyannote/segmentation-3.0`，得到帧级多标签分数（局部 ≤3 人、帧级 ≤2 人，含重叠）
 4. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding；纯净区不足时回退 `overlap_fallback`
 5. assigner 做 local->global 分配（后端可插拔，见 `diarization/cluster/backends/`）：默认 streaming 后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；每次加入新片段后按 `merge_threshold` 尝试合并最相似的一对 speaker（小并入大）
-6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线，无缓冲、无延迟确认；deferred（离线）后端逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
-7. 音频结束：闭合全部 open turn，writer 纯追加收尾——全程零重写
+6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线（raw 级），无缓冲、无延迟确认；deferred（离线）后端逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
+7. refined 级（仅 streaming）：`post_merge.RefinedRTTMWriter` 监听 merge 事件，每次 merge 后读取 raw RTTM + 当前 `merged_into`/centroid 状态整体重生成 `*.refined.rttm`（修正 merge 前写出的旧身份行）；EOF 时最终刷新并叠加小样本强制合并（`post_merge_min_speech_duration > 0` 时生效）
+8. 音频结束：闭合全部 open turn，writer 纯追加收尾——raw 全程零重写，修正只发生在 refined 级
 
 链路分层：
 
 - `track_builder`：chunk 内 local track 聚合与 embedding 门控
 - `backends`：聚类后端（streaming / ahc）与工厂，`base` 为后端接口
-- `rttm_writer`：零重写 RTTM 写出（open-turn 管线）
+- `rttm_writer`：零重写 raw RTTM 写出（open-turn 管线）
+- `post_merge`：refined 级输出 + 小样本簇强制合并后处理
 
 设计要点：
 
-- **纯流式：无 probationary/确认机制、无 RTTM 重写（含终局）、无 stable/延迟输出机制**
-- 分配一次定案，但支持事后 merge：每次加入新片段后，若最相似的一对 centroid 相似度 ≥ `merge_threshold` 则合并（count 小者并入大者）；已写出的 RTTM 不改，被合并者退出后续聚类
+- **raw 级纯流式：无 probationary/确认机制、无 RTTM 重写（含终局）、无 stable/延迟输出机制**；修正全部发生在 refined 级（独立文件，可整体重生成）
+- 分配一次定案，但支持事后 merge：每次加入新片段后，若最相似的一对 centroid 相似度 ≥ `merge_threshold` 则合并（count 小者并入大者）；raw 已写出的行不改，由 refined 级在下一次重生成时修正，被合并者退出后续聚类
 - false split 可由 merge 修复，false glue 仍不可修复，因此阈值策略仍为"宁可 glue 不可 split"：`new_speaker_threshold` 应适当调高
 - 收益：新 speaker 的首次发言在所属 chunk 提交区写出时即刻出现在输出中，输出延迟 ≈ 一个 hop + 沉默闭合确认
 
@@ -58,7 +60,7 @@
 
 每次加入新片段（observation 完成分配）后，计算全部 centroid 两两余弦相似度，若最相似的一对 ≥ `merge_threshold` 则合并：count 小者并入大者（count 相同保留 id 较小者），centroid 按 count 加权平均后重归一化。合并只影响后续分配：
 
-- 已写出的 RTTM 行不受影响（writer 全程 append-only）；
+- 已写出的 raw RTTM 行不受影响（writer 全程 append-only），历史行的归属修正由 refined 级（`post_merge.RefinedRTTMWriter`）在下一次重生成时完成；
 - 被合并 speaker 从 centroid 集中移除，不再参与后续 Hungarian 分配与 merge 判定；
 - 本 chunk 尚未写出的分配（含 Hungarian 结果里指向被合并者的 stale 匹配）改挂到幸存 id；
 - 被合并 id → 幸存 id 记录在 `merged_into`，合并事件以 `[merge]` 日志输出；
@@ -73,7 +75,7 @@
 - 某 chunk 新建了 global speaker 即进入 hold：该 chunk 及后续 chunk 的分配结果先缓存，不喂 writer / chunk_hook（RTTM 写出与 separation exporter 同步等待）；
 - 缓刑中的 speaker 全部被 merge 掉（提前定案）或满 N 个 chunk（超时定案）时，缓存的 chunk 经 `merged_into` 链式重映射后按原序一起输出——false split 的帧在写出前即归属幸存 speaker；
 - 窗口以第一个新 speaker 为锚不再延长，最大额外延迟 = N × hop；无新 speaker 的普通 chunk 零延迟直通；EOF 强制 flush；
-- 已写出的 RTTM 行不受影响（append-only 不变），hold 只改变"何时写、写什么 id"。
+- 已写出的 raw RTTM 行不受影响（append-only 不变），hold 只改变"何时写、写什么 id"。
 
 相关代码：`diarization/cluster/runner.py` 的 `run_clustering`
 
@@ -116,6 +118,7 @@ diarization/
       streaming.py     #     ChunkSpeakerClusterer：默认 streaming 后端（Hungarian + SMA，一次定案）
       ahc.py           #     AHCChunkAssigner：离线层次聚类后端
     rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加）
+    post_merge.py      #   refined 级输出（RefinedRTTMWriter，merge 事件动态重生成）+ 小样本簇强制合并（ahc finalize 内重映射）
     runner.py          #   run_clustering：聚类消费循环（pipeline.py 与 cluster/app 共用）
     app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
 ```
@@ -163,6 +166,11 @@ diarization/
 
 - `ahc_similarity_threshold` / `ahc_linkage`：仅 ahc 后端生效
 
+### 5b) cluster 阶段：后处理（小样本簇强制合并，两后端共用）
+
+- `post_merge_min_speech_duration`：总发声时长低于该值的簇并入质心最相似的达标簇；ahc 在 finalize 内重映射，streaming 在 refined 级 EOF 最终刷新时叠加（raw 文件不动）；0 = 关闭
+- `post_merge_min_similarity`：强制合并的相似度下限，低于则保留原身份
+
 ### 6) RTTM 输出
 
 - `min_segment_duration`
@@ -202,7 +210,8 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 
 每个输入音频默认输出：
 
-- `*.<backend_tag>.rttm`（streaming 后端为 `*.streaming.rttm`，ahc 后端为 `*.ahc.rttm`）
+- `*.<backend_tag>.rttm`（streaming 后端为 `*.raw.rttm`，ahc 后端为 `*.ahc.rttm`）
+- `*.refined.rttm`（仅 streaming 后端；merge 事件动态重生成 + EOF 叠加小样本合并，为最终输出）
 - `run.log`
 - `*.embeddings.npz`（仅 `save_embeddings: true` 时）
 

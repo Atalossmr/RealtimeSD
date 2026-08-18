@@ -1,7 +1,8 @@
 """聚类阶段 CLI：<stem>.chunks.npz -> 聚类 + RTTM 输出。
 
 读取嵌入提取阶段（python -m diarization.extract.app）产出的中间文件，用 YAML 配置的聚类后端
-（clustering_backend: streaming / ahc）做 local->global 分配并输出 RTTM。
+（clustering_backend: streaming / ahc）做 local->global 分配并输出 RTTM
+（streaming 后端产出 raw + refined 两级及 speakers.json sidecar）。
 不依赖音频与模型，可独立运行。
 """
 
@@ -68,7 +69,23 @@ def cluster_file(chunks_path: str, config, output_dir: str) -> str:
         config.streaming_merge_gap,
         config.show_rttm,
     )
-    run_clustering(artifacts, assigner, writer)
+
+    # refined 级（仅流式后端）：merge 事件动态重生成，EOF 叠加小样本合并。
+    refiner = None
+    if not assigner.deferred:
+        from .post_merge import RefinedRTTMWriter
+
+        base = rttm_path[: -len(f".{assigner.output_tag}.rttm")]
+        refiner = RefinedRTTMWriter(
+            rttm_path,
+            f"{base}.refined.rttm",
+            writer,
+            assigner,
+            min_duration=config.post_merge_min_speech_duration,
+            min_similarity=config.post_merge_min_similarity,
+        )
+
+    run_clustering(artifacts, assigner, writer, refiner=refiner)
     return rttm_path
 
 

@@ -7,7 +7,7 @@
 
 2) 目录批量评估（先逐文件 DER，再计算一次全局 DER）：
    python tools/compute_der.py --ref /path/to/ref_dir --sys /path/to/sys_dir \
-     --sys-suffix .streaming.rttm --ref-suffix .rttm
+     --sys-suffix .refined.rttm --ref-suffix .rttm
 
 3) 导出摘要文件：
    python tools/compute_der.py --ref /path/to/ref_dir --sys /path/to/sys_dir \
@@ -287,7 +287,7 @@ def compute_der_batch(
     sys_path: str,
     collar: float = 0.25,
     ignore_overlap: bool = False,
-    sys_suffix: str = ".streaming.rttm",
+    sys_suffix: str = ".refined.rttm",
     ref_suffix: str = ".rttm",
 ) -> tuple[list[DerResult], list[tuple[str, str]], Optional[GlobalDerResult]]:
     """批量计算 RTTM DER。
@@ -416,7 +416,7 @@ def main() -> int:
     parser.add_argument(
         "--sys-suffix",
         default=".rttm",
-        help="批量模式下系统 RTTM 文件后缀，默认 .streaming.rttm",
+        help="批量模式下系统 RTTM 文件后缀，默认 .refined.rttm",
     )
     parser.add_argument(
         "--ref-suffix",

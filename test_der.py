@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DER 评估脚本（替代原 test_der.sh）：跑实时管线 + 对 streaming RTTM 计算 DER。
+"""DER 评估脚本（替代原 test_der.sh）：跑实时管线 + 对 refined RTTM（流式后端的最终输出）计算 DER。
 
 运行参数以 `config.yaml` 为准，脚本只补充运行时必须信息和少量常用覆盖项。
 环境变量仍作为缺省值生效：
@@ -123,12 +123,12 @@ def main() -> int:
     if pipeline_rc != 0:
         return pipeline_rc
 
-    rttm_count = len(list(exp_dir.glob("*.streaming.rttm")))
+    rttm_count = len(list(exp_dir.glob("*.refined.rttm")))
     with open(results_file, "a", encoding="utf-8") as file_obj:
         file_obj.write(
-            f"{args.run_name} -> streaming_rttm_files={rttm_count} | config={args.config}\n"
+            f"{args.run_name} -> refined_rttm_files={rttm_count} | config={args.config}\n"
         )
-    print(f"Result: {args.run_name} -> streaming_rttm_files={rttm_count}")
+    print(f"Result: {args.run_name} -> refined_rttm_files={rttm_count}")
     print(f"Pipeline log: {exp_dir}/run.log")
 
     print("\n========== DER Results ==========")
@@ -139,7 +139,7 @@ def main() -> int:
         der_summary = exp_dir / "der_summary.txt"
         with open(der_log, "w", encoding="utf-8") as log:
             if rttm_count == 0:
-                message = f"{args.run_name} -> DER: SKIPPED | reason: no streaming RTTM found"
+                message = f"{args.run_name} -> DER: SKIPPED | reason: no refined RTTM found"
                 print(message)
                 log.write(message + "\n")
                 with open(results_file, "a", encoding="utf-8") as file_obj:
@@ -152,7 +152,7 @@ def main() -> int:
                            "--sys", str(exp_dir), "--ref", args.ref_rttm,
                            "--summary-file", str(der_summary),
                            "--collar", "0.0",
-                           "--sys-suffix", ".streaming.rttm",
+                           "--sys-suffix", ".refined.rttm",
                            "--ref-suffix", ".rttm"]
                 if args.der_verbose:
                     der_cmd.append("--verbose")

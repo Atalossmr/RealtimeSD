@@ -31,3 +31,16 @@ python3 viewer/server.py --exp_root exp --audio_root datasets --port 8000
 - 滚轮缩放（以鼠标为锚点）、拖动平移、"适配全段"重置；
 - 顶栏说话人 chip 点击可隐藏/显示该说话人（时间线与列表同步过滤）；
 - 播放时播放头自动跟随，转写列表同步高亮当前段。
+
+## refined 级 speaker 状态（uncertain / 合并事件）
+
+管线 streaming 后端的 refined 级每次刷新会同步落 `{uri}.speakers.json`
+sidecar（与 `{uri}.refined.rttm` 同目录、原子更新），viewer 轮询读取：
+
+- **合并事件**：被并说话人的段按幸存者颜色展示，标签显示 `spkA→spkB`，
+  顶栏保留删除线 chip 提示合并关系；重叠判定也按合并后的有效 id；
+- **uncertain 标记**：sidecar 开启小样本阈值（`post_merge_min_speech_duration > 0`）
+  时顶栏出现 "uncertain 标记" 开关；开启后发声时长未达标的说话人 chip 变
+  虚线框、标签加 `?`、时间线段淡化。说话人时长累积达标后标记自动解除，
+  被合并后按幸存者展示；
+- 无 sidecar（ahc 后端 / 旧产物 / 静态模式）时一切按无标记展示。

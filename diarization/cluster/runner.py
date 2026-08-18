@@ -1,4 +1,4 @@
-"""聚类消费循环：ChunkArtifacts 序列 -> assigner 分配 -> writer 输出 RTTM。
+"""聚类消费循环：ChunkArtifacts 序列 -> assigner 分配 -> writer 输出 raw RTTM。
 
 端到端流程（diarization/pipeline.py）与聚类 CLI（cluster/app.py）共用的唯一消费实现，
 保证流式与离线（deferred）后端在两条路径上行为一致。
@@ -11,6 +11,10 @@
   chunk 经 merged_into 链式重映射后按原序一起输出——false split 的帧在
   写出前即归属幸存 speaker，已写出的行仍不受影响（append-only 不变）；
 - 无新 speaker 的普通 chunk 零延迟直通；EOF 时强制 flush。
+
+refined 级（可选 refiner 参数，仅流式后端）：每个 chunk 写出后按最新合并
+状态整体重生成 refined RTTM 与 speakers.json sidecar（merge 历史行修正 +
+uncertain 标记随时长累积刷新），EOF 时 final 刷新叠加小样本强制合并。
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ def run_clustering(
     assigner: BaseChunkAssigner,
     writer: AppendOnlyRTTMWriter,
     chunk_hook: Optional[ChunkHook] = None,
+    refiner=None,
 ) -> None:
     """消费 chunk 序列并输出 RTTM（含 writer.finalize）。
 
@@ -43,6 +48,10 @@ def run_clustering(
     开启 new-speaker hold 时，新建 speaker 触发的缓存区延迟到 merge
     判定尘埃落定后统一输出（映射经 merged_into 重映射）。
     deferred（离线）后端：逐 chunk 暂存帧参数，finalize 统一聚类后按序重放。
+
+    refiner（可选，仅流式后端）：RefinedRTTMWriter，逐 chunk 按最新合并
+    状态重生成 refined RTTM 与 speaker 状态 sidecar，EOF 时 final 刷新
+    叠加小样本合并。
     """
 
     # ---- new-speaker hold 状态（仅流式后端） ----
@@ -88,6 +97,10 @@ def run_clustering(
             remapped,
         )
         writer.close_inactive(chunk.commit_end)
+        # refined 级逐 chunk 重生成：merge 事件的历史行修正即时生效，
+        # sidecar 的 speaker 时长/uncertain 标记也随时长累积刷新。
+        if refiner is not None:
+            refiner.refresh()
         if chunk_hook is not None:
             chunk_hook(chunk, remapped, debug_info, emitted_frames)
 
@@ -171,6 +184,10 @@ def run_clustering(
 
     # 闭合残余 open turn 并追加 id 映射表（纯追加，零重写）。
     writer.finalize()
+
+    # EOF：refined 级最终刷新，叠加小样本强制合并（post-merge）。
+    if refiner is not None:
+        refiner.refresh(final=True)
 
 
 __all__ = ["run_clustering", "ChunkHook"]

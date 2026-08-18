@@ -40,7 +40,7 @@ def main() -> None:
     for audio_path in audio_paths:
         logger.info("Processing %s", audio_path)
         output_path = pipeline.process_file(audio_path)
-        logger.info("Wrote streaming RTTM to %s", output_path)
+        logger.info("Wrote raw RTTM to %s", output_path)
 
 
 if __name__ == "__main__":

@@ -97,7 +97,8 @@ python3 -m diarization.app \
 
 每个输入音频会在 `output_dir` 下生成：
 
-- `*.<backend_tag>.rttm`：RTTM 结果（streaming 后端为 `*.streaming.rttm`，ahc 后端为 `*.ahc.rttm`；chunk 提交即最终，全程 append-only 零重写）
+- `*.<backend_tag>.rttm`：raw 级 RTTM（streaming 后端为 `*.raw.rttm`，ahc 后端为 `*.ahc.rttm`；chunk 提交即最终，全程 append-only 零重写）
+- `*.refined.rttm`：refined 级 RTTM（仅 streaming 后端；merge 事件后动态重生成修正历史行，结束时叠加小样本强制合并，是面向下游的最终输出）
 - `run.log`：运行日志
 - `*.embeddings.npz`：全部 observation 的 embedding（仅 `save_embeddings: true` 时）
 - `*.chunks.npz`：chunk 中间产物（仅提取阶段 `python3 -m diarization.extract.app` 产出）

@@ -30,6 +30,12 @@
     user-select: none; font-size: 12px;
   }
   .spk-chip.off { opacity: 0.35; }
+  .spk-chip.uncertain { border-style: dashed; opacity: 0.75; }
+  .spk-chip.merged { opacity: 0.5; text-decoration: line-through; cursor: default; }
+  #uncertainToggleWrap {
+    display: inline-flex; align-items: center; gap: 4px;
+    color: var(--dim); font-size: 12px; cursor: pointer; user-select: none;
+  }
   .spk-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   #stage { position: relative; padding: 8px 12px 0; }
   #timeline { width: 100%; height: 220px; display: block; cursor: crosshair;
@@ -75,6 +81,10 @@
   <audio id="player" controls></audio>
   <button id="fitBtn" title="重置缩放">适配全段</button>
   <span id="liveBadge" hidden>● LIVE</span>
+  <label id="uncertainToggleWrap" hidden
+         title="开启后，发声时长不足 post_merge_min_speech_duration 的说话人显示为 uncertain">
+    <input type="checkbox" id="uncertainToggle" checked> uncertain 标记
+  </label>
   <span id="speakers"></span>
 </div>
 <div id="stage">
@@ -97,6 +107,7 @@ const state = {
   speakerVisible: new Map(),
   activeIdx: -1,
   overlapFlags: [],          // 每段是否与其他说话人存在时间重叠
+  speakersInfo: null,        // refined 级 sidecar（{uri}.speakers.json）：时长/uncertain/合并事件
 };
 
 const PALETTE = ["#4f9cf9","#f97583","#56d4a0","#e3b341","#b083f0","#ff9f43",
@@ -116,13 +127,75 @@ const fmtTime = t => {
   return h ? `${h}:${base}` : base;
 };
 
-// 不同说话人的段时间相交 = 语音重叠（segments 已按 start 排序，内层可提前 break）
+// ---------- refined 级 speaker 状态（uncertain 标记 / 合并事件） ----------
+const uncertainToggle = document.getElementById("uncertainToggle");
+const uncertainToggleWrap = document.getElementById("uncertainToggleWrap");
+
+// global speaker id -> sidecar 条目
+function spkInfoMap() {
+  const map = new Map();
+  for (const s of state.speakersInfo?.speakers || []) map.set(s.id, s);
+  return map;
+}
+
+// 展示用有效 id：沿 merged_into 链解析，被并说话人归到幸存者
+function effId(id) {
+  const map = spkInfoMap();
+  const seen = new Set();
+  let cur = id;
+  while (map.get(cur)?.merged_into != null && !seen.has(cur)) {
+    seen.add(cur);
+    cur = map.get(cur).merged_into;
+  }
+  return cur;
+}
+
+// sidecar 开启了小样本阈值（post_merge_min_speech_duration > 0）才提供 uncertain 语义
+function uncertainEnabled() {
+  return (state.speakersInfo?.post_merge_min_speech_duration || 0) > 0;
+}
+
+function showUncertain(id) {
+  return uncertainToggle.checked && spkInfoMap().get(id)?.uncertain === true;
+}
+
+// 段的展示标签：合并显示 spkA→spkB，uncertain 加 ?
+function spkLabel(id) {
+  const eff = effId(id);
+  const base = eff !== id ? `spk${id}→spk${eff}` : `spk${eff}`;
+  return showUncertain(eff) ? base + "?" : base;
+}
+
+// sidecar 变化后重算派生状态（合并改变 effId，进而影响重叠判定/颜色/chip）
+function applySpeakerInfo() {
+  uncertainToggleWrap.hidden = !uncertainEnabled();
+  state.overlapFlags = computeOverlapFlags(state.segments);
+  buildSpeakerChips();
+  renderTranscript();
+}
+
+uncertainToggle.onchange = applySpeakerInfo;
+
+// 拉取 refined 级 sidecar；apply=false 时只更新状态（调用方随后统一渲染）
+async function fetchSpeakersInfo(uri, apply = true) {
+  try {
+    const resp = await fetch(`/api/speakers/${encodeURIComponent(uri)}`);
+    if (!resp.ok) return;
+    const info = await resp.json();
+    if (JSON.stringify(info) === JSON.stringify(state.speakersInfo)) return;
+    state.speakersInfo = info;
+    if (apply) applySpeakerInfo();
+  } catch { /* sidecar 暂不可读（原子替换中），下轮轮询再试 */ }
+}
+
+// 不同说话人的段时间相交 = 语音重叠（segments 已按 start 排序，内层可提前 break；
+// 说话人按合并后的有效 id 判定——已并入同一幸存者的段不算重叠）
 function computeOverlapFlags(segments) {
   const flags = new Array(segments.length).fill(false);
   for (let i = 0; i < segments.length; i++) {
     for (let j = i + 1; j < segments.length; j++) {
       if (segments[j].start >= segments[i].end) break;
-      if (segments[j].speaker_id !== segments[i].speaker_id) {
+      if (effId(segments[j].speaker_id) !== effId(segments[i].speaker_id)) {
         flags[i] = flags[j] = true;
       }
     }
@@ -200,6 +273,8 @@ async function pollUpdate() {
           const segments = await tResp.json();
           if (segments.length !== state.segments.length) mergeSegments(segments);
         }
+        // 合并事件/uncertain 变化不改变段数，sidecar 每轮独立轮询
+        await fetchSpeakersInfo(opt.value);
         setLiveBadge(opt.dataset.live === "1");
       }
     }
@@ -216,7 +291,7 @@ function mergeSegments(segments) {
       && n.speaker_id === s.speaker_id;
   });
   const knownSpeakers = new Set(state.speakerVisible.keys());
-  const hasNewSpeaker = segments.some(s => !knownSpeakers.has(s.speaker_id));
+  const hasNewSpeaker = segments.some(s => !knownSpeakers.has(effId(s.speaker_id)));
   state.segments = segments;
   state.overlapFlags = computeOverlapFlags(segments);
   if (hasNewSpeaker) buildSpeakerChips(); // 新说话人需要补 chip（保留已有可见性）
@@ -234,6 +309,8 @@ async function loadServerSession(uri) {
   const select = document.getElementById("sessionSelect");
   const opt = select.querySelector(`option[value="${CSS.escape(uri)}"]`);
   statusEl.textContent = `加载 ${uri} …`;
+  state.speakersInfo = null; // 切换会话时清空旧 sidecar，防止串台
+  await fetchSpeakersInfo(uri, /* apply= */ false);
   const resp = await fetch(`/api/transcript/${encodeURIComponent(uri)}`);
   const segments = await resp.json();
   const audioUrl = opt && opt.dataset.audioUrl;
@@ -247,6 +324,7 @@ function setSession(uri, segments, audioUrl) {
   state.overlapFlags = computeOverlapFlags(segments);
   state.activeIdx = -1;
   state.speakerVisible = new Map(); // 切换会话时重置说话人可见性
+  uncertainToggleWrap.hidden = !uncertainEnabled();
   buildSpeakerChips();
   renderTranscript();
   if (audioUrl) {
@@ -362,13 +440,13 @@ window.addEventListener("mouseup", e => {
 canvas.addEventListener("mousemove", e => {
   const t = x2t(e.offsetX * devicePixelRatio);
   const idx = state.segments.findIndex(s =>
-    state.speakerVisible.get(s.speaker_id) !== false && s.start <= t && t <= s.end);
+    state.speakerVisible.get(effId(s.speaker_id)) !== false && s.start <= t && t <= s.end);
   if (idx >= 0) {
     const seg = state.segments[idx];
     tooltip.style.display = "block";
     tooltip.style.left = (e.clientX + 12) + "px";
     tooltip.style.top = (e.clientY + 12) + "px";
-    tooltip.textContent = `[${fmtTime(seg.start)} - ${fmtTime(seg.end)}] spk${seg.speaker_id}` +
+    tooltip.textContent = `[${fmtTime(seg.start)} - ${fmtTime(seg.end)}] ${spkLabel(seg.speaker_id)}` +
       (state.overlapFlags[idx] ? "（与其他说话人重叠）" : "") + `: ${seg.text}`;
   } else {
     tooltip.style.display = "none";
@@ -423,20 +501,21 @@ function draw() {
     }
   }
 
-  // 段块（时间线轨道）
+  // 段块（时间线轨道；颜色/轨道/可见性按合并后的有效 id）
   const laneH = Math.max(8 * dpr, Math.min(16 * dpr, segH / 3));
   const laneGap = 2 * dpr;
-  const lanes = new Map(); // speaker_id -> lane idx
+  const lanes = new Map(); // 有效 speaker id -> lane idx
   for (let i = 0; i < state.segments.length; i++) {
     const s = state.segments[i];
-    if (state.speakerVisible.get(s.speaker_id) === false) continue;
+    const eff = effId(s.speaker_id);
+    if (state.speakerVisible.get(eff) === false) continue;
     if (s.end < state.viewStart || s.start > state.viewEnd) continue;
-    if (!lanes.has(s.speaker_id)) lanes.set(s.speaker_id, lanes.size);
-    const lane = lanes.get(s.speaker_id) % 3;
+    if (!lanes.has(eff)) lanes.set(eff, lanes.size);
+    const lane = lanes.get(eff) % 3;
     const x0 = Math.max(0, t2x(s.start)), x1 = Math.min(W, t2x(s.end));
     const y0 = segTop + lane * (laneH + laneGap);
-    ctx.fillStyle = spkColor(s.speaker_id);
-    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = spkColor(eff);
+    ctx.globalAlpha = showUncertain(eff) ? 0.4 : 0.85; // uncertain 段淡化
     ctx.fillRect(x0, y0, Math.max(2, x1 - x0), laneH);
     ctx.globalAlpha = 1;
     if (state.overlapFlags[i]) { // 重叠段：红色描边提示
@@ -486,18 +565,25 @@ function draw() {
 
 // ---------- 说话人筛选 ----------
 function buildSpeakerChips() {
-  const ids = [...new Set(state.segments.map(s => s.speaker_id))].sort((a, b) => a - b);
+  // chip 按合并后的有效 id 组织：被并说话人的段归入幸存者
+  const ids = [...new Set(state.segments.map(s => effId(s.speaker_id)))]
+    .sort((a, b) => a - b);
   // 保留已有可见性设置（增量刷新时新说话人默认可见，旧设置不丢）
   state.speakerVisible = new Map(
     ids.map(id => [id, state.speakerVisible.get(id) !== false])
   );
+  const info = spkInfoMap();
   const box = document.getElementById("speakers");
   box.innerHTML = "";
   for (const id of ids) {
     const chip = document.createElement("span");
     chip.className = "spk-chip";
     if (state.speakerVisible.get(id) === false) chip.classList.add("off");
-    chip.innerHTML = `<span class="spk-dot" style="background:${spkColor(id)}"></span>spk${id}`;
+    if (showUncertain(id)) chip.classList.add("uncertain");
+    chip.innerHTML =
+      `<span class="spk-dot" style="background:${spkColor(id)}"></span>${spkLabel(id)}`;
+    const duration = info.get(id)?.duration;
+    if (duration != null) chip.title = `发声时长 ${duration.toFixed(1)}s`;
     chip.onclick = () => {
       state.speakerVisible.set(id, !state.speakerVisible.get(id));
       chip.classList.toggle("off");
@@ -505,16 +591,29 @@ function buildSpeakerChips() {
     };
     box.appendChild(chip);
   }
+  // 被并掉的说话人：合并事件提示chip（删除线），仅展示不可筛选
+  const mergedIds = [...new Set(state.segments.map(s => s.speaker_id))]
+    .filter(id => effId(id) !== id)
+    .sort((a, b) => a - b);
+  for (const id of mergedIds) {
+    const chip = document.createElement("span");
+    chip.className = "spk-chip merged";
+    chip.innerHTML =
+      `<span class="spk-dot" style="background:${spkColor(id)}"></span>${spkLabel(id)}`;
+    chip.title = "合并事件：该说话人已并入幸存者，段按幸存者颜色展示";
+    box.appendChild(chip);
+  }
 }
 
 // ---------- 转写列表 ----------
 function appendTranscriptRow(s, i) {
-  if (state.speakerVisible.get(s.speaker_id) === false) return;
+  const eff = effId(s.speaker_id);
+  if (state.speakerVisible.get(eff) === false) return;
   const row = document.createElement("div");
   row.className = "seg"; row.dataset.idx = i;
   row.innerHTML =
     `<span class="time">${fmtTime(s.start)} - ${fmtTime(s.end)}</span>` +
-    `<span class="spk" style="color:${spkColor(s.speaker_id)}">spk${s.speaker_id}</span>` +
+    `<span class="spk" style="color:${spkColor(eff)}">${spkLabel(s.speaker_id)}</span>` +
     (state.overlapFlags[i] ? `<span class="overlap-badge">重叠</span>` : "") +
     `<span></span>`;
   row.lastChild.textContent = s.text;

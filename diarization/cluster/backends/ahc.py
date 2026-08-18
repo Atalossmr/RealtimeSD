@@ -10,6 +10,7 @@ import numpy as np
 from ...config import ChunkPipelineConfig
 from ...schema import ChunkDebugInfo, ChunkObservation
 from ..base import BaseChunkAssigner
+from ..post_merge import cluster_stats, compute_merge_map
 
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,31 @@ class AHCChunkAssigner(BaseChunkAssigner):
             self.config.ahc_similarity_threshold,
             self.config.ahc_linkage,
         )
+
+        # 逐簇统计总发声时长（供小样本合并后处理与阈值调参参考）。
+        centroids, durations = cluster_stats(labels, observations, embeddings)
+        logger.info(
+            "[ahc] cluster durations: %s",
+            {label: round(durations[label], 2) for label in sorted(durations)},
+        )
+
+        # 后处理：小样本簇强制并入质心最相似的达标簇（标签尚未写出，直接重映射）。
+        if self.config.post_merge_min_speech_duration > 0:
+            merge_map = compute_merge_map(
+                centroids,
+                durations,
+                self.config.post_merge_min_speech_duration,
+                self.config.post_merge_min_similarity,
+            )
+            if merge_map:
+                labels = np.array(
+                    [merge_map.get(int(label), int(label)) for label in labels.tolist()]
+                )
+                logger.info(
+                    "[ahc] post-merge: %d cluster(s) merged, %d remaining",
+                    len(merge_map),
+                    len(set(labels.tolist())),
+                )
 
         # 把全局 label 序列按 chunk 切回逐 chunk 的 local->global 映射，
         # 供 runner 按原始顺序重放帧级输出。

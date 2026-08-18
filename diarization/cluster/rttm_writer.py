@@ -1,4 +1,4 @@
-"""零重写的 chunk 级纯流式 RTTM 写出器。
+"""零重写的 chunk 级纯流式 RTTM 写出器（raw 级输出）。
 
 语义：
 
@@ -7,6 +7,8 @@
 - 每个 speaker 维护一个未闭合的 open turn（驻留内存），仅在间隔超过
   merge_gap 或 EOF 时闭合写出——所有拼接都发生在写出之前；
 - 每一行一旦写出即为最终，全程 append-only，`finalize` 也只追加不重写；
+- merge 事件对历史行的修正由 refined 级（cluster/post_merge.py）承担：
+  raw 文件保持原样，refined 按需整体重生成；
 - `finalize` 还可在文件末尾以 # 注释写出内部 global id -> RTTM speaker
   编号的映射表（RTTM 编号按首次写出顺序分配）。
 """
@@ -50,7 +52,17 @@ class AppendOnlyRTTMWriter:
 
         ensure_parent_dir(self.output_path)
         with open(self.output_path, "w", encoding="utf-8") as file_obj:
-            file_obj.write(f"# chunk streaming RTTM for {self.uri}\n")
+            file_obj.write(f"# chunk raw RTTM for {self.uri}\n")
+
+    @property
+    def output_id_map(self) -> dict[int, int]:
+        """内部 global id -> 输出 speaker 编号的实时映射（副本）。
+
+        文件末尾的 # id 映射表只在 finalize 写出；refined 级在流式期间
+        动态重生成时通过该属性取实时映射。
+        """
+
+        return dict(self._output_ids)
 
     # ------------------------------------------------------------------
     # 流式写出

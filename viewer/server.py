@@ -76,6 +76,26 @@ class SessionIndex:
         segments.sort(key=lambda s: (s["start"], s["end"]))
         return segments
 
+    def speakers_json(self, uri: str) -> dict | None:
+        """读取 refined 级的 speaker 状态 sidecar（{uri}.speakers.json）。
+
+        sidecar 由管线的 refined 级（RefinedRTTMWriter）与 refined RTTM
+        同步原子更新，包含各 speaker 的总时长、uncertain 标记与合并事件；
+        不存在（ahc 后端 / 旧产物）时返回 None，前端按无标记展示。
+        """
+
+        session = self.sessions.get(uri)
+        if not session:
+            return None
+        status_path = session["transcript"].parent / f"{uri}.speakers.json"
+        if not status_path.exists():
+            return None
+        try:
+            with open(status_path, encoding="utf-8") as file_obj:
+                return json.load(file_obj)
+        except (OSError, json.JSONDecodeError):
+            return None  # sidecar 正在原子替换，下一轮轮询再读
+
 
 class ViewerHandler(BaseHTTPRequestHandler):
     server_version = "RealtimeSDViewer/1.0"
@@ -174,6 +194,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": f"unknown uri: {uri}"}, status=404)
             else:
                 self._send_json(segments)
+            return
+        if route.startswith("/api/speakers/"):
+            uri = unquote(route[len("/api/speakers/"):])
+            if uri not in self.index.sessions:
+                self.index.scan()
+            # 无 sidecar 时返回 null（200），前端按无标记展示
+            self._send_json(self.index.speakers_json(uri))
             return
         if route.startswith("/api/audio/"):
             uri = unquote(route[len("/api/audio/"):])

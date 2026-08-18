@@ -286,17 +286,17 @@ def main() -> int:
             viewer_proc = None
 
     # ---- 汇总 ----
-    rttm_count = len(list(exp_dir.glob("*.streaming.rttm")))
+    rttm_count = len(list(exp_dir.glob("*.refined.rttm")))
     with open(results_file, "a", encoding="utf-8") as file_obj:
         file_obj.write(
-            f"{args.run_name} -> streaming_rttm_files={rttm_count} | config={config_path}\n"
+            f"{args.run_name} -> refined_rttm_files={rttm_count} | config={config_path}\n"
         )
         if args.asr:
             transcript_count = len(list(exp_dir.glob("*.transcript.jsonl")))
             file_obj.write(
                 f"{args.run_name} -> transcript_files={transcript_count} | config={config_path}\n"
             )
-    print(f"Result: {args.run_name} -> streaming_rttm_files={rttm_count}")
+    print(f"Result: {args.run_name} -> refined_rttm_files={rttm_count}")
     print(f"Pipeline log: {exp_dir}/run.log")
     if args.asr:
         print(f"ASR log: {exp_dir}/transcribe.log")

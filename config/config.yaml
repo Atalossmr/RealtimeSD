@@ -38,6 +38,10 @@ merge_protect_established: false
 ahc_similarity_threshold: 0.50
 ahc_linkage: average
 
+# ---- cluster 阶段：后处理（小样本簇强制合并；逐项说明见本目录 README.md） ----
+post_merge_min_speech_duration: 0.0
+post_merge_min_similarity: 0.0
+
 # ---- 分段音频导出（接流式 ASR；仅 streaming 后端生效） ----
 separation_enabled: true
 separation_model: JusperLee/TIGER-speech
