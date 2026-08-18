@@ -48,9 +48,6 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
         self.counts: dict[int, int] = {}
         # 被合并 speaker id -> 幸存 speaker id（仅用于追溯，不再参与分配）。
         self.merged_into: dict[int, int] = {}
-        # speaker 诞生时的 chunk 序号（merge_protect_established 的"年龄"依据）。
-        self.created_at: dict[int, int] = {}
-        self._chunk_counter = 0
 
         self.next_speaker_id = 0
 
@@ -115,28 +112,20 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
             observation.embedding.astype(np.float32, copy=False)
         )
         self.counts[speaker_id] = 1
-        self.created_at[speaker_id] = self._chunk_counter
         return speaker_id
 
     # ------------------------------------------------------------------
     # merge：最相似的一对 speaker 合并（小并入大）
     # ------------------------------------------------------------------
 
-    def _is_probationary(self, speaker_id: int) -> bool:
-        """speaker 是否仍在缓刑期（年龄 ≤ new_speaker_hold_chunks 个 chunk）。"""
-
-        probation = max(0, int(self.config.new_speaker_hold_chunks))
-        return self._chunk_counter - self.created_at.get(speaker_id, 0) <= probation
-
     def _pick_merge_pair(
         self, global_ids: list[int], similarities: np.ndarray
-    ) -> Optional[tuple[int, int, int, int, float]]:
+    ) -> Optional[tuple[int, int, float]]:
         """选出最相似的一对可合并 speaker。
 
         返回 (survivor, absorbed, similarity)；无可合并对返回 None。
-        merge_protect_established 开启时，被合并一方必须仍在缓刑期
-        （已存活过缓冲期的 speaker 不允许被并掉）：恰好一方在缓刑期时该方为
-        absorbed（不论 count），双方都在缓刑期时沿用"小并入大"。
+        方向按 (count, -id) 规则：count 大者为 survivor，count 相同保留
+        id 较小者。
         """
 
         n = len(global_ids)
@@ -147,25 +136,8 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
                 if similarity < self.config.merge_threshold:
                     continue
                 id_a, id_b = global_ids[row_idx], global_ids[col_idx]
-                if self.config.merge_protect_established:
-                    probationary_a = self._is_probationary(id_a)
-                    probationary_b = self._is_probationary(id_b)
-                    if not (probationary_a or probationary_b):
-                        # 双方都已存活过缓冲期：禁止合并。
-                        continue
-                    # 恰好一方在缓刑期时该方必为 absorbed；方向确定后按
-                    # (count, -id) 规则统一求 survivor/absorbed 的优先级。
-                    if probationary_a and not probationary_b:
-                        key_a, key_b = (0, 0), (1, 0)  # id_a 必为 absorbed
-                    elif probationary_b and not probationary_a:
-                        key_a, key_b = (1, 0), (0, 0)  # id_b 必为 absorbed
-                    else:
-                        key_a = (1, self.counts[id_a], -id_a)
-                        key_b = (1, self.counts[id_b], -id_b)
-                else:
-                    key_a = (1, self.counts[id_a], -id_a)
-                    key_b = (1, self.counts[id_b], -id_b)
-                # key 大者为 survivor；缓刑语义下 key 首元素小者必为 absorbed。
+                key_a = (self.counts[id_a], -id_a)
+                key_b = (self.counts[id_b], -id_b)
                 if key_a >= key_b:
                     survivor, absorbed = id_a, id_b
                 else:
@@ -188,8 +160,6 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
         加权平均后重归一化；被合并者从 centroid 集中移除，不再参与后续分配。
         raw RTTM 已写出行不受影响（历史行由 refined 级修正）；本 chunk 尚未
         写出的分配改挂到幸存 id。
-        merge_protect_established 开启时，已存活过缓冲期
-        （new_speaker_hold_chunks）的 speaker 不允许被合并。
         """
 
         if len(self.centroids) < 2:
@@ -215,7 +185,6 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
         self.counts[survivor] = total
         del self.centroids[absorbed]
         del self.counts[absorbed]
-        del self.created_at[absorbed]
         self.merged_into[absorbed] = survivor
 
         # 本 chunk 的帧尚未写出：把指向被合并者的分配与调试记录改挂到幸存 id。
@@ -285,7 +254,6 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
     ) -> tuple[dict[int, int], ChunkDebugInfo]:
         """完成一个 chunk 的 local->global 分配与 centroid 更新。"""
 
-        self._chunk_counter += 1
         debug_info: ChunkDebugInfo = {
             "num_centroids_before": len(self.centroids),
             "num_centroids_after": len(self.centroids),

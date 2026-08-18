@@ -189,9 +189,14 @@ python3 test_der.py ./datasets/aishell4-test
 - `tools/compute_der.py`：DER 统计与批量评估
 - `tools/analyze_log.py`：运行日志事件统计（模块 × 事件 × 级别）
 - `run.py`：运行编排脚本（ASR 先就绪，再启管线与 viewer）
+- `asr/`：独立转写模块（`python3 -m asr.app`，接口与用法见 `asr/README.md`）
 - `viewer/`：ASR 结果时间线可视化（`viewer/server.py`，见 `viewer/README.md`）
 - `test_der.py`：运行 + DER 评估脚本
 - `diarization/README.md`：按模块组织的详细实现说明
+
+三个模块（diarization / asr / viewer）之间无 IPC，全部经共享输出目录的
+文件交互（manifest / transcript / speakers.json sidecar / 哨兵），接口
+字段定义见各模块 README 的"文件交互接口"/"数据接口"章节。
 
 ## 备注
 

@@ -63,29 +63,17 @@
 - 已写出的 raw RTTM 行不受影响（writer 全程 append-only），历史行的归属修正由 refined 级（`post_merge.RefinedRTTMWriter`）在下一次重生成时完成；
 - 被合并 speaker 从 centroid 集中移除，不再参与后续 Hungarian 分配与 merge 判定；
 - 本 chunk 尚未写出的分配（含 Hungarian 结果里指向被合并者的 stale 匹配）改挂到幸存 id；
-- 被合并 id → 幸存 id 记录在 `merged_into`，合并事件以 `[merge]` 日志输出；
-- `merge_protect_established` 开启时，已存活过缓冲期（`new_speaker_hold_chunks` 个 chunk，按 `created_at` 年龄判定）的 speaker 不允许被并掉：只有缓刑期内的 speaker 可以作为 absorbed 方（恰好一方在缓刑期时该方必为 absorbed，不论 count）。用途：配合调低 `merge_threshold`，让 false split 在诞生早期即被并掉，同时杜绝资深 speaker 之间的误并。
+- 被合并 id → 幸存 id 记录在 `merged_into`，合并事件以 `[merge]` 日志输出。
 
 相关代码：`diarization/cluster/backends/streaming.py` 的 `_try_merge_speakers`
 
-### 4) new-speaker hold（输出延迟缓冲）
-
-`new_speaker_hold_chunks > 0` 时，runner 在流式路径上加一层输出缓冲（分配逻辑不受影响）：
-
-- 某 chunk 新建了 global speaker 即进入 hold：该 chunk 及后续 chunk 的分配结果先缓存，不喂 writer / chunk_hook（RTTM 写出与 separation exporter 同步等待）；
-- 缓刑中的 speaker 全部被 merge 掉（提前定案）或满 N 个 chunk（超时定案）时，缓存的 chunk 经 `merged_into` 链式重映射后按原序一起输出——false split 的帧在写出前即归属幸存 speaker；
-- 窗口以第一个新 speaker 为锚不再延长，最大额外延迟 = N × hop；无新 speaker 的普通 chunk 零延迟直通；EOF 强制 flush；
-- 已写出的 raw RTTM 行不受影响（append-only 不变），hold 只改变"何时写、写什么 id"。
-
-相关代码：`diarization/cluster/runner.py` 的 `run_clustering`
-
-### 5) centroid 更新
+### 4) centroid 更新
 
 - 全程 SMA 增量更新：`alpha = 1 / (count + 1)`
 - 常规更新门控：track 时长 ≥ `min_segment_duration_for_centroid_update`
 - `overlap_fallback` 片段可提 embedding 参与分配，但不更新 centroid
 
-### 6) 提交区与零重写输出
+### 5) 提交区与零重写输出
 
 - 重叠滑窗（`hop_duration < chunk_duration`）时，每窗口只提交中段 `hop_duration` 秒，两侧各留 `(chunk-hop)/2` 边界缓冲；首窗从 0 开始
 - 每个 speaker 维护一个未闭合的 open turn（驻留内存）：后续帧/段间隔 ≤ `streaming_merge_gap` 即在写出前扩展拼接，跨 chunk 生效
@@ -159,8 +147,6 @@ diarization/
 - `min_segment_duration_for_new_speaker`
 - `min_segment_duration_for_centroid_update`
 - `merge_threshold`（每次加入新片段后，最相似的一对 centroid 相似度 ≥ 此值即合并，小并入大）
-- `new_speaker_hold_chunks`（新建 speaker 后缓存输出最多 N 个 chunk，merge 定案后经 `merged_into` 重映射一起输出；0 = 关闭）
-- `merge_protect_established`（已存活过缓冲期的 speaker 禁止被并，缓刑期内 speaker 才可作 absorbed 方）
 
 ### 5) cluster 阶段：ahc 后端
 
@@ -214,6 +200,69 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 - `*.refined.rttm`（仅 streaming 后端；merge 事件动态重生成 + EOF 叠加小样本合并，为最终输出）
 - `run.log`
 - `*.embeddings.npz`（仅 `save_embeddings: true` 时）
+
+### 文件交互接口（下游消费契约）
+
+diarization 与 ASR / viewer 之间无 IPC，全部经共享输出目录的文件交互。
+**核心约定：所有对外文件里的 speaker id 都是 assigner 的 global id**
+（RTTM 行内的输出编号除外，可用行内/文件末尾的 id 映射表换算）。
+写读时序保证：追加在依赖之后、JSON/RTTM 重写均走临时文件 + 原子替换，
+消费者永远读不到半写文件。
+
+#### `{uri}.raw.rttm` / `{uri}.refined.rttm`（streaming 后端）
+
+- raw：append-only 零重写，行写出即最终；refined：整体重生成（原子替换），merge 历史修正 + EOF 小样本合并后的最终输出，**下游应消费 refined**；
+- 行格式（标准 RTTM）：`SPEAKER <uri> 0 <start> <dur> <NA> <NA> <输出编号> <NA> <NA>`；
+- 文件末尾 `#` 注释映射表：`#   <global_id> -> <输出编号>`（refined 为合并修正后的最终映射）。
+
+#### `{uri}.speakers.json`（streaming 后端，refined 级 sidecar）
+
+随 refined RTTM 同步原子更新；viewer 用它做 uncertain 标记与合并展示：
+
+```json
+{
+  "uri": "...", "final": false,
+  "post_merge_min_speech_duration": 30.0,
+  "speakers": [
+    {"id": 0, "output_id": 1, "duration": 123.4,
+     "uncertain": false, "merged_into": null}
+  ],
+  "merge_events": [{"absorbed": 9, "survivor": 8, "kind": "merge"}]
+}
+```
+
+- `speakers[].id` = global id（与 transcript 的 `speaker_id` 同源）；
+- `duration`：总发声时长（秒）；被并 speaker 置 `null`（时长已计入幸存者）；
+- `uncertain`：`post_merge_min_speech_duration > 0` 且未合并、时长未达标；
+- `merged_into`：最终幸存 global id（含流式 merge 链 + post-merge 两级），未并时为 `null`；
+- `merge_events[].kind`：`merge`（流式期间）/ `post_merge`（EOF 小样本强制合并）；
+- `final`：false = 管线仍在运行，状态还会变化；true = EOF 最终刷新。
+
+#### `{uri}.segments.jsonl` + `segments/{uri}/`（仅 `separation_enabled: true`）
+
+接 ASR 的分段音频导出（详见 `separation/exporter.py`）：
+
+- manifest：append-only JSONL，每行
+  `{"uri", "speaker_id"(global id), "start", "end", "path"}`；
+  **行在其指向的 wav 落盘之后才追加**，读到行即可读音频；
+- 音频段：`segments/{uri}/spk{speaker_id}_{start}_{end}.wav`，
+  单声道、采样率 = `config.sample_rate`（默认 16kHz）；
+- `speaker_id` 为**合并前**的 global id（段一写定音，后续合并不回溯）。
+
+#### `{uri}.embeddings.npz`（仅 `save_embeddings: true`）
+
+npz 字段：`embeddings`(N×dim, L2 归一化) / `local_idx` / `start` / `end` / `duration`，
+供离线实验复用（如 `tools/sweep_post_merge.py`）。
+
+#### `{uri}.chunks.npz`（extract → cluster 两阶段中间产物）
+
+逐 chunk 的 observations（含 embedding）+ 帧级输出参数，纯 numpy 无 pickle；
+字段布局见 `utils/chunk_io.py` 的模块 docstring。`diarization.cluster.app`
+消费它重放聚类（换后端/调参秒级完成）。
+
+#### 协调哨兵（由 run.py 管理，diarization 本身不写）
+
+- `.diarization_done`：run.py 在管线退出后 touch；ASR 据此收尾退出，viewer 据此熄灭 LIVE。
 
 ### 调试建议
 

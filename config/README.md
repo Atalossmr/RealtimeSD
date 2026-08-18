@@ -66,9 +66,7 @@ track 构造逻辑（`diarization/extract/track_builder.py`）：纯净帧 = 本
 | `new_speaker_threshold` | `0.50` | 新建 speaker 的相似度阈值。**注意遮蔽语义**：`matched` 分支优先，new 只在 `similarity < new_speaker_threshold` 时触发，因此该阈值只有 ≤ match 阈值时才实际生效；两者之差构成 `fallback` 保守带（沿用但不更新）。当前值 0.55/0.50 是 aishell4-test 阈值扫描的最优点 |
 | `min_segment_duration_for_new_speaker` | `0.50` | track 时长达到该值才允许新建 speaker（秒） |
 | `min_segment_duration_for_centroid_update` | `1.50` | track 时长达到该值才允许更新 centroid（秒） |
-| `merge_threshold` | `0.70` | 每次加入新片段后，若最相似的一对 centroid 相似度 ≥ 此值则合并（count 小者并入大者，centroid 按 count 加权平均）。只影响后续分配：已写出的 RTTM 不改，被合并者退出后续聚类；本 chunk 未写出的分配改挂幸存 id |
-| `new_speaker_hold_chunks` | `0` | new-speaker hold：某 chunk 新建 speaker 后，缓存该 chunk 及后续最多 N 个 chunk 的输出（RTTM 与 exporter 同步等待）；缓刑 speaker 全部被 merge 或满 N 个 chunk 时，缓存经 `merged_into` 重映射后按原序一起输出。false split 的帧在写出前即归属幸存 speaker；窗口以第一个新 speaker 为锚不延长，最大额外延迟 N 个 chunk。`0` = 关闭 |
-| `merge_protect_established` | `false` | 开启后，已存活过缓冲期（`new_speaker_hold_chunks` 个 chunk）的 speaker 不允许被 merge 掉：只有缓刑期内的 speaker 可以作为 absorbed 方（恰好一方在缓刑期时该方必为 absorbed，不论 count）。配合调低 `merge_threshold`，可在不误并资深 speaker 的前提下尽早修掉 false split；`hold_chunks: 0` 时退化为"仅同 chunk 诞生的对可并" |
+| `merge_threshold` | `0.70` | 每次加入新片段后，若最相似的一对 centroid 相似度 ≥ 此值则合并（count 小者并入大者，centroid 按 count 加权平均）。只影响后续分配：raw RTTM 已写出行不改（历史行由 refined 级修正），被合并者退出后续聚类；本 chunk 未写出的分配改挂幸存 id |
 
 身份一次定案 + 事后 merge：false split 可由 merge 修复，false glue 仍不可修复，
 阈值策略应"宁可 glue 不可 split"。centroid 全程 SMA 增量更新（`alpha = 1/(count+1)`）。

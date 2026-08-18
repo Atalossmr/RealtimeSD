@@ -20,6 +20,46 @@ python3 viewer/server.py --exp_root exp --audio_root datasets --port 8000
 - 音频不在扫描目录时：`--audio URI=/path/to/audio.wav` 显式指定；
 - 音频支持 HTTP Range，长会议音频 seek 无压力。
 
+## 数据接口（消费的文件）
+
+viewer 只读文件、不写；与管线/ASR 的交互全部经以下产物：
+
+| 文件 | 生产者 | 字段/语义 |
+|---|---|---|
+| `{uri}.transcript.jsonl` | ASR（`asr.app`） | 每行 `{"uri","speaker_id","start","end","text"}`，按 start 排序、整体重写；`speaker_id` 为合并前的 global id |
+| `{uri}.speakers.json` | diarization refined 级 | 见下；不存在（ahc 后端/旧产物/静态模式）时按无标记展示 |
+| `{uri}.wav` | 原始音频 | 在 `--audio_root` 下按文件名（不含扩展名）= uri 递归匹配 |
+| `.diarization_done` | run.py | 哨兵：不存在 = 管线仍在运行（LIVE，持续轮询） |
+
+`{uri}.speakers.json` 结构（字段定义见 `diarization/README.md` 的文件接口节）：
+
+```json
+{
+  "final": false, "post_merge_min_speech_duration": 30.0,
+  "speakers": [{"id": 0, "output_id": 1, "duration": 123.4,
+                "uncertain": false, "merged_into": null}],
+  "merge_events": [{"absorbed": 9, "survivor": 8, "kind": "merge"}]
+}
+```
+
+前端用法：`speakers[].id` 与 transcript 的 `speaker_id` 同源（global id），
+沿 `merged_into` 链解析出展示用有效 id——被并说话人的段按幸存者颜色展示、
+标签显示 `spkA→spkB`，顶栏保留删除线 chip 提示合并关系，重叠判定同样按
+有效 id；`uncertain` + 顶栏 "uncertain 标记" 开关控制不确定标记（虚线 chip、
+标签加 `?`、时间线段淡化），开关仅在 `post_merge_min_speech_duration > 0`
+时出现，说话人时长累积达标后标记自动解除。
+
+HTTP 端点（服务器模式）：
+
+- `GET /api/sessions`：会话列表（`uri` / `transcript_url` / `audio_url` / `live`），每次请求重扫目录；
+- `GET /api/transcript/{uri}`：转写段数组（`speaker_id`/`start`/`end`/`text`）；
+- `GET /api/speakers/{uri}`：speakers.json 内容，无 sidecar 返回 `null`；
+- `GET /api/audio/{uri}`：音频流（支持 Range / 206）。
+
+前端每 2s 轮询 sessions + transcript + speakers：transcript 按"旧段是新段
+前缀"增量合并；speakers.json 用 JSON 串比对，变化即整体重算（合并映射、
+uncertain、重叠标记）。
+
 ## 静态模式（无服务器）
 
 直接用浏览器打开 `viewer/static/index.html`，手动选择音频文件和
@@ -31,16 +71,3 @@ python3 viewer/server.py --exp_root exp --audio_root datasets --port 8000
 - 滚轮缩放（以鼠标为锚点）、拖动平移、"适配全段"重置；
 - 顶栏说话人 chip 点击可隐藏/显示该说话人（时间线与列表同步过滤）；
 - 播放时播放头自动跟随，转写列表同步高亮当前段。
-
-## refined 级 speaker 状态（uncertain / 合并事件）
-
-管线 streaming 后端的 refined 级每次刷新会同步落 `{uri}.speakers.json`
-sidecar（与 `{uri}.refined.rttm` 同目录、原子更新），viewer 轮询读取：
-
-- **合并事件**：被并说话人的段按幸存者颜色展示，标签显示 `spkA→spkB`，
-  顶栏保留删除线 chip 提示合并关系；重叠判定也按合并后的有效 id；
-- **uncertain 标记**：sidecar 开启小样本阈值（`post_merge_min_speech_duration > 0`）
-  时顶栏出现 "uncertain 标记" 开关；开启后发声时长未达标的说话人 chip 变
-  虚线框、标签加 `?`、时间线段淡化。说话人时长累积达标后标记自动解除，
-  被合并后按幸存者展示；
-- 无 sidecar（ahc 后端 / 旧产物 / 静态模式）时一切按无标记展示。

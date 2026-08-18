@@ -26,7 +26,26 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
+
+
+def _make_effective_config(config_path: str, exp_dir: Path) -> str:
+    """生成 DER 评估用的生效配置：强制 separation_enabled=false。
+
+    DER 只评估 diarization 的 RTTM 产物，不需要 TIGER 分段音频导出
+    （节省导出耗时、避免分离模型的干扰）；其余调参项原样保留，
+    生效配置落盘到 exp_dir 便于追溯。
+    """
+
+    with open(config_path, "r", encoding="utf-8") as file_obj:
+        cfg = yaml.safe_load(file_obj) or {}
+    cfg["separation_enabled"] = False
+    effective_path = exp_dir / "config.effective.yaml"
+    with open(effective_path, "w", encoding="utf-8") as file_obj:
+        yaml.safe_dump(cfg, file_obj, allow_unicode=True, sort_keys=False)
+    return str(effective_path)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -90,9 +109,13 @@ def main() -> int:
         print("hf_cache_dir override enabled")
     print("==========================================")
 
+    # DER 只评估 RTTM：生效配置强制 separation_enabled=false（其余原样）。
+    effective_config = _make_effective_config(args.config, exp_dir)
+
     with open(results_file, "w", encoding="utf-8") as file_obj:
         file_obj.write("DER test\n" + "=" * 40 + "\n")
         file_obj.write(f"audio_input: {args.audio}\nconfig_path: {args.config}\n")
+        file_obj.write(f"effective_config: {effective_config} (separation_enabled=false)\n")
         if args.model_path:
             file_obj.write(f"model_path_override: {args.model_path}\n")
         if args.hf_cache_dir:
@@ -103,7 +126,7 @@ def main() -> int:
         file_obj.write("\n")
 
     cmd = [sys.executable, "-m", "diarization.app",
-           "--wav", args.audio, "--output_dir", str(exp_dir), "--config", args.config]
+           "--wav", args.audio, "--output_dir", str(exp_dir), "--config", effective_config]
     if args.model_path:
         cmd += ["--model_path", args.model_path]
     if args.hf_cache_dir:

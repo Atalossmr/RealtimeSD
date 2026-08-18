@@ -137,14 +137,6 @@ class ChunkPipelineConfig:
     # （count 小者并入大者）；raw RTTM 已写出行不受影响（历史行由 refined 级
     # 修正），被合并者退出后续聚类。
     merge_threshold: float = 0.70
-    # new-speaker hold：某 chunk 新建 speaker 后，缓存该 chunk 及后续最多
-    # N 个 chunk 的输出（RTTM 与 exporter 同步等待），缓刑 speaker 被全部
-    # merge 或满 N 个 chunk 时经 merged_into 重映射后一起输出；0 = 关闭。
-    new_speaker_hold_chunks: int = 0
-    # 开启后，已存活过缓冲期（new_speaker_hold_chunks）的 speaker 不允许被
-    # merge 掉：只有缓刑期内的 speaker 可以作为 absorbed 方。配合调低
-    # merge_threshold 可在不误并资深 speaker 的前提下尽早修掉 false split。
-    merge_protect_established: bool = False
 
     # ---- cluster 阶段：ahc 后端（离线层次聚类） ----
     ahc_similarity_threshold: float = 0.50
@@ -324,10 +316,6 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
             _merged_value(args, "min_segment_duration_for_centroid_update", 1.50)
         ),
         merge_threshold=float(_merged_value(args, "merge_threshold", 0.70)),
-        new_speaker_hold_chunks=int(_merged_value(args, "new_speaker_hold_chunks", 0)),
-        merge_protect_established=bool(
-            _merged_value(args, "merge_protect_established", False)
-        ),
         clustering_backend=str(_merged_value(args, "clustering_backend", "streaming")),
         ahc_similarity_threshold=float(
             _merged_value(args, "ahc_similarity_threshold", 0.50)
@@ -361,8 +349,6 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
     )
     if config.chunk_duration <= 0.0:
         raise ValueError("chunk_duration must be > 0")
-    if config.new_speaker_hold_chunks < 0:
-        raise ValueError("new_speaker_hold_chunks must be >= 0")
     if config.post_merge_min_speech_duration < 0:
         raise ValueError("post_merge_min_speech_duration must be >= 0")
     if config.post_merge_min_similarity < 0:
