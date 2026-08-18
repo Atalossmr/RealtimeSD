@@ -524,16 +524,6 @@ function draw() {
       ctx.strokeRect(x0 + 1, y0 + 1, Math.max(2, x1 - x0) - 2, laneH - 2);
       ctx.lineWidth = 1;
     }
-    if (x1 - x0 > 60 * dpr) {
-      ctx.fillStyle = "#111";
-      ctx.font = `${11 * dpr}px sans-serif`;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(x0, y0, x1 - x0, laneH);
-      ctx.clip();
-      ctx.fillText(s.text, x0 + 3 * dpr, y0 + laneH - 3 * dpr);
-      ctx.restore();
-    }
   }
 
   // 刻度尺

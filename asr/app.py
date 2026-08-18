@@ -12,7 +12,7 @@
   已有的全部段即落盘返回；
 - 跟随（`--follow --done_file <path>`）：与管线同时启动，轮询 manifest 增量
   读取新追加的段、即出即转（manifest 行在 wav 落盘之后才追加，读到行即
-  可读音频）；每轮把有新结果的 uri 重写落盘（供 viewer 实时展示），done
+  可读音频）；每转完一段即时重写落盘（供 viewer 实时展示），done
   哨兵文件出现且积压清空后做最后一次落盘并退出。
 
 输出：`{uri}.transcript.jsonl`（按 start 排序）。
@@ -165,10 +165,12 @@ def consume_segments_dir(
                 _transcribe_entry(config, transcriber, entry, results)
                 progressed = True
                 dirty_uris.add(uri)
-        # 跟随模式即出即写：每轮把有新结果的 uri 重写落盘（文件小、幂等），
-        # 供 viewer 等消费者在管线运行期间实时读取；退出前的统一落盘只是
-        # 最后一次重写。
+                # 跟随模式逐段落盘（文件小、幂等重写）：viewer 能看到转写
+                # 逐段生长，而不是等整批积压转完才一次性出现。
+                if done_file is not None:
+                    _write_transcript(uri, results, output_dir)
         if done_file is not None:
+            # 轮末兜底重写（与逐段落盘同一份结果，幂等）。
             for uri in dirty_uris:
                 _write_transcript(uri, results_by_uri[uri], output_dir)
         if done_file is None:

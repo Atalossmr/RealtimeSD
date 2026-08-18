@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="不启动 viewer 服务器",
     )
     parser.add_argument(
-        "--viewer_port", type=int, default=int(os.environ.get("VIEWER_PORT", "8000"))
+        "--viewer_port", type=int, default=int(os.environ.get("VIEWER_PORT", "9331"))
     )
     parser.add_argument(
         "--asr_ready_timeout",
