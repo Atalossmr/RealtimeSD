@@ -302,8 +302,11 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
             assigned_speaker = matched_speaker
             decision = "matched"
         # new：相似度低于建簇阈值且时长足够，新建全局 speaker（立即生效）。
+        # overlap_fallback 观测（allow_centroid_update=False）的 embedding 含串音，
+        # 禁止建簇——初始 centroid 会被永久污染，只允许 matched/fallback/放弃。
         elif (
-            len(self.centroids) < config.max_speakers
+            observation.allow_centroid_update
+            and len(self.centroids) < config.max_speakers
             and (matched_speaker is None or similarity < config.new_speaker_threshold)
             and (observation.duration >= config.min_segment_duration_for_new_speaker)
         ):
