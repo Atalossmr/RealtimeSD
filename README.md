@@ -148,7 +148,7 @@ python3 test_der.py ./datasets/aishell4-test
   `.asr_ready`），再启动 viewer 服务器（`viewer/server.py`，浏览器打开
   http://127.0.0.1:${VIEWER_PORT:-8000} 查看波形 + ASR 时间线）与
   diarization 管线
-- `run.py` 每次运行会清理 `${OUTPUT_ROOT:-./exp}/common`
+- `run.py` 每次运行只清理 `${OUTPUT_ROOT:-./exp}/common/{run_name}`（其他历史 run 目录保留）
 - `test_der.py` 每次运行会清理 `${OUTPUT_ROOT:-./exp}/der_test`
 
 ## pipeline 行为概览
@@ -185,6 +185,7 @@ python3 test_der.py ./datasets/aishell4-test
 ## 仓库结构
 
 - `diarization/`：主实现（端到端组合在 `diarization/pipeline.py`，入口 `python3 -m diarization.app`）
+- `common/`：asr / diarization 共用的公共实现（配置合并、日志、ModelScope 缓存解析）
 - `speakerlab/`：本地依赖与 `md-eval.pl`
 - `tools/compute_der.py`：DER 统计与批量评估
 - `tools/analyze_log.py`：运行日志事件统计（模块 × 事件 × 级别）

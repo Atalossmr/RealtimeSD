@@ -10,66 +10,16 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, fields as dataclass_fields
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import yaml
+from common import config as common_config
 
 from .constants import BASE_DIR
 
 
 DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "config.yaml"
-
-
-def _parser_dest_set(parser: argparse.ArgumentParser) -> set[str]:
-    """收集 argparse 中定义过的参数名，用于校验 YAML 键名。"""
-
-    return {
-        action.dest
-        for action in parser._actions
-        if action.dest not in {argparse.SUPPRESS, "help"}
-    }
-
-
-def _extract_provided_dests(
-    parser: argparse.ArgumentParser, argv: list[str] | None
-) -> set[str]:
-    """根据原始命令行，判断用户显式传了哪些参数。"""
-
-    if argv is None:
-        return set()
-
-    option_to_dest: dict[str, str] = {}
-    for action in parser._actions:
-        for option_string in action.option_strings:
-            option_to_dest[option_string] = action.dest
-
-    provided: set[str] = set()
-    for token in argv:
-        if not token.startswith("-"):
-            continue
-        option = token.split("=", 1)[0]
-        dest = option_to_dest.get(option)
-        if dest is not None:
-            provided.add(dest)
-    return provided
-
-
-def _load_yaml_config(config_path: str, explicit: bool) -> dict[str, object]:
-    """读取 YAML 配置文件。"""
-
-    path = Path(config_path)
-    if not path.exists():
-        if explicit:
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-        return {}
-
-    with open(path, "r", encoding="utf-8") as file_obj:
-        data = yaml.safe_load(file_obj) or {}
-    if not isinstance(data, dict):
-        raise ValueError("YAML config must be a mapping at top level")
-    return data
 
 
 def validate_runtime_args(args: argparse.Namespace) -> None:
@@ -243,109 +193,31 @@ def merge_args_with_config(
     args: argparse.Namespace,
     argv: list[str] | None = None,
 ) -> argparse.Namespace:
-    """把 YAML 配置和 CLI 参数合并成最终运行参数。
+    """把 YAML 配置和 CLI 参数合并成最终运行参数（实现见 common.config）。
 
     合并优先级：argparse 默认值 < YAML 配置 < 显式 CLI 参数。
     调参项不在 CLI 上，因此它们的生效值始终以 YAML 为准。
     """
 
-    provided_dests = _extract_provided_dests(parser, argv)
-    args_dict = vars(args)
-
-    config_path = str(args_dict.get("config", DEFAULT_CONFIG_PATH))
-    explicit_config = "config" in provided_dests
-    yaml_config = _load_yaml_config(config_path, explicit=explicit_config)
-
-    valid_keys = _parser_dest_set(parser) | {
-        field.name for field in dataclass_fields(ChunkPipelineConfig)
-    }
-    unknown_keys = sorted(set(yaml_config.keys()) - valid_keys)
-    if unknown_keys:
-        raise ValueError(f"Unknown keys in YAML config: {', '.join(unknown_keys)}")
-
-    merged = dict(args_dict)
-    merged.update(yaml_config)
-
-    for dest in provided_dests:
-        if dest == "config":
-            continue
-        merged[dest] = args_dict[dest]
-
-    merged["config"] = config_path
-    return argparse.Namespace(**merged)
-
-
-def _merged_value(merged_args: argparse.Namespace, name: str, default):
-    """从合并后的参数对象中读取字段，缺失时回退到给定默认值。"""
-
-    return getattr(merged_args, name, default)
+    return common_config.merge_args_with_config(
+        parser,
+        args,
+        argv,
+        default_config_path=DEFAULT_CONFIG_PATH,
+        config_type=ChunkPipelineConfig,
+    )
 
 
 def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
-    """把合并后的参数转换为 `ChunkPipelineConfig`。"""
+    """把合并后的参数转换为 `ChunkPipelineConfig`。
 
-    config = ChunkPipelineConfig(
-        device=_merged_value(args, "device", "auto"),
-        model_type=_merged_value(args, "model_type", "eres2netv2"),
-        segmentation_model=_merged_value(
-            args, "segmentation_model", "pyannote/segmentation-3.0"
-        ),
-        hf_token=_merged_value(args, "hf_token", None),
-        chunk_duration=float(_merged_value(args, "chunk_duration", 10.0)),
-        hop_duration=float(_merged_value(args, "hop_duration", 5.0)),
-        min_local_activity_duration=float(
-            _merged_value(args, "min_local_activity_duration", 0.30)
-        ),
-        min_segment_duration_for_embedding=float(
-            _merged_value(args, "min_segment_duration_for_embedding", 0.30)
-        ),
-        max_segment_duration_for_embedding=float(
-            _merged_value(args, "max_segment_duration_for_embedding", 4.0)
-        ),
-        region_priority=str(_merged_value(args, "region_priority", "commit")),
-        segment_batch_size=int(_merged_value(args, "segment_batch_size", 8)),
-        max_speakers=int(_merged_value(args, "max_speakers", 50)),
-        new_speaker_threshold=float(_merged_value(args, "new_speaker_threshold", 0.50)),
-        global_match_threshold=float(
-            _merged_value(args, "global_match_threshold", 0.55)
-        ),
-        min_segment_duration_for_new_speaker=float(
-            _merged_value(args, "min_segment_duration_for_new_speaker", 0.50)
-        ),
-        min_segment_duration_for_centroid_update=float(
-            _merged_value(args, "min_segment_duration_for_centroid_update", 1.50)
-        ),
-        merge_threshold=float(_merged_value(args, "merge_threshold", 0.70)),
-        clustering_backend=str(_merged_value(args, "clustering_backend", "streaming")),
-        ahc_similarity_threshold=float(
-            _merged_value(args, "ahc_similarity_threshold", 0.50)
-        ),
-        ahc_linkage=str(_merged_value(args, "ahc_linkage", "average")),
-        post_merge_min_speech_duration=float(
-            _merged_value(args, "post_merge_min_speech_duration", 0.0)
-        ),
-        post_merge_min_similarity=float(
-            _merged_value(args, "post_merge_min_similarity", 0.0)
-        ),
-        separation_enabled=bool(_merged_value(args, "separation_enabled", False)),
-        separation_model=str(
-            _merged_value(args, "separation_model", "JusperLee/TIGER-speech")
-        ),
-        separation_energy_ratio=float(
-            _merged_value(args, "separation_energy_ratio", 0.10)
-        ),
-        separation_min_match_similarity=float(
-            _merged_value(args, "separation_min_match_similarity", 0.10)
-        ),
-        separation_match_reference=str(
-            _merged_value(args, "separation_match_reference", "observation")
-        ),
-        save_embeddings=bool(_merged_value(args, "save_embeddings", False)),
-        min_segment_duration=float(_merged_value(args, "min_segment_duration", 0.30)),
-        streaming_merge_gap=float(_merged_value(args, "streaming_merge_gap", 0.25)),
-        output_dir_for_streaming=_merged_value(args, "output_dir", None),
-        show_rttm=bool(_merged_value(args, "show_rttm", False)),
-        debug=bool(_merged_value(args, "debug", False)),
+    字段值取自合并后的 args，缺失时落回 dataclass 字段默认值（唯一兜底来源）。
+    """
+
+    config = common_config.dataclass_from_args(
+        args,
+        ChunkPipelineConfig,
+        attr_overrides={"output_dir_for_streaming": "output_dir"},
     )
     if config.chunk_duration <= 0.0:
         raise ValueError("chunk_duration must be > 0")
@@ -365,7 +237,7 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
             f"got {config.separation_match_reference!r}"
         )
 
-    hf_cache_dir = _merged_value(args, "hf_cache_dir", None)
+    hf_cache_dir = getattr(args, "hf_cache_dir", None)
     if hf_cache_dir:
         # YAML 中的相对路径（如 ./pretrained/huggingface）按仓库根目录解析，
         # 避免从其他工作目录运行时缓存失效或重复下载。

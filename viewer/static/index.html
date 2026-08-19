@@ -603,7 +603,8 @@ function appendTranscriptRow(s, i) {
   row.className = "seg"; row.dataset.idx = i;
   row.innerHTML =
     `<span class="time">${fmtTime(s.start)} - ${fmtTime(s.end)}</span>` +
-    `<span class="spk" style="color:${spkColor(eff)}">${spkLabel(s.speaker_id)}</span>` +
+    // uncertain 说话人标签用灰色（--dim），不再按调色板着色
+    `<span class="spk" style="color:${showUncertain(eff) ? "var(--dim)" : spkColor(eff)}">${spkLabel(s.speaker_id)}</span>` +
     (state.overlapFlags[i] ? `<span class="overlap-badge">重叠</span>` : "") +
     `<span></span>`;
   row.lastChild.textContent = s.text;

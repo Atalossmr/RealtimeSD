@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 from pathlib import Path
-from typing import Callable, Optional, cast
+from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+from common.modelscope import resolve_modelscope_snapshot
 
 from ...constants import BASE_DIR
 from speakerlab.models.eres2net.ERes2NetV2 import ERes2NetV2
@@ -79,27 +80,6 @@ def _is_valid_modelscope_model_id(model_id: str) -> bool:
     return len(parts) == 2 and all(parts)
 
 
-def _load_modelscope_snapshot_download() -> Callable[..., str]:
-    """延迟导入 ModelScope 下载接口，避免未使用时强依赖其运行环境。"""
-
-    try:
-        snapshot_module = importlib.import_module("modelscope.hub.snapshot_download")
-    except ImportError as exc:
-        raise RuntimeError(
-            "No local ERes2NetV2 checkpoint was provided, but ModelScope fallback is unavailable. "
-            "Please install `modelscope` and its dependencies, or pass `--model_path`."
-        ) from exc
-
-    snapshot_fn = getattr(snapshot_module, "snapshot_download", None)
-    if not callable(snapshot_fn):
-        raise RuntimeError(
-            "ModelScope is installed but its snapshot download helper is unavailable. "
-            "Please check the local `modelscope` installation, or pass `--model_path`."
-        )
-
-    return cast(Callable[..., str], snapshot_fn)
-
-
 def _modelscope_spec_for_model_type(model_type: str) -> dict[str, str]:
     """返回当前 speaker encoder 对应的默认 ModelScope 仓库信息。"""
 
@@ -127,40 +107,17 @@ def resolve_embedding_model_path(model_path: Optional[str], model_type: str) -> 
 
     spec = _modelscope_spec_for_model_type(model_type)
     model_id = spec["model_id"]
-    revision = spec["revision"]
     model_pt = spec["model_pt"]
-    cache_root = Path(MODELSCOPE_DEFAULT_CACHE_DIR)
-    expected_checkpoint = cache_root / model_id / model_pt
-
-    if expected_checkpoint.is_file():
-        logger.info(
-            "Using cached ModelScope speaker embedding model from %s",
-            expected_checkpoint,
-        )
-        return str(expected_checkpoint)
-
-    snapshot_download_fn = _load_modelscope_snapshot_download()
     if not _is_valid_modelscope_model_id(model_id):
         raise ValueError(f"Invalid default ModelScope model id: {model_id}")
 
-    os.makedirs(cache_root, exist_ok=True)
-    logger.info(
-        "No local ERes2NetV2 checkpoint provided; downloading %s@%s to %s",
+    snapshot_dir = resolve_modelscope_snapshot(
         model_id,
-        revision,
-        cache_root,
+        Path(MODELSCOPE_DEFAULT_CACHE_DIR),
+        lambda path: (path / model_pt).is_file(),
+        revision=spec["revision"],
     )
-    downloaded_dir = Path(
-        snapshot_download_fn(model_id, revision=revision, cache_dir=str(cache_root))
-    )
-    checkpoint_path = downloaded_dir / model_pt
-    if not checkpoint_path.is_file():
-        raise FileNotFoundError(
-            f"Downloaded ModelScope repo {model_id} but checkpoint file was not found: {checkpoint_path}"
-        )
-
-    logger.info("Downloaded speaker embedding checkpoint to %s", checkpoint_path)
-    return str(checkpoint_path)
+    return str(snapshot_dir / model_pt)
 
 
 class NativeERes2NetV2SegmentEmbedder:

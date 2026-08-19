@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "audio",
         nargs="?",
-        default="./datasets/examples/tingshen_6.wav",
+        default="./datasets/aishell4-test/L_R003S01C02.wav",
         help="输入音频（wav）",
     )
     parser.add_argument(
@@ -147,8 +147,8 @@ def main() -> int:
     if args.asr:
         _check_asr_config(config_path)
 
-    # 每次运行清空 common 目录重建。
-    shutil.rmtree(basic_dir, ignore_errors=True)
+    # 只清理本次 run 自己的输出目录，同 output_root 下的其他历史 run 保留。
+    shutil.rmtree(exp_dir, ignore_errors=True)
     exp_dir.mkdir(parents=True, exist_ok=True)
 
     print("==========================================")

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import torch
 
+from common.modelscope import resolve_modelscope_snapshot
+
 from .constants import MODELSCOPE_CACHE_DIR
 
 
@@ -37,19 +39,11 @@ def _resolve_model_path(model: str) -> str:
 
     if Path(model).is_dir():
         return model
-    cached = MODELSCOPE_CACHE_DIR / model
-    if cached.is_dir():
-        if _is_complete_model_dir(cached):
-            return str(cached)
-        logger.warning(
-            "[asr] cached model dir %s is incomplete (need model.pt + config), "
-            "falling back to download",
-            cached,
+    return str(
+        resolve_modelscope_snapshot(
+            model, MODELSCOPE_CACHE_DIR, _is_complete_model_dir
         )
-    logger.info("[asr] downloading model %s to %s", model, MODELSCOPE_CACHE_DIR)
-    from modelscope.hub.snapshot_download import snapshot_download
-
-    return snapshot_download(model, cache_dir=str(MODELSCOPE_CACHE_DIR))
+    )
 
 
 class FunASRNanoASR:

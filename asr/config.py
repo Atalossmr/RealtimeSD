@@ -1,6 +1,6 @@
-"""ASR 转写的配置定义、YAML 加载与 CLI 构建（独立于 diarization.config）。
+"""ASR 转写的配置定义、YAML 加载与 CLI 构建。
 
-约定与 diarization 侧一致：
+约定与 diarization 侧一致（公共实现收敛在 common.config）：
 
 - YAML（默认 `config/asr.yaml`）是全部调参项的唯一来源；
 - CLI 仅保留运行时输入与少量开关；
@@ -10,65 +10,14 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, fields as dataclass_fields
-from pathlib import Path
+from dataclasses import dataclass
 
-import yaml
+from common import config as common_config
 
 from .constants import BASE_DIR
 
 
 DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "asr.yaml"
-
-
-def _parser_dest_set(parser: argparse.ArgumentParser) -> set[str]:
-    """收集 argparse 中定义过的参数名，用于校验 YAML 键名。"""
-
-    return {
-        action.dest
-        for action in parser._actions
-        if action.dest not in {argparse.SUPPRESS, "help"}
-    }
-
-
-def _extract_provided_dests(
-    parser: argparse.ArgumentParser, argv: list[str] | None
-) -> set[str]:
-    """根据原始命令行，判断用户显式传了哪些参数。"""
-
-    if argv is None:
-        return set()
-
-    option_to_dest: dict[str, str] = {}
-    for action in parser._actions:
-        for option_string in action.option_strings:
-            option_to_dest[option_string] = action.dest
-
-    provided: set[str] = set()
-    for token in argv:
-        if not token.startswith("-"):
-            continue
-        option = token.split("=", 1)[0]
-        dest = option_to_dest.get(option)
-        if dest is not None:
-            provided.add(dest)
-    return provided
-
-
-def _load_yaml_config(config_path: str, explicit: bool) -> dict[str, object]:
-    """读取 YAML 配置文件。"""
-
-    path = Path(config_path)
-    if not path.exists():
-        if explicit:
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-        return {}
-
-    with open(path, "r", encoding="utf-8") as file_obj:
-        data = yaml.safe_load(file_obj) or {}
-    if not isinstance(data, dict):
-        raise ValueError("YAML config must be a mapping at top level")
-    return data
 
 
 @dataclass
@@ -119,49 +68,28 @@ def merge_args_with_config(
     args: argparse.Namespace,
     argv: list[str] | None = None,
 ) -> argparse.Namespace:
-    """把 YAML 配置和 CLI 参数合并成最终运行参数。
+    """把 YAML 配置和 CLI 参数合并成最终运行参数（实现见 common.config）。
 
     合并优先级：argparse 默认值 < YAML 配置 < 显式 CLI 参数。
     调参项不在 CLI 上，因此它们的生效值始终以 YAML 为准。
     """
 
-    provided_dests = _extract_provided_dests(parser, argv)
-    args_dict = vars(args)
-
-    config_path = str(args_dict.get("config", DEFAULT_CONFIG_PATH))
-    explicit_config = "config" in provided_dests
-    yaml_config = _load_yaml_config(config_path, explicit=explicit_config)
-
-    valid_keys = _parser_dest_set(parser) | {
-        field.name for field in dataclass_fields(AsrConfig)
-    }
-    unknown_keys = sorted(set(yaml_config.keys()) - valid_keys)
-    if unknown_keys:
-        raise ValueError(f"Unknown keys in YAML config: {', '.join(unknown_keys)}")
-
-    merged = dict(args_dict)
-    merged.update(yaml_config)
-
-    for dest in provided_dests:
-        if dest == "config":
-            continue
-        merged[dest] = args_dict[dest]
-
-    merged["config"] = config_path
-    return argparse.Namespace(**merged)
+    return common_config.merge_args_with_config(
+        parser,
+        args,
+        argv,
+        default_config_path=DEFAULT_CONFIG_PATH,
+        config_type=AsrConfig,
+    )
 
 
 def config_from_args(args: argparse.Namespace) -> AsrConfig:
-    """把合并后的参数转换为 `AsrConfig` 并做合法性校验。"""
+    """把合并后的参数转换为 `AsrConfig` 并做合法性校验。
 
-    config = AsrConfig(
-        sample_rate=int(getattr(args, "sample_rate", 16000)),
-        device=str(getattr(args, "device", "auto")),
-        model=str(getattr(args, "model", "FunAudioLLM/Fun-ASR-Nano-2512")),
-        prev_text_max_tokens=int(getattr(args, "prev_text_max_tokens", 0)),
-        max_segment_duration=float(getattr(args, "max_segment_duration", 30.0)),
-        window_overlap=float(getattr(args, "window_overlap", 10.0)),
-    )
+    字段值取自合并后的 args，缺失时落回 dataclass 字段默认值（唯一兜底来源）。
+    """
+
+    config = common_config.dataclass_from_args(args, AsrConfig)
     if config.sample_rate <= 0:
         raise ValueError("sample_rate must be > 0")
     if config.prev_text_max_tokens < 0:

@@ -46,7 +46,7 @@ viewer 只读文件、不写；与管线/ASR 的交互全部经以下产物：
 沿 `merged_into` 链解析出展示用有效 id——被并说话人的段按幸存者颜色展示、
 标签显示 `spkA→spkB`，顶栏保留删除线 chip 提示合并关系，重叠判定同样按
 有效 id；`uncertain` + 顶栏 "uncertain 标记" 开关控制不确定标记（虚线 chip、
-标签加 `?`、时间线段淡化），开关仅在 `post_merge_min_speech_duration > 0`
+标签加 `?` 且转写里显示为灰色、时间线段淡化），开关仅在 `post_merge_min_speech_duration > 0`
 时出现，说话人时长累积达标后标记自动解除。
 
 HTTP 端点（服务器模式）：
