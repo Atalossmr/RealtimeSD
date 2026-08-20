@@ -8,26 +8,17 @@ requires-python = ">=3.13"
 # pip 用户用 requirements.txt（uv export 产物，两者需保持同步）。
 #
 # 几个不显然的直接依赖：
-# - setuptools：look2hear 的 stft.py 仍 `from distutils.version import ...`，
-#   Python 3.13 移除 distutils 后由 setuptools 提供 shim；
-# - packaging / typeguard / torch-complex / librosa：vendored look2hear 的
-#   模块级 import（layers/stft_tfgn.py、utils/complex_utils.py 等）；
 # - modelscope：common/modelscope.py 惰性 import，自动下载模型时需要；
 # - funasr：asr/model.py 惰性 import（Fun-ASR-Nano）。
 dependencies = [
     "funasr==1.4.0",
     "huggingface-hub==1.7.1",
-    "librosa==0.11.0",
     "modelscope==1.35.0",
     "numpy==2.4.3",
-    "packaging==26.0",
     "pyannote-audio==4.0.4",
     "pyyaml==6.0.3",
     "scikit-learn==1.8.0",
     "scipy==1.17.1",
-    "setuptools==82.0.1",
     "torch==2.10.0",
-    "torch-complex==0.4.4",
     "torchaudio==2.10.0",
-    "typeguard==4.5.1",
 ]

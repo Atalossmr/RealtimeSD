@@ -1,5 +1,4 @@
 from .tiger import TIGER
-from .tiger_dnr import TIGERDNR
 from .base_model import BaseModel
 
 __all__ = [

@@ -2372,38 +2372,28 @@ source = { virtual = "." }
 dependencies = [
     { name = "funasr" },
     { name = "huggingface-hub" },
-    { name = "librosa" },
     { name = "modelscope" },
     { name = "numpy" },
-    { name = "packaging" },
     { name = "pyannote-audio" },
     { name = "pyyaml" },
     { name = "scikit-learn" },
     { name = "scipy" },
-    { name = "setuptools" },
     { name = "torch" },
-    { name = "torch-complex" },
     { name = "torchaudio" },
-    { name = "typeguard" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "funasr", specifier = "==1.4.0" },
     { name = "huggingface-hub", specifier = "==1.7.1" },
-    { name = "librosa", specifier = "==0.11.0" },
     { name = "modelscope", specifier = "==1.35.0" },
     { name = "numpy", specifier = "==2.4.3" },
-    { name = "packaging", specifier = "==26.0" },
     { name = "pyannote-audio", specifier = "==4.0.4" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "scikit-learn", specifier = "==1.8.0" },
     { name = "scipy", specifier = "==1.17.1" },
-    { name = "setuptools", specifier = "==82.0.1" },
     { name = "torch", specifier = "==2.10.0" },
-    { name = "torch-complex", specifier = "==0.4.4" },
     { name = "torchaudio", specifier = "==2.10.0" },
-    { name = "typeguard", specifier = "==4.5.1" },
 ]
 
 [[package]]
@@ -3104,18 +3094,6 @@ wheels = [
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/35/f8/9c66bfc55361ec6d0e4040a0337fb5924ceb23de4648b8a81ae9d33b2b38/triton-3.6.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d002e07d7180fd65e622134fbd980c9a3d4211fb85224b56a0a0efbd422ab72f", size = 188400296, upload-time = "2026-01-20T16:00:56.042Z" },
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/df/3d/9e7eee57b37c80cec63322c0231bb6da3cfe535a91d7a4d64896fcb89357/triton-3.6.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a17a5d5985f0ac494ed8a8e54568f092f7057ef60e1b0fa09d3fd1512064e803", size = 188273063, upload-time = "2026-01-20T16:01:07.278Z" },
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/f6/56/6113c23ff46c00aae423333eb58b3e60bdfe9179d542781955a5e1514cb3/triton-3.6.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:46bd1c1af4b6704e554cad2eeb3b0a6513a980d470ccfa63189737340c7746a7", size = 188397994, upload-time = "2026-01-20T16:01:14.236Z" },
-]
-
-[[package]]
-name = "typeguard"
-version = "4.5.1"
-source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }
-dependencies = [
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/2b/e8/66e25efcc18542d58706ce4e50415710593721aae26e794ab1dec34fb66f/typeguard-4.5.1.tar.gz", hash = "sha256:f6f8ecbbc819c9bc749983cc67c02391e16a9b43b8b27f15dc70ed7c4a007274", size = 80121, upload-time = "2026-02-19T16:09:03.392Z" }
-wheels = [
-    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/91/88/b55b3117287a8540b76dbdd87733808d4d01c8067a3b339408c250bb3600/typeguard-4.5.1-py3-none-any.whl", hash = "sha256:44d2bf329d49a244110a090b55f5f91aa82d9a9834ebfd30bcc73651e4a8cc40", size = 36745, upload-time = "2026-02-19T16:09:01.6Z" },
 ]
 
 [[package]]
