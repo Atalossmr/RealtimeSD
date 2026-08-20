@@ -11,7 +11,7 @@
 3. 对窗口运行 `pyannote/segmentation-3.0`，得到帧级多标签分数（局部 ≤3 人、帧级 ≤2 人，含重叠）
 4. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding；纯净区不足时回退 `overlap_fallback`
 5. assigner 做 local->global 分配（后端可插拔，见 `diarization/cluster/backends/`）：默认 streaming 后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；每次加入新片段后按 `merge_threshold` 尝试合并最相似的一对 speaker（小并入大）
-6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线（raw 级），无缓冲、无延迟确认；deferred（离线）后端逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
+6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线（raw 级），无缓冲、无延迟确认；ahc 后端（deferred，离线）逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
 7. refined 级（仅 streaming）：`post_merge.RefinedRTTMWriter` 监听 merge 事件，每次 merge 后读取 raw RTTM + 当前 `merged_into`/centroid 状态整体重生成 `*.refined.rttm`（修正 merge 前写出的旧身份行）；EOF 时最终刷新并叠加小样本强制合并（`post_merge_min_speech_duration > 0` 时生效）
 8. 音频结束：闭合全部 open turn，writer 纯追加收尾——raw 全程零重写，修正只发生在 refined 级
 
@@ -252,7 +252,7 @@ diarization 与 ASR / viewer 之间无 IPC，全部经共享输出目录的文�
 #### `{uri}.embeddings.npz`（仅 `save_embeddings: true`）
 
 npz 字段：`embeddings`(N×dim, L2 归一化) / `local_idx` / `start` / `end` / `duration`，
-供离线实验复用（如 `tools/sweep_post_merge.py`）。
+供离线实验复用（配合 `python3 -m diarization.cluster.app` 重放聚类调参）。
 
 #### `{uri}.chunks.npz`（extract → cluster 两阶段中间产物）
 

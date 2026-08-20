@@ -208,9 +208,10 @@ def main() -> int:
     print(f"with_asr={args.asr} with_viewer={args.viewer}")
     print("==========================================")
 
-    with open(results_file, "w", encoding="utf-8") as file_obj:
-        file_obj.write("Online Speaker Diarization pipeline\n")
-        file_obj.write("=" * 40 + "\n")
+    # results.txt 按 run 追加：同一 output_root 下历史 run 的汇总记录保留。
+    with open(results_file, "a", encoding="utf-8") as file_obj:
+        file_obj.write(f"run: {args.run_name} | Online Speaker Diarization pipeline\n")
+        file_obj.write("-" * 40 + "\n")
         file_obj.write(f"audio_input: {audio}\nconfig_path: {config_path}\n")
         if args.model_path:
             file_obj.write(f"model_path_override: {args.model_path}\n")

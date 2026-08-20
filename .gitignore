@@ -6,5 +6,4 @@ pretrained/
 __pycache__/
 datasets/
 tmp/
-test/
 others/

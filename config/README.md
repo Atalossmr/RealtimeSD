@@ -96,12 +96,15 @@ raw 级（`*.raw.rttm`，append-only 零重写）+ refined 级（`*.refined.rttm
 | `post_merge_min_speech_duration` | `30.0`（dataclass 默认 `0.0` = 关闭） | 小样本簇的总发声时长阈值（秒），低于则作为被吸收候选；`0` = 关闭后处理。**推荐值 30s**（aishell4-test 全量 20 文件标定：streaming refined DER 12.84%→12.38%，ahc 13.22%→12.63%；45s 起边际收益消失，60s 以上开始误并真实少发言 speaker）。该值同时是 streaming 前端 uncertain 标记的解除阈值（speaker 时长未达标期间在 viewer 显示为 uncertain），短会议/存在"只说一两句"的边缘 speaker 的场景建议降到 10~15s |
 | `post_merge_min_similarity` | `0.0` | 强制合并的相似度下限：与目标簇质心相似度低于该值时保留原身份。aishell4 上 `0.0`（不拦截）最优——小簇几乎都是 false split；换数据集建议 `0.3` 兜底防错并（代价约 0.01pp） |
 
-调参复验（复用 chunks.npz，秒级重跑聚类，详见本文末"实验存档"节）：
+调参复验（复用 chunks.npz 秒级重跑聚类，详见本文末"实验存档"节）：
 
 ```bash
-python3 tools/sweep_post_merge.py --input <chunks.npz 目录> --ref <参考 rttm 目录> \
-    --config config/config.yaml --backend streaming \
-    --durations 0,15,30,45,60 --similarities 0.0,0.3 --output <结果.csv>
+# 方式一：修改 YAML 中 post_merge_* 值后直接重放聚类阶段，再用 compute_der 评估
+python3 -m diarization.cluster.app --input <chunks.npz 目录> --output_dir <dir> \
+    --config config/config.yaml
+# 方式二：扫描 streaming 两阈值（global_match_threshold × new_speaker_threshold）
+python3 tools/sweep_thresholds.py --input <chunks.npz 目录> --ref <参考 rttm 目录> \
+    --config config/config.yaml --output <结果.csv>
 ```
 
 ## 分段音频导出（接流式 ASR）

@@ -13,7 +13,7 @@
 
 用法：
 
-    python3 test_der.py [audio_input] [--ref_rttm datasets/任务1-6/rttm/]
+    python3 test_der.py [audio_input] [--ref_rttm <参考 rttm 目录>]
 """
 
 from __future__ import annotations
@@ -110,8 +110,9 @@ def main() -> int:
     exp_dir = basic_dir / args.run_name
     results_file = basic_dir / "results.txt"
 
-    # 与原 test_der.sh 一致：每次运行清空 der_test 目录重建。
-    shutil.rmtree(basic_dir, ignore_errors=True)
+    # 与 run.py 一致：只清理本次 run 自己的输出目录，同 output_root 下的
+    # 其他历史 run 目录与 results.txt 汇总记录保留。
+    shutil.rmtree(exp_dir, ignore_errors=True)
     exp_dir.mkdir(parents=True, exist_ok=True)
 
     print("==========================================")
@@ -128,8 +129,10 @@ def main() -> int:
     # DER 只评估 RTTM：生效配置强制 separation_enabled=false（其余原样）。
     effective_config = _make_effective_config(args.config, exp_dir)
 
-    with open(results_file, "w", encoding="utf-8") as file_obj:
-        file_obj.write("DER test\n" + "=" * 40 + "\n")
+    # results.txt 按 run 追加：历史 run 的 DER 汇总记录保留。
+    with open(results_file, "a", encoding="utf-8") as file_obj:
+        file_obj.write(f"run: {args.run_name} | DER test\n")
+        file_obj.write("-" * 40 + "\n")
         file_obj.write(f"audio_input: {args.audio}\nconfig_path: {args.config}\n")
         file_obj.write(
             f"effective_config: {effective_config} (separation_enabled=false)\n"

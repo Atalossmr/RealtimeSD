@@ -56,11 +56,15 @@ export HF_TOKEN=your_token
 
 ## 快速开始
 
+数据说明：音频数据不在版本库中（`datasets/` 见 `.gitignore`），需自行准备
+任意 16kHz wav；模型 checkpoint 首次运行会自动下载到 `./pretrained/`，
+无需手动准备。DER 评估（`test_der.py`）还需要自行准备参考 RTTM。
+
 单文件：
 
 ```bash
 python3 -m diarization.app \
-  --wav ./datasets/examples/tingshen_6.wav \
+  --wav <音频.wav> \
   --output_dir ./exp/demo \
   --config ./config/config.yaml
 ```
@@ -69,7 +73,7 @@ python3 -m diarization.app \
 
 ```bash
 python3 -m diarization.app \
-  --wav ./datasets/examples \
+  --wav <音频目录> \
   --output_dir ./exp/batch_demo \
   --config ./config/config.yaml
 ```
@@ -78,10 +82,10 @@ python3 -m diarization.app \
 
 ```bash
 python3 -m diarization.app \
-  --wav ./datasets/examples \
+  --wav <音频目录> \
   --output_dir ./exp/batch_demo \
   --config ./config/config.yaml \
-  --model_path ./pretrained/examples/example.ckpt \
+  --model_path <本地 ckpt 路径> \
   --hf_cache_dir ./pretrained/huggingface \
   --verbose
 ```
@@ -108,21 +112,21 @@ python3 -m diarization.app \
 基础运行：
 
 ```bash
-python3 run.py ./datasets/examples
+python3 run.py <音频目录或 wav 文件>
 ```
 
 运行时同步在控制台打印 RTTM：
 
 ```bash
-SHOW_RTTM=1 python3 run.py ./datasets/examples
+SHOW_RTTM=1 python3 run.py <音频目录>
 ```
 
-带 DER 评估：
+带 DER 评估（需提供参考 RTTM 目录）：
 
 ```bash
-REF_RTTM=./datasets/aishell4-test/rttm \
+REF_RTTM=<参考 rttm 目录> \
 RUN_NAME=baseline \
-python3 test_der.py ./datasets/aishell4-test
+python3 test_der.py <音频目录>
 ```
 
 脚本常用环境变量（在 `run.py` 中作为对应命令行参数的缺省值）：
@@ -152,8 +156,9 @@ python3 test_der.py ./datasets/aishell4-test
 - 管线跑完后 `run.py` 不立即退出：打印"音频已处理完成"并挂起等待，
   viewer 保持可访问；按 Ctrl+C 后脚本退出并关闭 viewer（无人值守场景
   用 `--no-wait` / `WAIT_VIEWER=0` 跳过等待，跑完直接退出）
-- `run.py` 每次运行只清理 `${OUTPUT_ROOT:-./exp}/common/{run_name}`（其他历史 run 目录保留）
-- `test_der.py` 每次运行会清理 `${OUTPUT_ROOT:-./exp}/der_test`
+- `run.py` / `test_der.py` 每次运行只清理本次 run 自己的输出目录
+  （`${OUTPUT_ROOT:-./exp}/common/{run_name}` 或 `der_test/{run_name}`），
+  其他历史 run 目录保留；各自的 `results.txt` 汇总按 run 追加，不覆盖历史记录
 
 ## pipeline 行为概览
 
