@@ -55,25 +55,41 @@ def _env_flag(name: str, default: bool) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="实时管线 DER 评估")
-    parser.add_argument("audio", nargs="?", default="./datasets/任务1-6/",
-                        help="输入音频（wav 文件或目录）")
-    parser.add_argument("--config", default=os.environ.get("CONFIG_PATH", "./config/config.yaml"))
+    parser.add_argument(
+        "audio", nargs="?", default="./datasets/", help="输入音频（wav 文件或目录）"
+    )
+    parser.add_argument(
+        "--config", default=os.environ.get("CONFIG_PATH", "./config/config.yaml")
+    )
     parser.add_argument("--output_root", default=os.environ.get("OUTPUT_ROOT", "./exp"))
     parser.add_argument("--run_name", default=os.environ.get("RUN_NAME", "default"))
     parser.add_argument("--model_path", default=os.environ.get("MODEL_PATH") or None)
     parser.add_argument("--hf_token", default=os.environ.get("HF_TOKEN") or None)
-    parser.add_argument("--hf_cache_dir", default=os.environ.get("HF_CACHE_DIR") or None)
-    parser.add_argument("--ref_rttm",
-                        default=os.environ.get("REF_RTTM")
-                        or os.environ.get("REF_RTTM_DIR")
-                        or "./datasets/任务1-6/rttm/",
-                        help="参考 RTTM 目录；置空则跳过 DER 计算")
-    parser.add_argument("--debug", action=argparse.BooleanOptionalAction,
-                        default=_env_flag("DEBUG", True))
-    parser.add_argument("--show_rttm", action=argparse.BooleanOptionalAction,
-                        default=_env_flag("SHOW_RTTM", False))
-    parser.add_argument("--der_verbose", action=argparse.BooleanOptionalAction,
-                        default=_env_flag("DER_VERBOSE", True))
+    parser.add_argument(
+        "--hf_cache_dir", default=os.environ.get("HF_CACHE_DIR") or None
+    )
+    parser.add_argument(
+        "--ref_rttm",
+        default=os.environ.get("REF_RTTM")
+        or os.environ.get("REF_RTTM_DIR")
+        or "./datasets/rttm/",
+        help="参考 RTTM 目录；置空则跳过 DER 计算",
+    )
+    parser.add_argument(
+        "--debug",
+        action=argparse.BooleanOptionalAction,
+        default=_env_flag("DEBUG", True),
+    )
+    parser.add_argument(
+        "--show_rttm",
+        action=argparse.BooleanOptionalAction,
+        default=_env_flag("SHOW_RTTM", False),
+    )
+    parser.add_argument(
+        "--der_verbose",
+        action=argparse.BooleanOptionalAction,
+        default=_env_flag("DER_VERBOSE", True),
+    )
     return parser
 
 
@@ -115,18 +131,31 @@ def main() -> int:
     with open(results_file, "w", encoding="utf-8") as file_obj:
         file_obj.write("DER test\n" + "=" * 40 + "\n")
         file_obj.write(f"audio_input: {args.audio}\nconfig_path: {args.config}\n")
-        file_obj.write(f"effective_config: {effective_config} (separation_enabled=false)\n")
+        file_obj.write(
+            f"effective_config: {effective_config} (separation_enabled=false)\n"
+        )
         if args.model_path:
             file_obj.write(f"model_path_override: {args.model_path}\n")
         if args.hf_cache_dir:
             file_obj.write(f"hf_cache_dir_override: {args.hf_cache_dir}\n")
-        file_obj.write(f"run_name: {args.run_name}\nder_verbose: {int(args.der_verbose)}\n")
+        file_obj.write(
+            f"run_name: {args.run_name}\nder_verbose: {int(args.der_verbose)}\n"
+        )
         if args.ref_rttm:
             file_obj.write(f"ref_path: {args.ref_rttm}\n")
         file_obj.write("\n")
 
-    cmd = [sys.executable, "-m", "diarization.app",
-           "--wav", args.audio, "--output_dir", str(exp_dir), "--config", effective_config]
+    cmd = [
+        sys.executable,
+        "-m",
+        "diarization.app",
+        "--wav",
+        args.audio,
+        "--output_dir",
+        str(exp_dir),
+        "--config",
+        effective_config,
+    ]
     if args.model_path:
         cmd += ["--model_path", args.model_path]
     if args.hf_cache_dir:
@@ -162,7 +191,9 @@ def main() -> int:
         der_summary = exp_dir / "der_summary.txt"
         with open(der_log, "w", encoding="utf-8") as log:
             if rttm_count == 0:
-                message = f"{args.run_name} -> DER: SKIPPED | reason: no refined RTTM found"
+                message = (
+                    f"{args.run_name} -> DER: SKIPPED | reason: no refined RTTM found"
+                )
                 print(message)
                 log.write(message + "\n")
                 with open(results_file, "a", encoding="utf-8") as file_obj:
@@ -171,12 +202,22 @@ def main() -> int:
                 header = f"========== Computing DER for {args.run_name} =========="
                 print(header)
                 log.write(header + "\n")
-                der_cmd = [sys.executable, "tools/compute_der.py",
-                           "--sys", str(exp_dir), "--ref", args.ref_rttm,
-                           "--summary-file", str(der_summary),
-                           "--collar", "0.0",
-                           "--sys-suffix", ".refined.rttm",
-                           "--ref-suffix", ".rttm"]
+                der_cmd = [
+                    sys.executable,
+                    "tools/compute_der.py",
+                    "--sys",
+                    str(exp_dir),
+                    "--ref",
+                    args.ref_rttm,
+                    "--summary-file",
+                    str(der_summary),
+                    "--collar",
+                    "0.0",
+                    "--sys-suffix",
+                    ".refined.rttm",
+                    "--ref-suffix",
+                    ".rttm",
+                ]
                 if args.der_verbose:
                     der_cmd.append("--verbose")
                 proc = subprocess.run(der_cmd, capture_output=True, text=True)
@@ -189,9 +230,13 @@ def main() -> int:
                     values = _read_summary_values(der_summary)
                     der = values.get("global_der") or values.get("avg_der", "NA")
                     files = values.get("global_files") or values.get("files", "0")
-                    print(f"{args.run_name} -> DER(global): {der}% over {files} file(s)")
+                    print(
+                        f"{args.run_name} -> DER(global): {der}% over {files} file(s)"
+                    )
                     with open(results_file, "a", encoding="utf-8") as file_obj:
-                        file_obj.write(f"{args.run_name} -> DER(global): {der}% | files={files}\n")
+                        file_obj.write(
+                            f"{args.run_name} -> DER(global): {der}% | files={files}\n"
+                        )
 
     print(f"\nResults saved to {results_file}")
     print(f"Outputs written to: {basic_dir}")
