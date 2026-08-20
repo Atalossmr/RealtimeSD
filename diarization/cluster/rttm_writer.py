@@ -8,9 +8,9 @@
   merge_gap 或 EOF 时闭合写出——所有拼接都发生在写出之前；
 - 每一行一旦写出即为最终，全程 append-only，`finalize` 也只追加不重写；
 - merge 事件对历史行的修正由 refined 级（cluster/post_merge.py）承担：
-  raw 文件保持原样，refined 按需整体重生成；
-- `finalize` 还可在文件末尾以 # 注释写出内部 global id -> RTTM speaker
-  编号的映射表（RTTM 编号按首次写出顺序分配）。
+  raw 文件保持原样，refined 按需整体重生成。
+
+RTTM 行内的 speaker 字段直接写 assigner 的 global id，无额外编号映射。
 """
 
 from __future__ import annotations
@@ -45,40 +45,21 @@ class AppendOnlyRTTMWriter:
 
         # 每个 speaker 当前未闭合的 turn（活跃记录，驻留内存，写出前可持续拼接）。
         self._open_turns: dict[int, SpeakerTurn] = {}
-        # 内部 global id -> 输出 speaker 编号（按首次写出顺序）。
-        self._output_ids: dict[int, int] = {}
-        self._next_output_id = 0
         self._written_turns = 0
 
         ensure_parent_dir(self.output_path)
         with open(self.output_path, "w", encoding="utf-8") as file_obj:
             file_obj.write(f"# chunk raw RTTM for {self.uri}\n")
 
-    @property
-    def output_id_map(self) -> dict[int, int]:
-        """内部 global id -> 输出 speaker 编号的实时映射（副本）。
-
-        文件末尾的 # id 映射表只在 finalize 写出；refined 级在流式期间
-        动态重生成时通过该属性取实时映射。
-        """
-
-        return dict(self._output_ids)
-
     # ------------------------------------------------------------------
     # 流式写出
     # ------------------------------------------------------------------
 
-    def _output_id(self, speaker_id: int) -> int:
-        if speaker_id not in self._output_ids:
-            self._output_ids[speaker_id] = self._next_output_id
-            self._next_output_id += 1
-        return self._output_ids[speaker_id]
-
-    def _format_line(self, turn: SpeakerTurn, output_id: int) -> str:
+    def _format_line(self, turn: SpeakerTurn) -> str:
         duration = max(0.0, float(turn.end - turn.start))
         return (
             f"SPEAKER {self.uri} 0 {turn.start:.3f} {duration:.3f} "
-            f"<NA> <NA> {int(output_id)} <NA> <NA>"
+            f"<NA> <NA> {int(turn.speaker_id)} <NA> <NA>"
         )
 
     def _append_line(self, line: str) -> None:
@@ -93,7 +74,7 @@ class AppendOnlyRTTMWriter:
             return
         if turn.end - turn.start < self.min_segment_duration:
             return
-        self._append_line(self._format_line(turn, self._output_id(speaker_id)))
+        self._append_line(self._format_line(turn))
         self._written_turns += 1
 
     def _feed_turn(self, speaker_id: int, start: float, end: float) -> None:
@@ -164,7 +145,7 @@ class AppendOnlyRTTMWriter:
     # ------------------------------------------------------------------
 
     def finalize(self) -> None:
-        """闭合所有活跃 turn，全程只追加；末尾以 # 注释写出 id 映射表。"""
+        """闭合所有活跃 turn，全程只追加、不重写。"""
 
         for speaker_id in list(self._open_turns.keys()):
             self._close_turn(speaker_id)
@@ -173,20 +154,6 @@ class AppendOnlyRTTMWriter:
             "[streaming] finalized turns=%d (append-only, no rewrite)",
             self._written_turns,
         )
-
-        if self._output_ids:
-            self._write_id_map()
-
-    def _write_id_map(self) -> None:
-        """以 # 注释写出内部 global id -> RTTM speaker 编号的映射表。
-
-        RTTM 行内的 speaker 编号按首次写出顺序分配（见 `_output_ids`），
-        因此与内部 global id 并不一致，此表用于追溯对应关系。
-        """
-
-        self._append_line("# speaker_id_map: global_id -> rttm_speaker")
-        for speaker_id in sorted(self._output_ids):
-            self._append_line(f"#   {speaker_id} -> {self._output_ids[speaker_id]}")
 
 
 __all__ = ["AppendOnlyRTTMWriter"]

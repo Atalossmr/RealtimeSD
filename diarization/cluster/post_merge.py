@@ -22,13 +22,11 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
 from ..utils import l2_normalize
 from .base import BaseChunkAssigner
-from .rttm_writer import AppendOnlyRTTMWriter
 
 
 logger = logging.getLogger(__name__)
@@ -112,8 +110,6 @@ def cluster_stats(
 # streaming refined 级：读取 raw RTTM，按当前合并状态整体重生成
 # ----------------------------------------------------------------------
 
-_ID_MAP_PREFIX = "#   "
-
 
 def _resolve_merged(global_id: int, merged_into: dict[int, int]) -> int:
     """沿 merged_into 链解析到最终幸存 id（幸存 id 之后也可能再被并）。"""
@@ -132,42 +128,24 @@ def write_refined_rttm(
     merged_into: dict[int, int],
     min_duration: float,
     min_similarity: float,
-    global_to_output: Optional[dict[int, int]] = None,
 ) -> dict[str, object]:
     """读取 raw RTTM，按当前合并状态重生成 refined RTTM。
 
     raw 文件不动（append-only 不变量）：先沿 merged_into 链修正流式期间被
     merge 的旧身份行，再叠加小样本强制合并（min_duration=0 时跳过）。
-    speaker 重编号沿用 raw RTTM 的输出编号（被并 speaker 的行改挂幸存者的
-    输出编号），末尾附 refined 的 id 映射表。
+    RTTM 行内的 speaker 字段即 global id，被并 speaker 的行改挂幸存者的
+    global id。写出为临时文件后原子替换，避免读者看到半更新状态。
 
-    global_to_output：raw writer 的实时 global->输出编号映射；缺省时从
-    raw 文件末尾的 # id 映射注释解析（仅 finalize 后可用）。
-    写出为临时文件后原子替换，避免读者看到半更新状态。
-
-    返回 {"merge_map": 小样本合并映射, "durations": 幸存 global id -> 总时长,
-    "global_to_output": 输出编号映射}，供 RefinedRTTMWriter 写 speaker 状态。
+    返回 {"merge_map": 小样本合并映射, "durations": 幸存 global id -> 总时长}，
+    供 RefinedRTTMWriter 写 speaker 状态。
     """
 
     speaker_lines: list[list[str]] = []
-    if global_to_output is None:
-        global_to_output = {}
-        with open(src_path, "r", encoding="utf-8") as file_obj:
-            for raw in file_obj:
-                line = raw.strip()
-                if line.startswith("SPEAKER"):
-                    speaker_lines.append(line.split())
-                elif line.startswith(_ID_MAP_PREFIX) and "->" in line:
-                    left, _, right = line[len(_ID_MAP_PREFIX):].partition("->")
-                    global_to_output[int(left.strip())] = int(right.strip())
-    else:
-        with open(src_path, "r", encoding="utf-8") as file_obj:
-            for raw in file_obj:
-                line = raw.strip()
-                if line.startswith("SPEAKER"):
-                    speaker_lines.append(line.split())
-
-    output_to_global = {output: gid for gid, output in global_to_output.items()}
+    with open(src_path, "r", encoding="utf-8") as file_obj:
+        for raw in file_obj:
+            line = raw.strip()
+            if line.startswith("SPEAKER"):
+                speaker_lines.append(line.split())
 
     def final_survivor(global_id: int) -> int:
         # 先解流式期间的 merge 链，再叠小样本合并映射。
@@ -177,11 +155,7 @@ def write_refined_rttm(
     # 时长按"最终幸存 global id"累计（流式期间被 merge 的先归并到幸存者）。
     durations: dict[int, float] = {}
     for parts in speaker_lines:
-        output_id = int(parts[7])
-        global_id = output_to_global.get(output_id)
-        if global_id is None:
-            continue
-        survivor = _resolve_merged(global_id, merged_into)
+        survivor = _resolve_merged(int(parts[7]), merged_into)
         durations[survivor] = durations.get(survivor, 0.0) + float(parts[4])
 
     alive_centroids = {
@@ -193,21 +167,6 @@ def write_refined_rttm(
 
     uri = Path(src_path).name.split(".", 1)[0]
 
-    # 幸存 id 从未写出过 raw 行（如新建当 chunk 即被并、其语音又落在 commit
-    # 区外）时不在输出编号映射中：为其分配未占用的输出编号，保证 refined 的
-    # 行与末尾映射表一致（raw writer 后续给该 id 分配编号时从同一计数继续，
-    # 通常恰好对齐；不一致也只是下次刷新重编号，单份文件内始终自洽）。
-    next_fallback_id = max(global_to_output.values(), default=-1) + 1
-
-    def output_id_of(global_id: int) -> int:
-        nonlocal next_fallback_id
-        output = global_to_output.get(global_id)
-        if output is None:
-            output = next_fallback_id
-            next_fallback_id += 1
-            global_to_output[global_id] = output
-        return output
-
     tmp_path = dst_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as file_obj:
         file_obj.write(
@@ -215,18 +174,8 @@ def write_refined_rttm(
             f"min_duration={min_duration}, min_similarity={min_similarity})\n"
         )
         for parts in speaker_lines:
-            output_id = int(parts[7])
-            global_id = output_to_global.get(output_id)
-            survivor = final_survivor(global_id) if global_id is not None else None
-            if survivor is not None:
-                parts[7] = str(output_id_of(survivor))
+            parts[7] = str(final_survivor(int(parts[7])))
             file_obj.write(" ".join(parts) + "\n")
-        file_obj.write("# speaker_id_map: global_id -> rttm_speaker (refined)\n")
-        survivors = sorted(
-            {final_survivor(global_id) for global_id in global_to_output}
-        )
-        for survivor in survivors:
-            file_obj.write(f"#   {survivor} -> {output_id_of(survivor)}\n")
     os.replace(tmp_path, dst_path)
 
     logger.info(
@@ -234,11 +183,7 @@ def write_refined_rttm(
         dst_path,
         len(merge_map),
     )
-    return {
-        "merge_map": merge_map,
-        "durations": durations,
-        "global_to_output": global_to_output,
-    }
+    return {"merge_map": merge_map, "durations": durations}
 
 
 def write_speaker_status(
@@ -248,7 +193,6 @@ def write_speaker_status(
     durations: dict[int, float],
     merged_into: dict[int, int],
     merge_map: dict[int, int],
-    global_to_output: dict[int, int],
     min_duration: float,
     final: bool,
 ) -> None:
@@ -263,7 +207,7 @@ def write_speaker_status(
     """
 
     speakers = []
-    for global_id in sorted(set(global_to_output) | set(merged_into)):
+    for global_id in sorted(set(durations) | set(merged_into)):
         resolved = _resolve_merged(global_id, merged_into)
         survivor = merge_map.get(resolved, resolved)
         merged = survivor != global_id
@@ -273,7 +217,6 @@ def write_speaker_status(
         speakers.append(
             {
                 "id": int(global_id),
-                "output_id": global_to_output.get(global_id),
                 "duration": duration,
                 "uncertain": bool(
                     not merged and min_duration > 0 and (duration or 0.0) < min_duration
@@ -315,7 +258,6 @@ class RefinedRTTMWriter:
         self,
         raw_path: str,
         refined_path: str,
-        writer: AppendOnlyRTTMWriter,
         assigner: BaseChunkAssigner,
         min_duration: float,
         min_similarity: float,
@@ -324,7 +266,6 @@ class RefinedRTTMWriter:
         self.refined_path = refined_path
         # <stem>.refined.rttm -> <stem>.speakers.json
         self.status_path = refined_path[: -len(".refined.rttm")] + ".speakers.json"
-        self._writer = writer
         self._assigner = assigner
         self.min_duration = float(min_duration)
         self.min_similarity = float(min_similarity)
@@ -340,7 +281,6 @@ class RefinedRTTMWriter:
             # 流式中途不应用小样本合并（时长尚未累积够会误并），仅 final 时启用。
             min_duration=self.min_duration if final else 0.0,
             min_similarity=self.min_similarity,
-            global_to_output=self._writer.output_id_map,
         )
         write_speaker_status(
             self.status_path,
@@ -348,7 +288,6 @@ class RefinedRTTMWriter:
             durations=result["durations"],
             merged_into=getattr(self._assigner, "merged_into", {}),
             merge_map=result["merge_map"],
-            global_to_output=result["global_to_output"],
             min_duration=self.min_duration,
             final=final,
         )

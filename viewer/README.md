@@ -41,7 +41,7 @@ viewer 只读文件、不写；与管线/ASR 的交互全部经以下产物：
 ```json
 {
   "final": false, "post_merge_min_speech_duration": 30.0,
-  "speakers": [{"id": 0, "output_id": 1, "duration": 123.4,
+  "speakers": [{"id": 0, "duration": 123.4,
                 "uncertain": false, "merged_into": null}],
   "merge_events": [{"absorbed": 9, "survivor": 8, "kind": "merge"}]
 }

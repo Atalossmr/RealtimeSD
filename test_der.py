@@ -6,6 +6,7 @@
 
     CONFIG_PATH → --config        MODEL_PATH   → --model_path
     HF_TOKEN    → --hf_token      HF_CACHE_DIR → --hf_cache_dir
+    DEVICE      → --device
     REF_RTTM / REF_RTTM_DIR → --ref_rttm
     DEBUG=0     → --no-debug      SHOW_RTTM=1  → --show_rttm
     DER_VERBOSE=0 → --no-der_verbose
@@ -62,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_args(parser)
     parser.add_argument(
+        "--device",
+        default=os.environ.get("DEVICE") or None,
+        help="运行设备覆盖（如 cpu/cuda/cuda:0）；缺省用 YAML 配置的 device",
+    )
+    parser.add_argument(
         "--ref_rttm",
         default=os.environ.get("REF_RTTM")
         or os.environ.get("REF_RTTM_DIR")
@@ -117,6 +123,8 @@ def main() -> int:
         print("model_path override enabled")
     if args.hf_cache_dir:
         print("hf_cache_dir override enabled")
+    if args.device:
+        print(f"device override: {args.device}")
     print("==========================================")
 
     # DER 只评估 RTTM：生效配置强制 separation_enabled=false（其余原样）。
@@ -133,6 +141,7 @@ def main() -> int:
             "effective_config": f"{effective_config} (separation_enabled=false)",
             "model_path_override": args.model_path,
             "hf_cache_dir_override": args.hf_cache_dir,
+            "device_override": args.device,
             "der_verbose": int(args.der_verbose),
             "ref_path": args.ref_rttm or None,
         },

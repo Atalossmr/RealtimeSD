@@ -79,7 +79,7 @@
 - 每个 speaker 维护一个未闭合的 open turn（驻留内存）：后续帧/段间隔 ≤ `streaming_merge_gap` 即在写出前扩展拼接，跨 chunk 生效
 - 沉默闭合：每 chunk 提交后检查，open turn 终点距 commit_end 已超过 `streaming_merge_gap` 即判定说话结束、提前闭合写出（与"下次开口回头闭合"产出等价，但尾段输出延迟从等到 EOF 降到约一个 hop）；EOF 时 `finalize` 兜底闭合全部残余 turn
 - 短于 `min_segment_duration` 的 turn 在闭合时丢弃
-- `finalize`：闭合全部 open turn，纯追加，不重写文件；最后在文件末尾以 `#` 注释写出内部 global id → RTTM speaker 的映射表（RTTM 编号按首次写出顺序分配）
+- `finalize`：闭合全部 open turn，纯追加，不重写文件
 
 相关代码：`diarization/cluster/rttm_writer.py`
 
@@ -207,15 +207,14 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 
 diarization 与 ASR / viewer 之间无 IPC，全部经共享输出目录的文件交互。
 **核心约定：所有对外文件里的 speaker id 都是 assigner 的 global id**
-（RTTM 行内的输出编号除外，可用行内/文件末尾的 id 映射表换算）。
+（含 RTTM 行内的 speaker 字段）。
 写读时序保证：追加在依赖之后、JSON/RTTM 重写均走临时文件 + 原子替换，
 消费者永远读不到半写文件。
 
 #### `rttm/{uri}.raw.rttm` / `rttm/{uri}.refined.rttm`（streaming 后端）
 
 - raw：append-only 零重写，行写出即最终；refined：整体重生成（原子替换），merge 历史修正 + EOF 小样本合并后的最终输出，**下游应消费 refined**；
-- 行格式（标准 RTTM）：`SPEAKER <uri> 0 <start> <dur> <NA> <NA> <输出编号> <NA> <NA>`；
-- 文件末尾 `#` 注释映射表：`#   <global_id> -> <输出编号>`（refined 为合并修正后的最终映射）。
+- 行格式（标准 RTTM）：`SPEAKER <uri> 0 <start> <dur> <NA> <NA> <speaker global id> <NA> <NA>`。
 
 #### `rttm/{uri}.speakers.json`（streaming 后端，refined 级 sidecar）
 
@@ -226,7 +225,7 @@ diarization 与 ASR / viewer 之间无 IPC，全部经共享输出目录的文�
   "uri": "...", "final": false,
   "post_merge_min_speech_duration": 30.0,
   "speakers": [
-    {"id": 0, "output_id": 1, "duration": 123.4,
+    {"id": 0, "duration": 123.4,
      "uncertain": false, "merged_into": null}
   ],
   "merge_events": [{"absorbed": 9, "survivor": 8, "kind": "merge"}]

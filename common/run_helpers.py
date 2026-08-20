@@ -52,6 +52,9 @@ def build_pipeline_cmd(
     ]
     if args.model_path:
         cmd += ["--model_path", args.model_path]
+    if getattr(args, "device", None):
+        # run.py 暂无 --device 参数，故用 getattr 兜底；显式 CLI 优先于 YAML。
+        cmd += ["--device", args.device]
     if args.hf_cache_dir:
         cmd += ["--hf_cache_dir", args.hf_cache_dir]
     if args.hf_token:

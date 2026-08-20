@@ -79,7 +79,6 @@ def cluster_file(chunks_path: str, config, output_dir: str) -> str:
         refiner = RefinedRTTMWriter(
             rttm_path,
             f"{base}.refined.rttm",
-            writer,
             assigner,
             min_duration=config.post_merge_min_speech_duration,
             min_similarity=config.post_merge_min_similarity,

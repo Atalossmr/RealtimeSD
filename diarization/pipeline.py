@@ -256,7 +256,6 @@ class ChunkDiarizationPipeline:
             refiner = RefinedRTTMWriter(
                 streaming_log_path,
                 f"{base}.refined.rttm",
-                writer,
                 self.assigner,
                 min_duration=self.config.post_merge_min_speech_duration,
                 min_similarity=self.config.post_merge_min_similarity,
