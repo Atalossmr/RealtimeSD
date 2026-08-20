@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -63,7 +64,9 @@ def _write_transcript(
 
     results = sorted(results, key=lambda r: (r[0], r[1]))
     jsonl_path = output_dir / f"{uri}.transcript.jsonl"
-    with open(jsonl_path, "w", encoding="utf-8") as jsonl_file:
+    # 临时文件 + 原子替换：viewer 每 2s 轮询，原地重写会让读者看到截半文件。
+    tmp_path = jsonl_path.with_suffix(jsonl_path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as jsonl_file:
         for start, end, speaker_id, text in results:
             jsonl_file.write(
                 json.dumps(
@@ -78,6 +81,7 @@ def _write_transcript(
                 )
                 + "\n"
             )
+    os.replace(tmp_path, jsonl_path)
     logger.info("[asr] wrote %d segments to %s", len(results), jsonl_path)
 
 

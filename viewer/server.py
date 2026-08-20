@@ -67,13 +67,16 @@ class SessionIndex:
                 line = line.strip()
                 if not line:
                     continue
-                entry = json.loads(line)
-                segments.append({
-                    "speaker_id": int(entry["speaker_id"]),
-                    "start": float(entry["start"]),
-                    "end": float(entry["end"]),
-                    "text": entry["text"],
-                })
+                try:
+                    entry = json.loads(line)
+                    segments.append({
+                        "speaker_id": int(entry["speaker_id"]),
+                        "start": float(entry["start"]),
+                        "end": float(entry["end"]),
+                        "text": entry["text"],
+                    })
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    continue  # 坏行（如读到写入中途的旧产物）：跳过，下轮轮询再读
         segments.sort(key=lambda s: (s["start"], s["end"]))
         return segments
 

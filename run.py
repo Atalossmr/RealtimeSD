@@ -116,7 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _check_asr_config(config_path: Path) -> None:
-    """WITH_ASR 需要 config 里开启分段导出（separation_enabled）。"""
+    """WITH_ASR 需要 config 里开启分段导出且使用 streaming 后端。
+
+    ahc 后端不产出 segments manifest，ASR follow 进程会空转到超时。
+    """
 
     with open(config_path, encoding="utf-8") as file_obj:
         data = yaml.safe_load(file_obj) or {}
@@ -124,6 +127,21 @@ def _check_asr_config(config_path: Path) -> None:
         raise SystemExit(
             f"ERROR: ASR 跟随需要 {config_path} 中 separation_enabled 为 true"
         )
+    backend = data.get("clustering_backend", "streaming")
+    if backend != "streaming":
+        raise SystemExit(
+            f"ERROR: ASR 跟随需要 {config_path} 中 clustering_backend 为 streaming"
+            f"（当前为 {backend!r}，该后端不产出分段 manifest）"
+        )
+
+
+def _check_input_paths(audio: Path, config_path: Path) -> None:
+    """启动前 fail-fast：音频/配置不存在时尽早报错，避免模型加载完才发现。"""
+
+    if not audio.exists():
+        raise SystemExit(f"ERROR: 音频输入不存在: {audio}")
+    if not config_path.exists():
+        raise SystemExit(f"ERROR: 配置文件不存在: {config_path}")
 
 
 def _wait_asr_ready(
@@ -163,6 +181,7 @@ def main() -> int:
 
     audio = Path(args.audio)
     config_path = Path(args.config)
+    _check_input_paths(audio, config_path)
     basic_dir = Path(args.output_root) / _TEST_NAME
     exp_dir = basic_dir / args.run_name
     results_file = basic_dir / "results.txt"

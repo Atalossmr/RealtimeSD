@@ -117,7 +117,8 @@ def dataclass_from_args(
     """按 dataclass 字段从合并后的参数构造配置。
 
     每个字段的值取自 args（缺失或为 None 时落回字段默认值），标量字段按
-    默认值类型做 int/float/bool/str 转换；字段默认值是唯一兜底来源。
+    默认值类型做 int/float/str 转换（bool 字段对字符串按内容解析，
+    'true'/'false' 等大小写均可）；字段默认值是唯一兜底来源。
     attr_overrides 处理字段名与 args 属性名不一致的情况
     （如 output_dir_for_streaming <- output_dir）。
     """
@@ -129,8 +130,26 @@ def dataclass_from_args(
         value = getattr(args, attr, None)
         if value is None:
             value = field.default
+        elif isinstance(field.default, bool) and isinstance(value, str):
+            # bool("false") is True：YAML 里带引号的 'false' 会静默反转语义，
+            # 必须按字符串内容解析。
+            lowered = value.strip().lower()
+            if lowered in ("1", "true", "yes", "on"):
+                value = True
+            elif lowered in ("0", "false", "no", "off"):
+                value = False
+            else:
+                raise ValueError(
+                    f"配置项 {field.name} 需要布尔值，收到无法解析的字符串: {value!r}"
+                )
         elif field.default is not None:
-            value = type(field.default)(value)
+            try:
+                value = type(field.default)(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"配置项 {field.name} 无法转换为 {type(field.default).__name__}: "
+                    f"{value!r}"
+                ) from exc
         kwargs[field.name] = value
     return config_type(**kwargs)
 

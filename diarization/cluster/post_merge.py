@@ -190,6 +190,22 @@ def write_refined_rttm(
     )
 
     uri = Path(src_path).name.split(".", 1)[0]
+
+    # 幸存 id 从未写出过 raw 行（如新建当 chunk 即被并、其语音又落在 commit
+    # 区外）时不在输出编号映射中：为其分配未占用的输出编号，保证 refined 的
+    # 行与末尾映射表一致（raw writer 后续给该 id 分配编号时从同一计数继续，
+    # 通常恰好对齐；不一致也只是下次刷新重编号，单份文件内始终自洽）。
+    next_fallback_id = max(global_to_output.values(), default=-1) + 1
+
+    def output_id_of(global_id: int) -> int:
+        nonlocal next_fallback_id
+        output = global_to_output.get(global_id)
+        if output is None:
+            output = next_fallback_id
+            next_fallback_id += 1
+            global_to_output[global_id] = output
+        return output
+
     tmp_path = dst_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as file_obj:
         file_obj.write(
@@ -200,16 +216,15 @@ def write_refined_rttm(
             output_id = int(parts[7])
             global_id = output_to_global.get(output_id)
             survivor = final_survivor(global_id) if global_id is not None else None
-            if survivor is not None and survivor in global_to_output:
-                parts[7] = str(global_to_output[survivor])
+            if survivor is not None:
+                parts[7] = str(output_id_of(survivor))
             file_obj.write(" ".join(parts) + "\n")
         file_obj.write("# speaker_id_map: global_id -> rttm_speaker (refined)\n")
         survivors = sorted(
             {final_survivor(global_id) for global_id in global_to_output}
         )
         for survivor in survivors:
-            if survivor in global_to_output:
-                file_obj.write(f"#   {survivor} -> {global_to_output[survivor]}\n")
+            file_obj.write(f"#   {survivor} -> {output_id_of(survivor)}\n")
     os.replace(tmp_path, dst_path)
 
     logger.info(

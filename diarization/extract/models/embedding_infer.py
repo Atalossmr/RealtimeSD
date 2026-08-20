@@ -55,18 +55,43 @@ def load_embedding_model(
         )
 
     resolved_model_path = resolve_embedding_model_path(model_path, model_type)
-    checkpoint = torch.load(
-        resolved_model_path, map_location=device, weights_only=False
-    )
+    try:
+        # 优先安全反序列化；旧 checkpoint 含非张量对象时才回退
+        # weights_only=False（可执行任意代码，仅对可信来源安全）。
+        checkpoint = torch.load(
+            resolved_model_path, map_location=device, weights_only=True
+        )
+    except Exception:
+        logger.warning(
+            "[extract] weights_only=True 加载失败，回退 weights_only=False"
+            "（请确认 checkpoint 来源可信）: %s",
+            resolved_model_path,
+        )
+        checkpoint = torch.load(
+            resolved_model_path, map_location=device, weights_only=False
+        )
+
     if isinstance(checkpoint, dict) and "embedding_model_state_dict" in checkpoint:
-        model.load_state_dict(checkpoint["embedding_model_state_dict"])
-    elif isinstance(checkpoint, dict):
-        try:
-            model.load_state_dict(checkpoint)
-        except RuntimeError:
-            model.load_state_dict(checkpoint, strict=False)
+        state_dict = checkpoint["embedding_model_state_dict"]
     else:
-        model.load_state_dict(checkpoint)
+        state_dict = checkpoint
+
+    try:
+        model.load_state_dict(state_dict)
+    except RuntimeError:
+        # 容忍 checkpoint 中的多余键，但不容忍缺失键：缺失意味着对应层停在
+        # 随机初始化权重上，embedding 完全不可用，必须报错而不是静默跑。
+        result = model.load_state_dict(state_dict, strict=False)
+        if result.missing_keys:
+            raise RuntimeError(
+                f"checkpoint 与模型结构不匹配，{len(result.missing_keys)} 个参数缺失"
+                f"（如前 5 个: {result.missing_keys[:5]}）: {resolved_model_path}"
+            )
+        logger.warning(
+            "[extract] checkpoint 含 %d 个未使用的多余键（已忽略）: %s",
+            len(result.unexpected_keys),
+            resolved_model_path,
+        )
 
     model.eval()
     model.to(device)

@@ -35,6 +35,9 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
 
     每个 chunk 内用 Hungarian algorithm 做 local->global 联合分配，
     隐式提供 cannot-link 约束：同一 chunk 的不同 local slot 不会分配给同一 global speaker。
+    例外：chunk 中途发生 merge 时，指向被并者的分配改挂幸存 id，两个
+    local slot 可能因此落到同一 global（merge 判定即认为二者同属一人，
+    保留该语义并记录日志）。
     """
 
     # 流式输出为 raw 级（append-only）；修正后的最终输出为 refined 级
@@ -293,9 +296,20 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
         local_idx = observation.local_idx
         matched_speaker, similarity = assignment.get(local_idx, (None, -1.0))
         # assignment 基于本 chunk 开头的 centroid 集计算；若匹配对象在本 chunk
-        # 内已被 merge 掉，改挂到幸存 id（相似度沿用旧值，与幸存 centroid 近似）。
+        # 内已被 merge 掉，改挂到幸存 id，并用幸存者的当前 centroid 重算
+        # 相似度——旧相似度是相对被并 centroid 的，merge 后 centroid 已变，
+        # 直接参与阈值判定会失真（可能误把 fallback 判成 matched 或反之）。
         if matched_speaker is not None:
-            matched_speaker = self.merged_into.get(matched_speaker, matched_speaker)
+            survivor = self.merged_into.get(matched_speaker, matched_speaker)
+            if survivor != matched_speaker:
+                matched_speaker = survivor
+                if observation.embedding is not None:
+                    embedding = l2_normalize(
+                        observation.embedding.astype(np.float32, copy=False)
+                    )
+                    similarity = float(
+                        np.dot(self.centroids[survivor], embedding)
+                    )
 
         # matched：相似度达到主阈值，直接沿用该 global speaker。
         if matched_speaker is not None and similarity >= config.global_match_threshold:
@@ -320,6 +334,19 @@ class ChunkSpeakerClusterer(BaseChunkAssigner):
         # 无匹配且不满足建簇条件：放弃该 local slot，其帧不输出。
         else:
             return
+
+        if assigned_speaker in local_to_global.values():
+            # merge 改挂导致同 chunk 两个 local slot 落到同一 global（Hungarian
+            # 的 cannot-link 只约束分配时刻）。merge 判定即认为二者同属一人，
+            # 保留该语义，记录日志便于事后排查误并。
+            logger.info(
+                "[assign] chunk 内 slot 撞车：local %d 与已有 slot 同挂 speaker %d"
+                "（merge 改挂所致，decision=%s, similarity=%.3f）",
+                int(local_idx),
+                int(assigned_speaker),
+                decision,
+                float(similarity),
+            )
 
         local_to_global[int(local_idx)] = int(assigned_speaker)
         debug_info["local_assignments"].append(
