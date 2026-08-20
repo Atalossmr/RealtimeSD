@@ -38,6 +38,7 @@ from pathlib import Path
 import torchaudio
 
 from .config import (
+    AsrConfig,
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
@@ -147,7 +148,7 @@ def _read_new_entries(manifest_path: Path, offset: int) -> tuple[list[dict], int
 
 
 def consume_segments_dir(
-    config,
+    config: AsrConfig,
     segments_dir: Path,
     output_dir: Path,
     transcriber: SegmentTranscriber,

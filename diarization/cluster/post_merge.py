@@ -27,6 +27,8 @@ from typing import Optional
 import numpy as np
 
 from ..utils import l2_normalize
+from .base import BaseChunkAssigner
+from .rttm_writer import AppendOnlyRTTMWriter
 
 
 logger = logging.getLogger(__name__)
@@ -313,8 +315,8 @@ class RefinedRTTMWriter:
         self,
         raw_path: str,
         refined_path: str,
-        writer,
-        assigner,
+        writer: AppendOnlyRTTMWriter,
+        assigner: BaseChunkAssigner,
         min_duration: float,
         min_similarity: float,
     ):

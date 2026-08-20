@@ -28,6 +28,13 @@ from pathlib import Path
 
 import yaml
 
+from common.run_helpers import (
+    add_common_args,
+    append_run_header,
+    build_pipeline_cmd,
+    env_flag,
+)
+
 _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
 
 
@@ -48,26 +55,12 @@ def _make_effective_config(config_path: str, exp_dir: Path) -> str:
     return str(effective_path)
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    return default if raw is None else raw == "1"
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="实时管线 DER 评估")
     parser.add_argument(
         "audio", nargs="?", default="./datasets/", help="输入音频（wav 文件或目录）"
     )
-    parser.add_argument(
-        "--config", default=os.environ.get("CONFIG_PATH", "./config/config.yaml")
-    )
-    parser.add_argument("--output_root", default=os.environ.get("OUTPUT_ROOT", "./exp"))
-    parser.add_argument("--run_name", default=os.environ.get("RUN_NAME", "default"))
-    parser.add_argument("--model_path", default=os.environ.get("MODEL_PATH") or None)
-    parser.add_argument("--hf_token", default=os.environ.get("HF_TOKEN") or None)
-    parser.add_argument(
-        "--hf_cache_dir", default=os.environ.get("HF_CACHE_DIR") or None
-    )
+    add_common_args(parser)
     parser.add_argument(
         "--ref_rttm",
         default=os.environ.get("REF_RTTM")
@@ -78,17 +71,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--debug",
         action=argparse.BooleanOptionalAction,
-        default=_env_flag("DEBUG", True),
+        default=env_flag("DEBUG", True),
     )
     parser.add_argument(
         "--show_rttm",
         action=argparse.BooleanOptionalAction,
-        default=_env_flag("SHOW_RTTM", False),
+        default=env_flag("SHOW_RTTM", False),
     )
     parser.add_argument(
         "--der_verbose",
         action=argparse.BooleanOptionalAction,
-        default=_env_flag("DER_VERBOSE", True),
+        default=env_flag("DER_VERBOSE", True),
     )
     return parser
 
@@ -130,45 +123,22 @@ def main() -> int:
     effective_config = _make_effective_config(args.config, exp_dir)
 
     # results.txt 按 run 追加：历史 run 的 DER 汇总记录保留。
-    with open(results_file, "a", encoding="utf-8") as file_obj:
-        file_obj.write(f"run: {args.run_name} | DER test\n")
-        file_obj.write("-" * 40 + "\n")
-        file_obj.write(f"audio_input: {args.audio}\nconfig_path: {args.config}\n")
-        file_obj.write(
-            f"effective_config: {effective_config} (separation_enabled=false)\n"
-        )
-        if args.model_path:
-            file_obj.write(f"model_path_override: {args.model_path}\n")
-        if args.hf_cache_dir:
-            file_obj.write(f"hf_cache_dir_override: {args.hf_cache_dir}\n")
-        file_obj.write(
-            f"run_name: {args.run_name}\nder_verbose: {int(args.der_verbose)}\n"
-        )
-        if args.ref_rttm:
-            file_obj.write(f"ref_path: {args.ref_rttm}\n")
-        file_obj.write("\n")
+    append_run_header(
+        results_file,
+        args.run_name,
+        "DER test",
+        {
+            "audio_input": args.audio,
+            "config_path": args.config,
+            "effective_config": f"{effective_config} (separation_enabled=false)",
+            "model_path_override": args.model_path,
+            "hf_cache_dir_override": args.hf_cache_dir,
+            "der_verbose": int(args.der_verbose),
+            "ref_path": args.ref_rttm or None,
+        },
+    )
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "diarization.app",
-        "--wav",
-        args.audio,
-        "--output_dir",
-        str(exp_dir),
-        "--config",
-        effective_config,
-    ]
-    if args.model_path:
-        cmd += ["--model_path", args.model_path]
-    if args.hf_cache_dir:
-        cmd += ["--hf_cache_dir", args.hf_cache_dir]
-    if args.hf_token:
-        cmd += ["--hf_token", args.hf_token]
-    if args.debug:
-        cmd += ["--debug", "--verbose"]
-    if args.show_rttm:
-        cmd += ["--show_rttm"]
+    cmd = build_pipeline_cmd(args, args.audio, exp_dir, effective_config)
 
     with open(exp_dir / "command.log", "w", encoding="utf-8") as log:
         log.write(f"Command: {shlex.join(cmd)}\n")

@@ -20,7 +20,7 @@ import logging
 import numpy as np
 
 from ..schema import SpeakerTurn
-from ..utils import ensure_parent_dir
+from ..utils import ensure_parent_dir, iter_commit_frames
 
 
 logger = logging.getLogger(__name__)
@@ -112,14 +112,6 @@ class AppendOnlyRTTMWriter:
             start=float(start), end=float(end), speaker_id=int(speaker_id)
         )
 
-    def _feed_frame(
-        self,
-        speaker_id: int,
-        frame_start: float,
-        frame_end: float,
-    ) -> None:
-        self._feed_turn(speaker_id, frame_start, frame_end)
-
     def consume_chunk(
         self,
         seg_scores: np.ndarray,
@@ -137,34 +129,17 @@ class AppendOnlyRTTMWriter:
         if seg_scores.size == 0 or not local_to_global:
             return 0
 
-        frame_step = max(1e-6, float(frame_step))
         emitted = 0
-        num_frames = seg_scores.shape[0]
-        for frame_idx in range(num_frames):
-            frame_start = chunk_start + frame_idx * frame_step
-            frame_end = frame_start + frame_step
-            # 只输出与提交区相交的帧；跨界帧裁剪到提交区边界。
-            # 相邻 chunk 的提交区无缝拼接，因此不重复也不遗漏。
-            if frame_end <= commit_start + 1e-9:
-                continue
-            if frame_start >= commit_end - 1e-9:
-                break
-            frame_start = max(frame_start, commit_start)
-            frame_end = min(frame_end, commit_end)
-
-            frame_scores = seg_scores[frame_idx]
-            # segmentation-3.0 经 powerset 转硬标签（0/1），> 0.0 即活跃；
-            # 未分配 global（未建 track / 未过门控）的 local slot 帧直接丢弃。
-            active_globals = sorted(
-                {
-                    int(local_to_global[local_idx])
-                    for local_idx in range(len(frame_scores))
-                    if frame_scores[local_idx] > 0.0
-                    and local_idx in local_to_global
-                }
-            )
+        for frame_start, frame_end, active_globals in iter_commit_frames(
+            seg_scores,
+            frame_step,
+            chunk_start,
+            commit_start,
+            commit_end,
+            local_to_global,
+        ):
             for speaker_id in active_globals:
-                self._feed_frame(speaker_id, frame_start, frame_end)
+                self._feed_turn(speaker_id, frame_start, frame_end)
             emitted += 1
         return emitted
 

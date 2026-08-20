@@ -13,11 +13,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Iterable, Optional
+from typing import TYPE_CHECKING, Callable, Iterable, Optional
 
 from ..schema import ChunkArtifacts, ChunkDebugInfo
 from .base import BaseChunkAssigner
 from .rttm_writer import AppendOnlyRTTMWriter
+
+if TYPE_CHECKING:
+    from .post_merge import RefinedRTTMWriter
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +36,7 @@ def run_clustering(
     assigner: BaseChunkAssigner,
     writer: AppendOnlyRTTMWriter,
     chunk_hook: Optional[ChunkHook] = None,
-    refiner=None,
+    refiner: Optional[RefinedRTTMWriter] = None,
 ) -> None:
     """消费 chunk 序列并输出 RTTM（含 writer.finalize）。
 

@@ -38,17 +38,19 @@ from pathlib import Path
 
 import yaml
 
+from common.run_helpers import (
+    add_common_args,
+    append_run_header,
+    build_pipeline_cmd,
+    env_flag,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 
 # ASR 模型加载（含可能的下载）等待上限。
 _DEFAULT_READY_TIMEOUT = 3600.0
 
 _TEST_NAME = "common"  # 输出固定在 {output_root}/common/{run_name}
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    return default if raw is None else raw == "1"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,46 +63,37 @@ def build_parser() -> argparse.ArgumentParser:
         default="./datasets",
         help="输入音频（wav）",
     )
-    parser.add_argument(
-        "--config", default=os.environ.get("CONFIG_PATH", "./config/config.yaml")
-    )
+    add_common_args(parser)
     parser.add_argument(
         "--asr_config",
         default=os.environ.get("ASR_CONFIG_PATH", "./config/asr.yaml"),
         help="ASR 转写的 YAML 配置（传给 python -m asr.app）",
     )
-    parser.add_argument("--output_root", default=os.environ.get("OUTPUT_ROOT", "./exp"))
-    parser.add_argument("--run_name", default=os.environ.get("RUN_NAME", "default"))
-    parser.add_argument("--model_path", default=os.environ.get("MODEL_PATH") or None)
-    parser.add_argument("--hf_token", default=os.environ.get("HF_TOKEN") or None)
     parser.add_argument(
-        "--hf_cache_dir", default=os.environ.get("HF_CACHE_DIR") or None
+        "--debug", action="store_true", default=env_flag("DEBUG", False)
     )
     parser.add_argument(
-        "--debug", action="store_true", default=_env_flag("DEBUG", False)
-    )
-    parser.add_argument(
-        "--show_rttm", action="store_true", default=_env_flag("SHOW_RTTM", False)
+        "--show_rttm", action="store_true", default=env_flag("SHOW_RTTM", False)
     )
     parser.add_argument(
         "--no-asr",
         dest="asr",
         action="store_false",
-        default=_env_flag("WITH_ASR", True),
+        default=env_flag("WITH_ASR", True),
         help="不启动 ASR 跟随进程",
     )
     parser.add_argument(
         "--no-viewer",
         dest="viewer",
         action="store_false",
-        default=_env_flag("WITH_VIEWER", True),
+        default=env_flag("WITH_VIEWER", True),
         help="不启动 viewer 服务器",
     )
     parser.add_argument(
         "--no-wait",
         dest="wait",
         action="store_false",
-        default=_env_flag("WAIT_VIEWER", True),
+        default=env_flag("WAIT_VIEWER", True),
         help="管线结束后不挂起等待 Ctrl+C，直接收尾退出（无人值守/批处理场景）",
     )
     parser.add_argument(
@@ -209,38 +202,21 @@ def main() -> int:
     print("==========================================")
 
     # results.txt 按 run 追加：同一 output_root 下历史 run 的汇总记录保留。
-    with open(results_file, "a", encoding="utf-8") as file_obj:
-        file_obj.write(f"run: {args.run_name} | Online Speaker Diarization pipeline\n")
-        file_obj.write("-" * 40 + "\n")
-        file_obj.write(f"audio_input: {audio}\nconfig_path: {config_path}\n")
-        if args.model_path:
-            file_obj.write(f"model_path_override: {args.model_path}\n")
-        if args.hf_cache_dir:
-            file_obj.write(f"hf_cache_dir_override: {args.hf_cache_dir}\n")
-        file_obj.write(f"with_asr: {args.asr}\nrun_name: {args.run_name}\n\n")
+    append_run_header(
+        results_file,
+        args.run_name,
+        "Online Speaker Diarization pipeline",
+        {
+            "audio_input": audio,
+            "config_path": config_path,
+            "model_path_override": args.model_path,
+            "hf_cache_dir_override": args.hf_cache_dir,
+            "with_asr": args.asr,
+        },
+    )
 
     # ---- 组装子进程命令 ----
-    pipeline_cmd = [
-        sys.executable,
-        "-m",
-        "diarization.app",
-        "--wav",
-        str(audio),
-        "--output_dir",
-        str(exp_dir),
-        "--config",
-        str(config_path),
-    ]
-    if args.model_path:
-        pipeline_cmd += ["--model_path", args.model_path]
-    if args.hf_cache_dir:
-        pipeline_cmd += ["--hf_cache_dir", args.hf_cache_dir]
-    if args.hf_token:
-        pipeline_cmd += ["--hf_token", args.hf_token]
-    if args.debug:
-        pipeline_cmd += ["--debug", "--verbose"]
-    if args.show_rttm:
-        pipeline_cmd += ["--show_rttm"]
+    pipeline_cmd = build_pipeline_cmd(args, audio, exp_dir, config_path)
 
     asr_cmd = [
         sys.executable,

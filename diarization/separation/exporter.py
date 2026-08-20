@@ -29,14 +29,19 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 import torch
 import torchaudio
 
+from ..cluster.base import BaseChunkAssigner
+from ..config import ChunkPipelineConfig
 from ..schema import ChunkArtifacts
-from ..utils import log_structured
+from ..utils import iter_commit_frames, log_structured
+
+if TYPE_CHECKING:
+    from ..extract.models.embedding_infer import NativeERes2NetV2SegmentEmbedder
 
 
 logger = logging.getLogger(__name__)
@@ -104,10 +109,10 @@ class StreamingSegmentExporter:
 
     def __init__(
         self,
-        config,
+        config: ChunkPipelineConfig,
         waveform: torch.Tensor,
-        embedder,
-        assigner,
+        embedder: NativeERes2NetV2SegmentEmbedder,
+        assigner: BaseChunkAssigner,
         uri: str,
         output_dir: str,
         on_segment: Optional[SegmentCallback] = None,
@@ -190,30 +195,18 @@ class StreamingSegmentExporter:
     def _commit_frames(
         self, chunk: ChunkArtifacts, local_to_global: dict[int, int]
     ) -> list[FrameActivity]:
-        """commit 区内逐帧的活跃 global speaker（与 writer 的帧裁剪逻辑一致）。"""
+        """commit 区内逐帧的活跃 global speaker（与 writer 共用帧裁剪逻辑）。"""
 
-        frames: list[FrameActivity] = []
-        seg_scores = chunk.seg_scores
-        for frame_idx in range(seg_scores.shape[0]):
-            frame_start = chunk.chunk_start + frame_idx * chunk.frame_step
-            frame_end = frame_start + chunk.frame_step
-            if frame_end <= chunk.commit_start + 1e-9:
-                continue
-            if frame_start >= chunk.commit_end - 1e-9:
-                break
-            frame_start = max(frame_start, chunk.commit_start)
-            frame_end = min(frame_end, chunk.commit_end)
-            frame_scores = seg_scores[frame_idx]
-            active = sorted(
-                {
-                    int(local_to_global[local_idx])
-                    for local_idx in range(len(frame_scores))
-                    if frame_scores[local_idx] > 0.0
-                    and local_idx in local_to_global
-                }
+        return list(
+            iter_commit_frames(
+                chunk.seg_scores,
+                chunk.frame_step,
+                chunk.chunk_start,
+                chunk.commit_start,
+                chunk.commit_end,
+                local_to_global,
             )
-            frames.append((frame_start, frame_end, active))
-        return frames
+        )
 
     @staticmethod
     def _overlap_regions(
@@ -437,6 +430,19 @@ class StreamingSegmentExporter:
                 pieces.setdefault(global_id, []).append((frame_start, frame_end, source))
         return pieces
 
+    def _feed_pieces(self, pieces: dict[int, list[SpeakerPiece]]) -> None:
+        """把归集好的帧片逐 speaker 送入 open-segment 管线。"""
+
+        for global_id, speaker_pieces in sorted(pieces.items()):
+            self._feed_speaker_pieces(global_id, speaker_pieces)
+
+    def _fallback_all_mix(
+        self, frames: list[FrameActivity], overlap_frame_ids: set[int]
+    ) -> None:
+        """整窗回退：重叠帧不做分离，所有 speaker 一律用原始音频切片。"""
+
+        self._feed_pieces(self._collect_pieces(frames, overlap_frame_ids, {}, set()))
+
     # ------------------------------------------------------------------
     # 主入口（chunk_hook 调用）
     # ------------------------------------------------------------------
@@ -472,9 +478,7 @@ class StreamingSegmentExporter:
             if len(active) >= 2
         }
         if not overlap_frame_ids:
-            pieces = self._collect_pieces(frames, set(), {}, set())
-            for global_id, speaker_pieces in sorted(pieces.items()):
-                self._feed_speaker_pieces(global_id, speaker_pieces)
+            self._feed_pieces(self._collect_pieces(frames, set(), {}, set()))
             return
 
         # ---- 有重叠：TIGER 分离整个 commit 区 ----
@@ -494,9 +498,7 @@ class StreamingSegmentExporter:
                     ],
                 },
             )
-            pieces = self._collect_pieces(frames, overlap_frame_ids, {}, set())
-            for global_id, speaker_pieces in sorted(pieces.items()):
-                self._feed_speaker_pieces(global_id, speaker_pieces)
+            self._fallback_all_mix(frames, overlap_frame_ids)
             return
         mix, tracks = separated
         track_sources: list[AudioSource] = [
@@ -546,14 +548,9 @@ class StreamingSegmentExporter:
 
         refs = self._reference_embeddings(chunk, local_to_global)
 
-        def fallback_all_mix() -> None:
-            pieces = self._collect_pieces(frames, overlap_frame_ids, {}, set())
-            for global_id, speaker_pieces in sorted(pieces.items()):
-                self._feed_speaker_pieces(global_id, speaker_pieces)
-
         if len(candidates) < 2:
             # 重叠帧上的 slot 映射到同一个 global（或无候选）：等同无重叠。
-            fallback_all_mix()
+            self._fallback_all_mix(frames, overlap_frame_ids)
             return
 
         if len(passed) == 2:
@@ -562,7 +559,7 @@ class StreamingSegmentExporter:
             )
             mapping = self._match_pair(chunk.chunk_index, embeddings, candidates, refs)
             if mapping is None:
-                fallback_all_mix()
+                self._fallback_all_mix(frames, overlap_frame_ids)
                 return
             track_of = {
                 global_id: track_sources[track_idx]
@@ -577,7 +574,7 @@ class StreamingSegmentExporter:
                 g: self._cosine(embedding, refs[g]) for g in candidates if g in refs
             }
             if not sims:
-                fallback_all_mix()
+                self._fallback_all_mix(frames, overlap_frame_ids)
                 return
             winner_global = max(sims, key=sims.get)
             log_structured(
@@ -610,11 +607,10 @@ class StreamingSegmentExporter:
                     ],
                 },
             )
-            fallback_all_mix()
+            self._fallback_all_mix(frames, overlap_frame_ids)
             return
 
-        for global_id, speaker_pieces in sorted(pieces.items()):
-            self._feed_speaker_pieces(global_id, speaker_pieces)
+        self._feed_pieces(pieces)
 
 
 __all__ = ["StreamingSegmentExporter", "SegmentCallback", "WavSegmentSink"]

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import torch
 
+from .config import AsrConfig
 from .model import FunASRNanoASR
 
 
@@ -24,7 +25,7 @@ _MAX_STITCH_OVERLAP_CHARS = 50
 class SegmentTranscriber:
     """逐段转写器：整个文件/目录共用一个实例（模型惰性加载一次）。"""
 
-    def __init__(self, config):
+    def __init__(self, config: AsrConfig):
         self.config = config
         self.sample_rate = int(config.sample_rate)
         self._asr = FunASRNanoASR(config)

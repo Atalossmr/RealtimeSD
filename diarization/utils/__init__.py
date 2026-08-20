@@ -1,4 +1,4 @@
-"""通用工具子包：日志、设备、数值、音频、路径与 chunk 中间文件存取。
+"""通用工具子包：日志、设备、数值、音频、路径、commit 区帧裁剪与 chunk 中间文件存取。
 
 所有成员在包级别 re-export，外部保持 `from ...utils import xxx` 的用法不变。
 """
@@ -6,6 +6,7 @@
 from .audio import resample_waveform_if_needed
 from .chunk_io import load_chunks, save_chunks
 from .device import resolve_device
+from .frames import iter_commit_frames
 from .log import log_structured, setup_logger
 from .numeric import l2_normalize
 from .paths import collect_audio_paths, ensure_parent_dir
@@ -15,6 +16,7 @@ __all__ = [
     "load_chunks",
     "save_chunks",
     "resolve_device",
+    "iter_commit_frames",
     "setup_logger",
     "log_structured",
     "l2_normalize",
