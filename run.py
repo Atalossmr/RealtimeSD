@@ -7,7 +7,9 @@
    （--ready_file，模型加载完成后 touch）；ASR 进程提前退出或超时则整体失败；
 2. ASR 就绪后启动 diarization 管线（python -m diarization.app）和 viewer 服务器；
 3. 管线结束（无论成败）→ touch done 哨兵 → 等 ASR 收尾落盘 transcript →
-   汇总结果；viewer 保持后台运行（独立会话，脚本退出后仍可在浏览器查看）。
+   打印"音频已处理完成"并挂起等待（viewer 保持可访问）；用户 Ctrl+C
+   （或 server 因其他原因退出，如 POST /api/shutdown）后脚本才退出并
+   关闭 viewer。
 
 环境变量作为对应命令行参数的缺省值：
 
@@ -133,6 +135,22 @@ def _wait_asr_ready(
         time.sleep(1.0)
 
 
+def _finish_asr(asr_proc: subprocess.Popen, done_file: Path) -> None:
+    """落 done 哨兵放行 ASR 收尾，等其落盘；超时先 SIGTERM，仍不退出再 SIGKILL。"""
+
+    done_file.touch()
+    try:
+        asr_proc.wait(timeout=600)
+    except subprocess.TimeoutExpired:
+        # 收尾超时：先 SIGTERM，仍不退出再 SIGKILL，避免 run.py 永久挂起。
+        asr_proc.terminate()
+        try:
+            asr_proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            asr_proc.kill()
+            asr_proc.wait()
+
+
 def main() -> int:
     args = build_parser().parse_args()
 
@@ -250,13 +268,11 @@ def main() -> int:
         # 2. ASR 就绪后启动 viewer 与 diarization 管线。
         if args.viewer:
             viewer_log = open(exp_dir / "viewer.log", "w", encoding="utf-8")
-            # 独立会话：脚本退出后 viewer 仍存活，浏览器可继续查看结果。
             try:
                 viewer_proc = subprocess.Popen(
                     viewer_cmd,
                     stdout=viewer_log,
                     stderr=subprocess.STDOUT,
-                    start_new_session=True,
                 )
             finally:
                 # Popen 已复制 fd，父进程持有的句柄可以立即关闭。
@@ -273,25 +289,46 @@ def main() -> int:
 
         print(f"Starting pipeline: {shlex.join(pipeline_cmd)}")
         pipeline_rc = subprocess.run(pipeline_cmd).returncode
+
+        # 管线结束：先落哨兵放行 ASR 收尾并等其落盘，再进入交互等待，
+        # 保证打印"音频已处理完成"时 transcript 已是最终版。
+        if asr_proc is not None:
+            _finish_asr(asr_proc, done_file)
+            asr_proc = None
+
+        # 管线跑完后不立即退出：viewer 保持可访问，等用户 Ctrl+C
+        # （或 server 因其他原因退出，poll 检测到后同样放行）。
+        if viewer_proc is not None:
+            if pipeline_rc == 0:
+                print("音频已处理完成。")
+            else:
+                print(f"管线已退出（rc={pipeline_rc}）。")
+            print(
+                f"Viewer 仍在运行: http://127.0.0.1:{args.viewer_port}"
+                "（按 Ctrl+C 结束并关闭 viewer）"
+            )
+            try:
+                while viewer_proc.poll() is None:
+                    time.sleep(1.0)
+            except KeyboardInterrupt:
+                # 管线已正常结束，这次 Ctrl+C 只用于关闭 viewer，不向外套层抛。
+                print("\nShutting down viewer ...", file=sys.stderr)
     except KeyboardInterrupt:
         print("\nInterrupted, shutting down ...", file=sys.stderr)
         pipeline_rc = 130
     finally:
-        # 3. 管线结束（含失败/中断）：落哨兵放行 ASR 收尾，再等其落盘。
+        # 中断/异常路径的统一收尾：ASR 正常路径已在交互等待前完成（asr_proc
+        # 已置 None），这里只兜住管线运行中被 Ctrl+C 或出错的情况。
         if asr_proc is not None:
-            done_file.touch()
-            try:
-                asr_proc.wait(timeout=600)
-            except subprocess.TimeoutExpired:
-                # 收尾超时：先 SIGTERM，仍不退出再 SIGKILL，避免 run.py 永久挂起。
-                asr_proc.terminate()
-                try:
-                    asr_proc.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    asr_proc.kill()
-                    asr_proc.wait()
-        if pipeline_rc == 130 and viewer_proc is not None:
+            _finish_asr(asr_proc, done_file)
+        # viewer 在脚本退出前关闭（正常路径下它在交互等待结束时才走到这里）。
+        if viewer_proc is not None:
             viewer_proc.terminate()
+            try:
+                viewer_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                viewer_proc.kill()
+                viewer_proc.wait()
             viewer_proc = None
 
     # ---- 汇总 ----
@@ -309,11 +346,6 @@ def main() -> int:
     print(f"Pipeline log: {exp_dir}/run.log")
     if args.asr:
         print(f"ASR log: {exp_dir}/transcribe.log")
-    if viewer_proc is not None:
-        print(
-            f"Viewer 仍在运行: http://127.0.0.1:{args.viewer_port}"
-            f"（停止：pkill -f 'viewer/server.py --exp_root {basic_dir}'）"
-        )
 
     return pipeline_rc
 

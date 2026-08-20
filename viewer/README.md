@@ -6,7 +6,9 @@
 **实时模式**：与管线同时启动时（`run.py` 默认行为），ASR follow 进程每轮
 把新转写结果即时落盘，页面每 2s 轮询增量刷新——时间线随管线运行逐段
 生长，顶栏 `● LIVE` 亮起表示仍在运行；管线结束（`.diarization_done` 哨兵
-出现）后 LIVE 熄灭，结果为最终完整版。
+出现）后 LIVE 熄灭，结果为最终完整版。管线跑完后 `run.py` 不立即退出：
+打印"音频已处理完成"并挂起等待，viewer 保持可访问；用户 Ctrl+C 后
+脚本才退出并关闭 viewer。之后想回看结果，按下方命令手动重启即可。
 
 ## 服务器模式（推荐）
 
@@ -54,7 +56,9 @@ HTTP 端点（服务器模式）：
 - `GET /api/sessions`：会话列表（`uri` / `transcript_url` / `audio_url` / `live`），每次请求重扫目录；
 - `GET /api/transcript/{uri}`：转写段数组（`speaker_id`/`start`/`end`/`text`）；
 - `GET /api/speakers/{uri}`：speakers.json 内容，无 sidecar 返回 `null`；
-- `GET /api/audio/{uri}`：音频流（支持 Range / 206）。
+- `GET /api/audio/{uri}`：音频流（支持 Range / 206）；
+- `POST /api/shutdown`：停止服务器（响应送达后延时触发 shutdown；run.py
+  的等待循环检测到 server 退出后随之收尾）。
 
 前端每 2s 轮询 sessions + transcript + speakers：transcript 按"旧段是新段
 前缀"增量合并；speakers.json 用 JSON 串比对，变化即整体重算（合并映射、

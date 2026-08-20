@@ -148,6 +148,8 @@ python3 test_der.py ./datasets/aishell4-test
   `.asr_ready`），再启动 viewer 服务器（`viewer/server.py`，浏览器打开
   http://127.0.0.1:${VIEWER_PORT:-8000} 查看波形 + ASR 时间线）与
   diarization 管线
+- 管线跑完后 `run.py` 不立即退出：打印"音频已处理完成"并挂起等待，
+  viewer 保持可访问；按 Ctrl+C 后脚本退出并关闭 viewer
 - `run.py` 每次运行只清理 `${OUTPUT_ROOT:-./exp}/common/{run_name}`（其他历史 run 目录保留）
 - `test_der.py` 每次运行会清理 `${OUTPUT_ROOT:-./exp}/der_test`
 

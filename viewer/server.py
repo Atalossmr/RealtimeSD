@@ -16,6 +16,7 @@ import argparse
 import json
 import mimetypes
 import re
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -214,6 +215,17 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"error": f"not found: {route}"}, status=404)
 
+    # stdlib 命名约定（do_POST 不可改成蛇形）
+    def do_POST(self) -> None:  # noqa: N802
+        route = urlparse(self.path).path
+        if route == "/api/shutdown":
+            self._send_json({"ok": True})
+            # shutdown 必须在 serve_forever 所在线程之外调用；延迟一点触发，
+            # 保证上面的响应先送达客户端。
+            threading.Timer(0.3, self.server.shutdown).start()
+            return
+        self._send_json({"error": f"not found: {route}"}, status=404)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ASR 转写结果可视化服务器")
@@ -249,6 +261,9 @@ def main() -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        server.server_close()
+    print("server stopped")
 
 
 if __name__ == "__main__":
