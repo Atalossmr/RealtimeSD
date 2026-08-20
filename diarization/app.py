@@ -37,10 +37,23 @@ def main() -> None:
     logger.info("Collected %d audio file(s) for processing", len(audio_paths))
 
     pipeline = ChunkDiarizationPipeline(config, args.model_path)
+    failed: list[str] = []
     for audio_path in audio_paths:
         logger.info("Processing %s", audio_path)
-        output_path = pipeline.process_file(audio_path)
+        try:
+            output_path = pipeline.process_file(audio_path)
+        except Exception:
+            # 单文件失败不中断整批：记录后继续，最后统一非零退出。
+            failed.append(audio_path)
+            logger.exception("Failed to process %s", audio_path)
+            continue
         logger.info("Wrote raw RTTM to %s", output_path)
+
+    if failed:
+        logger.error(
+            "%d/%d file(s) failed: %s", len(failed), len(audio_paths), failed
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

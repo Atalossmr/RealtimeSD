@@ -125,9 +125,20 @@ def _read_new_entries(manifest_path: Path, offset: int) -> tuple[list[dict], int
         data = file_obj.read()
     if data and not data.endswith(b"\n"):
         data = data[: data.rfind(b"\n") + 1]
-    entries = [
-        json.loads(raw) for raw in data.decode("utf-8").splitlines() if raw.strip()
-    ]
+    entries = []
+    for raw in data.decode("utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            entries.append(json.loads(raw))
+        except json.JSONDecodeError:
+            # 单行损坏不杀死整个消费循环：跳过该行（offset 照常前进，
+            # 不重试），等待 writer 侧修复或人工介入。
+            logger.warning(
+                "[asr] skipping corrupt manifest line in %s: %.100r",
+                manifest_path,
+                raw,
+            )
     return entries, offset + len(data)
 
 
@@ -151,41 +162,52 @@ def consume_segments_dir(
 
     offsets: dict[Path, int] = {}
     results_by_uri: dict[str, list[tuple[float, float, int, str]]] = {}
-    while True:
-        progressed = False
-        dirty_uris: set[str] = set()
-        for manifest_path in sorted(segments_dir.glob(f"*{_MANIFEST_SUFFIX}")):
-            uri = manifest_path.name[: -len(_MANIFEST_SUFFIX)]
-            entries, new_offset = _read_new_entries(
-                manifest_path, offsets.get(manifest_path, 0)
-            )
-            offsets[manifest_path] = new_offset
-            results = results_by_uri.setdefault(uri, [])
-            for entry in entries:
-                _transcribe_entry(config, transcriber, entry, results)
-                progressed = True
-                dirty_uris.add(uri)
-                # 跟随模式逐段落盘（文件小、幂等重写）：viewer 能看到转写
-                # 逐段生长，而不是等整批积压转完才一次性出现。
-                if done_file is not None:
-                    _write_transcript(uri, results, output_dir)
-        if done_file is not None:
-            # 轮末兜底重写（与逐段落盘同一份结果，幂等）。
-            for uri in dirty_uris:
-                _write_transcript(uri, results_by_uri[uri], output_dir)
-        if done_file is None:
-            break
-        # 哨兵出现 = 管线已结束，不会再有新段；本轮无进展说明积压已清空。
-        if done_file.exists() and not progressed:
-            break
-        time.sleep(_FOLLOW_POLL_INTERVAL)
+    try:
+        while True:
+            progressed = False
+            dirty_uris: set[str] = set()
+            for manifest_path in sorted(segments_dir.glob(f"*{_MANIFEST_SUFFIX}")):
+                uri = manifest_path.name[: -len(_MANIFEST_SUFFIX)]
+                entries, new_offset = _read_new_entries(
+                    manifest_path, offsets.get(manifest_path, 0)
+                )
+                offsets[manifest_path] = new_offset
+                results = results_by_uri.setdefault(uri, [])
+                for entry in entries:
+                    try:
+                        _transcribe_entry(config, transcriber, entry, results)
+                    except Exception:
+                        # 单段失败（坏音频、缺字段等）不杀死整个消费循环：
+                        # 记录后跳过，已转写结果保留，offset 不回退。
+                        logger.exception(
+                            "[asr] skipping segment: %s", entry.get("path", entry)
+                        )
+                        continue
+                    progressed = True
+                    dirty_uris.add(uri)
+                    # 跟随模式逐段落盘（文件小、幂等重写）：viewer 能看到转写
+                    # 逐段生长，而不是等整批积压转完才一次性出现。
+                    if done_file is not None:
+                        _write_transcript(uri, results, output_dir)
+            if done_file is not None:
+                # 轮末兜底重写（与逐段落盘同一份结果，幂等）。
+                for uri in dirty_uris:
+                    _write_transcript(uri, results_by_uri[uri], output_dir)
+            if done_file is None:
+                break
+            # 哨兵出现 = 管线已结束，不会再有新段；本轮无进展说明积压已清空。
+            if done_file.exists() and not progressed:
+                break
+            time.sleep(_FOLLOW_POLL_INTERVAL)
+    finally:
+        # 无论正常结束还是异常/中断退出，已转写结果都兜底落盘。
+        for uri, results in results_by_uri.items():
+            _write_transcript(uri, results, output_dir)
 
     if not results_by_uri:
         logger.warning(
             "[asr] no %s files found in %s", f"*{_MANIFEST_SUFFIX}", segments_dir
         )
-    for uri, results in results_by_uri.items():
-        _write_transcript(uri, results, output_dir)
 
 
 def main() -> None:

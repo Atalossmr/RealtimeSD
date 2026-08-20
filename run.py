@@ -251,12 +251,16 @@ def main() -> int:
         if args.viewer:
             viewer_log = open(exp_dir / "viewer.log", "w", encoding="utf-8")
             # 独立会话：脚本退出后 viewer 仍存活，浏览器可继续查看结果。
-            viewer_proc = subprocess.Popen(
-                viewer_cmd,
-                stdout=viewer_log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+            try:
+                viewer_proc = subprocess.Popen(
+                    viewer_cmd,
+                    stdout=viewer_log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            finally:
+                # Popen 已复制 fd，父进程持有的句柄可以立即关闭。
+                viewer_log.close()
             time.sleep(0.5)
             if viewer_proc.poll() is not None:
                 print(
@@ -279,8 +283,13 @@ def main() -> int:
             try:
                 asr_proc.wait(timeout=600)
             except subprocess.TimeoutExpired:
+                # 收尾超时：先 SIGTERM，仍不退出再 SIGKILL，避免 run.py 永久挂起。
                 asr_proc.terminate()
-                asr_proc.wait()
+                try:
+                    asr_proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    asr_proc.kill()
+                    asr_proc.wait()
         if pipeline_rc == 130 and viewer_proc is not None:
             viewer_proc.terminate()
             viewer_proc = None

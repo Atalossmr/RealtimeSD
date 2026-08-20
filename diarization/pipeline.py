@@ -259,17 +259,19 @@ class ChunkDiarizationPipeline:
 
         # 生成器惰性生产 chunk：streaming 后端下输出延迟 ≈ 一个 hop，
         # 不会因为组合成统一循环而引入额外的缓冲。
-        run_clustering(
-            self.extractor.iter_chunk_artifacts(waveform),
-            self.assigner,
-            writer,
-            chunk_hook=chunk_log_hook,
-            refiner=refiner,
-        )
-
-        # 闭合 exporter 残余的 open segment（音频结束，与 writer.finalize 同步）。
-        if exporter is not None:
-            exporter.finalize()
+        try:
+            run_clustering(
+                self.extractor.iter_chunk_artifacts(waveform),
+                self.assigner,
+                writer,
+                chunk_hook=chunk_log_hook,
+                refiner=refiner,
+            )
+        finally:
+            # 闭合 exporter 残余的 open segment（音频结束，与 writer.finalize 同步）；
+            # 中途异常也要收尾，否则已累积的段音频不落盘。
+            if exporter is not None:
+                exporter.finalize()
 
         if self.config.save_embeddings:
             self._save_embeddings(collected_observations, streaming_log_path)

@@ -112,10 +112,23 @@ def main() -> None:
         config.clustering_backend,
     )
 
+    failed: list[str] = []
     for chunks_path in chunks_paths:
         logger.info("Clustering %s", chunks_path)
-        rttm_path = cluster_file(chunks_path, config, args.output_dir)
+        try:
+            rttm_path = cluster_file(chunks_path, config, args.output_dir)
+        except Exception:
+            # 单文件失败不中断整批：记录后继续，最后统一非零退出。
+            failed.append(chunks_path)
+            logger.exception("Failed to cluster %s", chunks_path)
+            continue
         logger.info("Wrote RTTM to %s", rttm_path)
+
+    if failed:
+        logger.error(
+            "%d/%d file(s) failed: %s", len(failed), len(chunks_paths), failed
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

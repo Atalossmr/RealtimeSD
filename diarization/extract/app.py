@@ -41,10 +41,23 @@ def main() -> None:
     logger.info("Collected %d audio file(s) for extraction", len(audio_paths))
 
     extractor = ChunkExtractor(config, args.model_path)
+    failed: list[str] = []
     for audio_path in audio_paths:
         logger.info("Extracting %s", audio_path)
-        chunks_path = extractor.extract_file(audio_path)
+        try:
+            chunks_path = extractor.extract_file(audio_path)
+        except Exception:
+            # 单文件失败不中断整批：记录后继续，最后统一非零退出。
+            failed.append(audio_path)
+            logger.exception("Failed to extract %s", audio_path)
+            continue
         logger.info("Wrote chunks to %s", chunks_path)
+
+    if failed:
+        logger.error(
+            "%d/%d file(s) failed: %s", len(failed), len(audio_paths), failed
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
