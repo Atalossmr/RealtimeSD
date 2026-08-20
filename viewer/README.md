@@ -28,10 +28,13 @@ viewer 只读文件、不写；与管线/ASR 的交互全部经以下产物：
 
 | 文件 | 生产者 | 字段/语义 |
 |---|---|---|
-| `{uri}.transcript.jsonl` | ASR（`asr.app`） | 每行 `{"uri","speaker_id","start","end","text"}`，按 start 排序、整体重写；`speaker_id` 为合并前的 global id |
-| `{uri}.speakers.json` | diarization refined 级 | 见下；不存在（ahc 后端/旧产物/静态模式）时按无标记展示 |
+| `transcripts/{uri}.transcript.jsonl` | ASR（`asr.app`） | 每行 `{"uri","speaker_id","start","end","text"}`，按 start 排序、整体重写；`speaker_id` 为合并前的 global id |
+| `rttm/{uri}.speakers.json` | diarization refined 级 | 见下；不存在（ahc 后端/旧产物/静态模式）时按无标记展示 |
 | `{uri}.wav` | 原始音频 | 在 `--audio_root` 下按文件名（不含扩展名）= uri 递归匹配 |
 | `.diarization_done` | run.py | 哨兵：不存在 = 管线仍在运行（LIVE，持续轮询） |
+
+路径前缀为新布局（`transcripts/`、`rttm/` 子目录）；viewer 扫描与索引均为
+递归匹配，旧平铺布局的 exp 目录同样兼容。
 
 `{uri}.speakers.json` 结构（字段定义见 `diarization/README.md` 的文件接口节）：
 

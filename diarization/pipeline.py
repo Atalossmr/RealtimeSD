@@ -131,9 +131,13 @@ class ChunkDiarizationPipeline:
 
         if not observations:
             return
-        # streaming_log_path 形如 <stem>.<tag>.rttm，去掉两段后缀换成 .embeddings.npz。
-        embeddings_path = (
-            Path(streaming_log_path).with_suffix("").with_suffix(".embeddings.npz")
+        # streaming_log_path 形如 <output_dir>/rttm/<stem>.<tag>.rttm；
+        # embeddings 落到与 rttm/ 平级的 embeddings/ 子目录。
+        rttm_path = Path(streaming_log_path)
+        embeddings_dir = rttm_path.parent.parent / "embeddings"
+        embeddings_dir.mkdir(parents=True, exist_ok=True)
+        embeddings_path = embeddings_dir / (
+            rttm_path.with_suffix("").with_suffix(".embeddings.npz").name
         )
         np.savez(
             embeddings_path,
@@ -175,8 +179,7 @@ class ChunkDiarizationPipeline:
         if self.config.separation_enabled:
             if self.assigner.deferred:
                 logger.warning(
-                    "[separation] separation 仅支持 streaming 后端，"
-                    "当前后端 %s 已跳过",
+                    "[separation] separation 仅支持 streaming 后端，当前后端 %s 已跳过",
                     type(self.assigner).__name__,
                 )
             else:
@@ -188,7 +191,9 @@ class ChunkDiarizationPipeline:
                     self.extractor.embedder,
                     self.assigner,
                     uri=uri or "unknown",
-                    output_dir=str(self.config.output_dir_for_streaming),
+                    output_dir=str(
+                        Path(self.config.output_dir_for_streaming) / "segments"
+                    ),
                 )
 
         # save_embeddings 开启时收集全部带 embedding 的 observation。
@@ -288,6 +293,7 @@ class ChunkDiarizationPipeline:
             )
         streaming_log_path = str(
             Path(self.config.output_dir_for_streaming)
+            / "rttm"
             / f"{Path(wav_path).stem}.{self.assigner.output_tag}.rttm"
         )
 

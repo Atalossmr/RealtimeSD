@@ -167,14 +167,15 @@ diarization/
 
 ### 两阶段独立运行（提取 / 聚类分离）
 
-嵌入提取与聚类可以完全拆开运行，中间产物为 `<stem>.chunks.npz`
+嵌入提取与聚类可以完全拆开运行，中间产物为 `embeddings/<stem>.chunks.npz`
 （逐 chunk 的 observations 含 embedding + 帧级输出参数，纯 numpy 无 pickle）：
 
 ```bash
-# 阶段 1：嵌入提取（需要音频与模型，产出 chunks.npz）
+# 阶段 1：嵌入提取（需要音频与模型，产出 embeddings/<stem>.chunks.npz）
 python3 -m diarization.extract.app --wav <音频> --output_dir <dir> --config config/config.yaml
 
-# 阶段 2：聚类 + RTTM 输出（只需 npz，后端由 YAML 的 clustering_backend 决定）
+# 阶段 2：聚类 + RTTM 输出（只需 npz，后端由 YAML 的 clustering_backend 决定；
+# 输出写入 <dir>/rttm/）
 python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --config config/config.yaml
 ```
 
@@ -194,12 +195,13 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 
 ### 输出文件
 
-每个输入音频默认输出：
+输出目录按内容类型分子文件夹。每个输入音频默认输出：
 
-- `*.<backend_tag>.rttm`（streaming 后端为 `*.raw.rttm`，ahc 后端为 `*.ahc.rttm`）
-- `*.refined.rttm`（仅 streaming 后端；merge 事件动态重生成 + EOF 叠加小样本合并，为最终输出）
-- `run.log`
-- `*.embeddings.npz`（仅 `save_embeddings: true` 时）
+- `rttm/*.<backend_tag>.rttm`（streaming 后端为 `*.raw.rttm`，ahc 后端为 `*.ahc.rttm`）
+- `rttm/*.refined.rttm`（仅 streaming 后端；merge 事件动态重生成 + EOF 叠加小样本合并，为最终输出）
+- `rttm/*.speakers.json`（仅 streaming 后端；refined 级 sidecar）
+- `embeddings/*.embeddings.npz`（仅 `save_embeddings: true` 时）
+- `logs/run.log`
 
 ### 文件交互接口（下游消费契约）
 
@@ -209,13 +211,13 @@ diarization 与 ASR / viewer 之间无 IPC，全部经共享输出目录的文�
 写读时序保证：追加在依赖之后、JSON/RTTM 重写均走临时文件 + 原子替换，
 消费者永远读不到半写文件。
 
-#### `{uri}.raw.rttm` / `{uri}.refined.rttm`（streaming 后端）
+#### `rttm/{uri}.raw.rttm` / `rttm/{uri}.refined.rttm`（streaming 后端）
 
 - raw：append-only 零重写，行写出即最终；refined：整体重生成（原子替换），merge 历史修正 + EOF 小样本合并后的最终输出，**下游应消费 refined**；
 - 行格式（标准 RTTM）：`SPEAKER <uri> 0 <start> <dur> <NA> <NA> <输出编号> <NA> <NA>`；
 - 文件末尾 `#` 注释映射表：`#   <global_id> -> <输出编号>`（refined 为合并修正后的最终映射）。
 
-#### `{uri}.speakers.json`（streaming 后端，refined 级 sidecar）
+#### `rttm/{uri}.speakers.json`（streaming 后端，refined 级 sidecar）
 
 随 refined RTTM 同步原子更新；viewer 用它做 uncertain 标记与合并展示：
 
@@ -238,7 +240,7 @@ diarization 与 ASR / viewer 之间无 IPC，全部经共享输出目录的文�
 - `merge_events[].kind`：`merge`（流式期间）/ `post_merge`（EOF 小样本强制合并）；
 - `final`：false = 管线仍在运行，状态还会变化；true = EOF 最终刷新。
 
-#### `{uri}.segments.jsonl` + `segments/{uri}/`（仅 `separation_enabled: true`）
+#### `segments/{uri}.segments.jsonl` + `segments/{uri}/`（仅 `separation_enabled: true`）
 
 接 ASR 的分段音频导出（详见 `separation/exporter.py`）：
 
@@ -249,12 +251,12 @@ diarization 与 ASR / viewer 之间无 IPC，全部经共享输出目录的文�
   单声道、采样率 = `config.sample_rate`（默认 16kHz）；
 - `speaker_id` 为**合并前**的 global id（段一写定音，后续合并不回溯）。
 
-#### `{uri}.embeddings.npz`（仅 `save_embeddings: true`）
+#### `embeddings/{uri}.embeddings.npz`（仅 `save_embeddings: true`）
 
 npz 字段：`embeddings`(N×dim, L2 归一化) / `local_idx` / `start` / `end` / `duration`，
 供离线实验复用（配合 `python3 -m diarization.cluster.app` 重放聚类调参）。
 
-#### `{uri}.chunks.npz`（extract → cluster 两阶段中间产物）
+#### `embeddings/{uri}.chunks.npz`（extract → cluster 两阶段中间产物）
 
 逐 chunk 的 observations（含 embedding）+ 帧级输出参数，纯 numpy 无 pickle；
 字段布局见 `utils/chunk_io.py` 的模块 docstring。`diarization.cluster.app`
@@ -282,5 +284,5 @@ python3 -m diarization.app --debug --verbose --show_rttm ...
 可用工具：
 
 ```bash
-python3 tools/analyze_log.py ./exp/demo/run.log
+python3 tools/analyze_log.py ./exp/demo/logs/run.log
 ```

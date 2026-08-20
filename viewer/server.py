@@ -44,14 +44,21 @@ class SessionIndex:
             for path in sorted(exp_root.rglob(f"*{_TRANSCRIPT_SUFFIX}")):
                 uri = path.name[: -len(_TRANSCRIPT_SUFFIX)]
                 if uri not in self.sessions:
-                    self.sessions[uri] = {"transcript": path, "audio": None}
+                    self.sessions[uri] = {"transcript": path, "audio": None, "speakers": None}
                 else:
                     self.sessions[uri]["transcript"] = path
+        # speakers.json sidecar 独立索引：新布局在 rttm/ 子目录、旧布局与
+        # transcript 同目录，rglob 两种都兼容。
+        speakers_index: dict[str, Path] = {}
+        for exp_root in self.exp_roots:
+            for path in exp_root.rglob("*.speakers.json"):
+                speakers_index.setdefault(path.name[: -len(".speakers.json")], path)
         audio_index: dict[str, Path] = {}
         for audio_root in self.audio_roots:
             for path in audio_root.rglob("*.wav"):
                 audio_index.setdefault(path.stem, path)
         for uri, session in self.sessions.items():
+            session["speakers"] = speakers_index.get(uri)
             if uri in self.overrides:
                 session["audio"] = self.overrides[uri]
             elif session["audio"] is None:
@@ -86,13 +93,14 @@ class SessionIndex:
         sidecar 由管线的 refined 级（RefinedRTTMWriter）与 refined RTTM
         同步原子更新，包含各 speaker 的总时长、uncertain 标记与合并事件；
         不存在（ahc 后端 / 旧产物）时返回 None，前端按无标记展示。
+        路径来自 scan() 建立的索引（兼容 rttm/ 子目录与旧平铺布局）。
         """
 
         session = self.sessions.get(uri)
         if not session:
             return None
-        status_path = session["transcript"].parent / f"{uri}.speakers.json"
-        if not status_path.exists():
+        status_path = session.get("speakers")
+        if status_path is None or not status_path.exists():
             return None
         try:
             with open(status_path, encoding="utf-8") as file_obj:
@@ -182,9 +190,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     "audio_url": f"/api/audio/{uri}" if s["audio"] else None,
                     # 跟随模式下 done 哨兵未出现 = 管线/ASR 仍在运行，
                     # transcript 还会增量增长，前端据此持续轮询。
+                    # 哨兵在 run 输出目录顶层：新布局 transcript 位于
+                    # transcripts/ 子目录（parent.parent），旧布局同目录（parent）。
                     "live": not (
-                        s["transcript"].parent / ".diarization_done"
-                    ).exists(),
+                        (s["transcript"].parent / ".diarization_done").exists()
+                        or (s["transcript"].parent.parent / ".diarization_done").exists()
+                    ),
                 }
                 for uri, s in sorted(self.index.sessions.items())
             ])

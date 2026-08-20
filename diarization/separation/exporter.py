@@ -69,11 +69,15 @@ class _OpenSegment:
 
 
 class WavSegmentSink:
-    """默认段输出 sink：wav 落盘 + manifest.jsonl 追加。"""
+    """默认段输出 sink：wav 落盘 + manifest.jsonl 追加。
+
+    output_dir 即 segments 根目录：wav 在 `{output_dir}/{uri}/`，
+    manifest 为 `{output_dir}/{uri}.segments.jsonl`。
+    """
 
     def __init__(self, output_dir: str, uri: str, sample_rate: int):
         self.sample_rate = sample_rate
-        self.segments_dir = Path(output_dir) / "segments" / uri
+        self.segments_dir = Path(output_dir) / uri
         self.segments_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_path = Path(output_dir) / f"{uri}.segments.jsonl"
 

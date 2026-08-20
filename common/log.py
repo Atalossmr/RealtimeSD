@@ -10,7 +10,7 @@ from typing import Optional
 def setup_logger(verbose: bool, run_log_path: Optional[str] = None) -> None:
     """初始化日志系统。
 
-    当前 CLI 约定会把运行日志强制写到 `output_dir/run.log`，
+    当前 CLI 约定会把运行日志写到输出目录的 `logs/` 子目录（如 `logs/run.log`），
     默认不再把常规日志输出到控制台；控制台只保留脚本自身输出，以及可选的 RTTM 流式输出。
     """
 

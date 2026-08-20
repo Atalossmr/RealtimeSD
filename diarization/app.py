@@ -30,7 +30,7 @@ def main() -> None:
     config = config_from_args(args)
     audio_paths = collect_audio_paths(args.wav)
     os.makedirs(args.output_dir, exist_ok=True)
-    run_log_path = os.path.join(args.output_dir, "run.log")
+    run_log_path = os.path.join(args.output_dir, "logs", "run.log")
     setup_logger(bool(getattr(args, "verbose", False)), run_log_path)
 
     logger.info("Run log is written to %s", run_log_path)
@@ -50,9 +50,7 @@ def main() -> None:
         logger.info("Wrote raw RTTM to %s", output_path)
 
     if failed:
-        logger.error(
-            "%d/%d file(s) failed: %s", len(failed), len(audio_paths), failed
-        )
+        logger.error("%d/%d file(s) failed: %s", len(failed), len(audio_paths), failed)
         sys.exit(1)
 
 

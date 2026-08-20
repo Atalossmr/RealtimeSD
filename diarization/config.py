@@ -39,7 +39,10 @@ def validate_runtime_args(args: argparse.Namespace) -> None:
 
 @dataclass
 class ChunkPipelineConfig:
-    """chunk 管线的统一配置（字段按模块分组：环境 / extract / cluster / 输出）。"""
+    """chunk 管线的统一配置（字段按模块分组：环境 / extract / cluster / 输出）。
+
+    逐项调参与标定依据见 `config/README.md`。
+    """
 
     # ---- 运行环境 ----
     device: str = "cpu"
@@ -60,16 +63,14 @@ class ChunkPipelineConfig:
 
     # ---- extract 阶段：chunk 调度 ----
     chunk_duration: float = 10.0
-    # 窗口推进步长（秒）。hop == chunk_duration 时退化为非重叠模式；
-    # hop < chunk_duration 时按重叠滑窗运行，每个窗口只提交中段 hop 秒。
+    # 窗口推进步长（秒）；hop < chunk 为重叠滑窗，每窗只提交中段 hop 秒。
     hop_duration: float = 5.0
 
     # ---- extract 阶段：local track 构造与 embedding 提取 ----
     min_local_activity_duration: float = 0.30
     min_segment_duration_for_embedding: float = 0.30
     max_segment_duration_for_embedding: float = 4.0
-    # 纯净区选取优先级：commit（提交区内片段优先，不足再从两侧 margin 补齐）
-    # / latest（最新优先，旧默认行为）。
+    # 纯净区选取优先级：commit（提交区优先）/ latest（最新优先）。
     region_priority: str = "commit"
     segment_batch_size: int = 8
 
@@ -83,9 +84,7 @@ class ChunkPipelineConfig:
     global_match_threshold: float = 0.55
     min_segment_duration_for_new_speaker: float = 0.50
     min_segment_duration_for_centroid_update: float = 1.50
-    # 每次加入新片段后，若最相似的一对 centroid 相似度 ≥ 该阈值则合并
-    # （count 小者并入大者）；raw RTTM 已写出行不受影响（历史行由 refined 级
-    # 修正），被合并者退出后续聚类。
+    # 最相似的一对 centroid 相似度 ≥ 该阈值即合并（小并入大），只影响后续分配。
     merge_threshold: float = 0.70
 
     # ---- cluster 阶段：ahc 后端（离线层次聚类） ----
@@ -93,35 +92,23 @@ class ChunkPipelineConfig:
     ahc_linkage: str = "average"
 
     # ---- cluster 阶段：后处理（小样本簇强制合并，ahc / streaming refined 共用） ----
-    # 总发声时长低于该值的簇/speaker 视为小样本：ahc 在 finalize 统一并入质心
-    # 最相似的达标簇；streaming 由 refined 级在 EOF 最终刷新时叠加合并
-    # （raw RTTM 保持 append-only 不动），speaker 未达标期间在前端标记为
-    # uncertain（见 speakers.json sidecar）。0 = 关闭。
+    # 总发声时长低于该值的 speaker 并入质心最相似的达标簇；未达标期间在
+    # 前端标记为 uncertain。0 = 关闭。
     post_merge_min_speech_duration: float = 0.0
-    # 强制合并的相似度下限：小样本簇与目标簇质心余弦相似度低于该值时保留
-    # 原身份不并（防止把说得少的真实独立 speaker 错并）。
+    # 强制合并的相似度下限，低于则保留原身份不并。
     post_merge_min_similarity: float = 0.0
 
     # ---- 分段音频导出（接流式 ASR；仅 streaming 后端生效） ----
-    # 开启后构造 exporter 导出逐 speaker 音频段（wav + manifest）：每个 commit
-    # 区检测重叠帧，无重叠直接按 speaker 切片输出，有重叠则用 TIGER 分离整个
-    # commit 区（能量门控 + embedding 匹配归属）。pipeline 内不做 ASR，转写由
-    # python -m asr.app 读取输出目录独立完成，转写调参项在 config/asr.yaml。
+    # 逐 speaker 音频段导出（wav + manifest）：无重叠纯切片，有重叠走 TIGER
+    # 分离；转写由 python -m asr.app 独立完成（调参在 config/asr.yaml）。
     separation_enabled: bool = False
     # TIGER 分离模型（Hugging Face，固定 2 路输出、16kHz）。
     separation_model: str = "JusperLee/TIGER-speech"
-    # 能量门控：分离音轨在重叠帧区间的 RMS / 混合音频同区间 RMS，
-    # 低于该比值判为伪源（OSD 疑似误报），整窗回退为原始音频。
+    # 能量门控：音轨 RMS / 混合 RMS 低于该比值判伪源，整窗回退原始音频。
     separation_energy_ratio: float = 0.10
-    # 2x2 匹配结果的最小余弦相似度，低于则判分离质量不可靠，回退原始音频。
-    # 注意：aishell4 全量标定（exp/sep_export_full）表明真/假重叠窗的 min_sim
-    # 分布高度重合（中位数 0.406 vs 0.388），该阈值无法区分 OSD 误报，
-    # 仅用于防极端分离崩溃，不宜调高（0.30 时误伤 27.7% 真重叠窗）。
+    # 2x2 匹配的最小余弦相似度，低于则回退原始音频（仅防分离崩溃，不宜调高）。
     separation_min_match_similarity: float = 0.10
-    # 分离音轨归属匹配的参照 embedding：
-    # observation（默认）：用本 chunk 的观测 embedding，与分离音轨同时间窗、
-    #   域最接近（按 assigner 契约，候选 speaker 在本 chunk 必有观测）；
-    # centroid：一律用全局质心，不受本 chunk 观测质量影响，更稳但分数偏低。
+    # 归属匹配的参照 embedding：observation（本 chunk 观测）/ centroid（全局质心）。
     separation_match_reference: str = "observation"
 
     # ---- RTTM 输出 ----
@@ -148,7 +135,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output_dir",
         default=None,
-        help="输出目录，每个文件会写一个 .raw.rttm（流式后端另有 .refined.rttm）",
+        help="输出目录；RTTM 写入其 rttm/ 子目录（流式后端为 .raw.rttm + .refined.rttm），"
+        "embeddings npz 在 embeddings/，分段音频在 segments/，日志在 logs/",
     )
     parser.add_argument(
         "--config",

@@ -11,10 +11,12 @@ manifest，逐段转写（Fun-ASR-Nano），落盘逐 speaker 转写结果供 vi
   增量读取新段、即出即转；done 哨兵出现且积压清空后做最后一次落盘退出。
 
 ```bash
-# 一次性：管线结束后整体转写
-python3 -m asr.app --segments_dir <exp_dir> --config config/asr.yaml
-# 跟随：与管线同时启动（run.py 默认行为）
-python3 -m asr.app --segments_dir <exp_dir> --config config/asr.yaml \
+# 一次性：管线结束后整体转写（输出默认与 segments_dir 同目录，可用 --output_dir 指定）
+python3 -m asr.app --segments_dir <exp_dir>/segments --config config/asr.yaml
+# 跟随：与管线同时启动（run.py 默认行为，run.py 会传
+# --segments_dir <exp_dir>/segments --output_dir <exp_dir>/transcripts
+# --log_file <exp_dir>/logs/transcribe.log）
+python3 -m asr.app --segments_dir <exp_dir>/segments --config config/asr.yaml \
     --follow --done_file <exp_dir>/.diarization_done --ready_file <path>
 ```
 
@@ -27,7 +29,7 @@ ASR 与 diarization / viewer 之间无 IPC，全部经共享输出目录的文�
 
 ### 输入
 
-#### `{uri}.segments.jsonl`（diarization 分段导出 manifest）
+#### `segments/{uri}.segments.jsonl`（diarization 分段导出 manifest）
 
 - append-only JSONL，每行
   `{"uri", "speaker_id", "start", "end", "path"}`；
@@ -44,7 +46,7 @@ ASR 与 diarization / viewer 之间无 IPC，全部经共享输出目录的文�
 
 ### 输出
 
-#### `{uri}.transcript.jsonl`（viewer 的数据源）
+#### `{output_dir}/{uri}.transcript.jsonl`（viewer 的数据源；run.py 编排时为 `<exp_dir>/transcripts/`）
 
 - 每行 `{"uri", "speaker_id", "start", "end", "text"}`，按 `start` 排序；
 - 写语义：**整体重写**（文件小、幂等）；跟随模式每转完一段即时落盘（供
@@ -61,5 +63,5 @@ ASR 与 diarization / viewer 之间无 IPC，全部经共享输出目录的文�
 
 ### 日志
 
-`transcribe.log`（写在输出目录；刻意区别于管线的 `run.log`，两进程常
-共用输出目录，避免互相覆盖）。
+`transcribe.log`（默认写在输出目录；run.py 编排时经 `--log_file` 写入
+`<exp_dir>/logs/`。刻意区别于管线的 `run.log`，避免两进程日志互相覆盖）。

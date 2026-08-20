@@ -140,7 +140,9 @@ def main() -> int:
 
     cmd = build_pipeline_cmd(args, args.audio, exp_dir, effective_config)
 
-    with open(exp_dir / "command.log", "w", encoding="utf-8") as log:
+    logs_dir = exp_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    with open(logs_dir / "command.log", "w", encoding="utf-8") as log:
         log.write(f"Command: {shlex.join(cmd)}\n")
     print(f"Command: {shlex.join(cmd)}")
 
@@ -148,19 +150,19 @@ def main() -> int:
     if pipeline_rc != 0:
         return pipeline_rc
 
-    rttm_count = len(list(exp_dir.glob("*.refined.rttm")))
+    rttm_count = len(list((exp_dir / "rttm").glob("*.refined.rttm")))
     with open(results_file, "a", encoding="utf-8") as file_obj:
         file_obj.write(
             f"{args.run_name} -> refined_rttm_files={rttm_count} | config={args.config}\n"
         )
     print(f"Result: {args.run_name} -> refined_rttm_files={rttm_count}")
-    print(f"Pipeline log: {exp_dir}/run.log")
+    print(f"Pipeline log: {exp_dir}/logs/run.log")
 
     print("\n========== DER Results ==========")
     if not args.ref_rttm:
         print("DER skipped: --ref_rttm not set")
     else:
-        der_log = exp_dir / "der.log"
+        der_log = logs_dir / "der.log"
         der_summary = exp_dir / "der_summary.txt"
         with open(der_log, "w", encoding="utf-8") as log:
             if rttm_count == 0:
@@ -179,7 +181,7 @@ def main() -> int:
                     sys.executable,
                     "tools/compute_der.py",
                     "--sys",
-                    str(exp_dir),
+                    str(exp_dir / "rttm"),
                     "--ref",
                     args.ref_rttm,
                     "--summary-file",

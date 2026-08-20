@@ -100,10 +100,10 @@ raw 级（`*.raw.rttm`，append-only 零重写）+ refined 级（`*.refined.rttm
 
 ```bash
 # 方式一：修改 YAML 中 post_merge_* 值后直接重放聚类阶段，再用 compute_der 评估
-python3 -m diarization.cluster.app --input <chunks.npz 目录> --output_dir <dir> \
+python3 -m diarization.cluster.app --input <dir>/embeddings --output_dir <dir> \
     --config config/config.yaml
 # 方式二：扫描 streaming 两阈值（global_match_threshold × new_speaker_threshold）
-python3 tools/sweep_thresholds.py --input <chunks.npz 目录> --ref <参考 rttm 目录> \
+python3 tools/sweep_thresholds.py --input <dir>/embeddings --ref <参考 rttm 目录> \
     --config config/config.yaml --output <结果.csv>
 ```
 
@@ -128,15 +128,15 @@ ASR 是独立于 pipeline 的离线阶段，分两步：
 1. pipeline 侧（`config.yaml`）：`separation_enabled: true`（且
    `clustering_backend: streaming`）时构造分段导出器（无重叠纯切片、有重叠
    TIGER 分离，惰性加载），闭合的逐 speaker 音频段落盘为
-   `segments/<uri>/*.wav` + `<uri>.segments.jsonl`，pipeline 内不做转写。
-2. 转写侧（`asr.yaml`）：对输出目录跑转写入口，逐段转写并按 start 排序写
-   `<uri>.transcript.jsonl`：
+   `segments/<uri>/*.wav` + `segments/<uri>.segments.jsonl`，pipeline 内不做转写。
+2. 转写侧（`asr.yaml`）：对 segments 目录跑转写入口，逐段转写并按 start 排序写
+   `<output_dir>/<uri>.transcript.jsonl`：
 
    ```bash
    # 一次性：管线结束后整体转写
-   python3 -m asr.app --segments_dir <exp_dir> --config config/asr.yaml
+   python3 -m asr.app --segments_dir <exp_dir>/segments --config config/asr.yaml
    # 跟随：与管线同时启动，新段即出即转，done 哨兵出现后收尾
-   python3 -m asr.app --segments_dir <exp_dir> --config config/asr.yaml \
+   python3 -m asr.app --segments_dir <exp_dir>/segments --config config/asr.yaml \
        --follow --done_file <exp_dir>/.diarization_done
    ```
 
@@ -175,9 +175,9 @@ ASR 是独立于 pipeline 的离线阶段，分两步：
 20 文件，collar=0）。复验或换数据集调参：
 
 ```bash
-# 1) 提取（产出 chunks.npz）
+# 1) 提取（产出 embeddings/<stem>.chunks.npz）
 python3 -m diarization.extract.app --wav <音频> --output_dir <dir> --config config/config.yaml
 # 2) 阈值扫描（不加载模型，秒级重跑）
-python3 tools/sweep_thresholds.py --input <dir> --ref <ref_rttm_dir> \
+python3 tools/sweep_thresholds.py --input <dir>/embeddings --ref <ref_rttm_dir> \
     --config config/config.yaml --output <结果.csv>
 ```

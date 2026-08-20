@@ -98,14 +98,16 @@ class ChunkTrackBuilder:
             inside = [(start, end) for start, end in inside if end > start]
             # 提交区外的两侧：先左（更早）后右，各自保持时间升序。
             left = [
-                (start, min(end, commit_start)) for start, end in spans if start < commit_start
+                (start, min(end, commit_start))
+                for start, end in spans
+                if start < commit_start
             ]
             right = [
-                (max(start, commit_end), end) for start, end in spans if end > commit_end
+                (max(start, commit_end), end)
+                for start, end in spans
+                if end > commit_end
             ]
-            outside = [
-                (start, end) for start, end in left + right if end > start
-            ]
+            outside = [(start, end) for start, end in left + right if end > start]
             ordered = inside + outside
         else:
             ordered = list(reversed(spans))
@@ -159,9 +161,7 @@ class ChunkTrackBuilder:
             local_scores = seg_scores[:, local_idx]
             active_indices = np.flatnonzero(local_active)
             active_start = chunk_start_time + int(active_indices[0]) * frame_step
-            active_end = (
-                chunk_start_time + (int(active_indices[-1]) + 1) * frame_step
-            )
+            active_end = chunk_start_time + (int(active_indices[-1]) + 1) * frame_step
             mean_activity = float(np.mean(local_scores[local_active]))
 
             # 优先使用非重叠纯净区。
@@ -178,9 +178,7 @@ class ChunkTrackBuilder:
                 regions = self._select_regions(
                     local_active, frame_step, chunk_start_time, commit_start, commit_end
                 )
-                fallback_duration = float(
-                    sum(end - start for start, end in regions)
-                )
+                fallback_duration = float(sum(end - start for start, end in regions))
                 # 回退后仍不足：放弃该 local slot（不建 track、帧不输出）。
                 if fallback_duration < config.min_segment_duration_for_embedding:
                     continue

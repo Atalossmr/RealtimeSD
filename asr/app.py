@@ -239,6 +239,11 @@ def main() -> None:
         default=None,
         help="就绪哨兵文件路径：跟随模式下模型加载完成后 touch，供外部编排脚本等待",
     )
+    parser.add_argument(
+        "--log_file",
+        default=None,
+        help="转写日志路径（默认 {output_dir}/transcribe.log）",
+    )
     raw_args = parser.parse_args()
     args = merge_args_with_config(parser, raw_args, sys.argv[1:])
     if args.follow and not args.done_file:
@@ -249,10 +254,9 @@ def main() -> None:
     output_dir = Path(args.output_dir) if args.output_dir else segments_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     # 日志文件名区别于 pipeline 的 run.log：output_dir 常与管线输出目录相同，
-    # 避免覆盖管线运行日志。
-    setup_logger(
-        bool(getattr(args, "verbose", False)), str(output_dir / "transcribe.log")
-    )
+    # 避免覆盖管线运行日志；--log_file 可显式指定（run.py 传入 logs/ 子目录）。
+    log_file = args.log_file or str(output_dir / "transcribe.log")
+    setup_logger(bool(getattr(args, "verbose", False)), log_file)
 
     transcriber = SegmentTranscriber(config)
 

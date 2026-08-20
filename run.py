@@ -223,7 +223,11 @@ def main() -> int:
         "-m",
         "asr.app",
         "--segments_dir",
-        str(exp_dir),
+        str(exp_dir / "segments"),
+        "--output_dir",
+        str(exp_dir / "transcripts"),
+        "--log_file",
+        str(exp_dir / "logs" / "transcribe.log"),
         "--config",
         str(args.asr_config),
         "--follow",
@@ -249,7 +253,9 @@ def main() -> int:
         str(args.viewer_port),
     ]
 
-    with open(exp_dir / "command.log", "w", encoding="utf-8") as log:
+    logs_dir = exp_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    with open(logs_dir / "command.log", "w", encoding="utf-8") as log:
         log.write(f"Command: {shlex.join(pipeline_cmd)}\n")
         if args.asr:
             log.write(f"ASR Command: {shlex.join(asr_cmd)}\n")
@@ -270,7 +276,7 @@ def main() -> int:
 
         # 2. ASR 就绪后启动 viewer 与 diarization 管线。
         if args.viewer:
-            viewer_log = open(exp_dir / "viewer.log", "w", encoding="utf-8")
+            viewer_log = open(logs_dir / "viewer.log", "w", encoding="utf-8")
             try:
                 viewer_proc = subprocess.Popen(
                     viewer_cmd,
@@ -283,7 +289,7 @@ def main() -> int:
             time.sleep(0.5)
             if viewer_proc.poll() is not None:
                 print(
-                    f"WARNING: viewer 启动失败，见 {exp_dir}/viewer.log",
+                    f"WARNING: viewer 启动失败，见 {logs_dir}/viewer.log",
                     file=sys.stderr,
                 )
                 viewer_proc = None
@@ -336,20 +342,22 @@ def main() -> int:
             viewer_proc = None
 
     # ---- 汇总 ----
-    rttm_count = len(list(exp_dir.glob("*.refined.rttm")))
+    rttm_count = len(list((exp_dir / "rttm").glob("*.refined.rttm")))
     with open(results_file, "a", encoding="utf-8") as file_obj:
         file_obj.write(
             f"{args.run_name} -> refined_rttm_files={rttm_count} | config={config_path}\n"
         )
         if args.asr:
-            transcript_count = len(list(exp_dir.glob("*.transcript.jsonl")))
+            transcript_count = len(
+                list((exp_dir / "transcripts").glob("*.transcript.jsonl"))
+            )
             file_obj.write(
                 f"{args.run_name} -> transcript_files={transcript_count} | config={config_path}\n"
             )
     print(f"Result: {args.run_name} -> refined_rttm_files={rttm_count}")
-    print(f"Pipeline log: {exp_dir}/run.log")
+    print(f"Pipeline log: {exp_dir}/logs/run.log")
     if args.asr:
-        print(f"ASR log: {exp_dir}/transcribe.log")
+        print(f"ASR log: {exp_dir}/logs/transcribe.log")
 
     return pipeline_rc
 

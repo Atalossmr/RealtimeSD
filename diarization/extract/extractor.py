@@ -89,7 +89,9 @@ class ChunkExtractor:
         # region 为绝对秒数，换算成采样点下标并钳制到波形范围内；
         # 首尾 region 越界（track 时间由帧网格推出，可能略超出实际音频）时截断。
         start_sample = max(0, min(int(round(start * sample_rate)), total_samples))
-        end_sample = max(start_sample, min(int(round(end * sample_rate)), total_samples))
+        end_sample = max(
+            start_sample, min(int(round(end * sample_rate)), total_samples)
+        )
         if end_sample <= start_sample:
             return None
         return waveform[:, start_sample:end_sample]
@@ -145,7 +147,9 @@ class ChunkExtractor:
     # 主流程
     # ------------------------------------------------------------------
 
-    def prepare_waveform(self, waveform: torch.Tensor, sample_rate: int) -> torch.Tensor:
+    def prepare_waveform(
+        self, waveform: torch.Tensor, sample_rate: int
+    ) -> torch.Tensor:
         """重采样到目标采样率、转单声道 float32。"""
 
         waveform = resample_waveform_if_needed(
@@ -236,7 +240,9 @@ class ChunkExtractor:
             )
         uri = Path(wav_path).stem
         chunks_path = str(
-            Path(self.config.output_dir_for_streaming) / f"{uri}.chunks.npz"
+            Path(self.config.output_dir_for_streaming)
+            / "embeddings"
+            / f"{uri}.chunks.npz"
         )
 
         waveform = self.prepare_waveform(waveform, self.config.sample_rate)

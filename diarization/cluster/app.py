@@ -61,7 +61,7 @@ def cluster_file(chunks_path: str, config, output_dir: str) -> str:
 
     uri, artifacts = load_chunks(chunks_path)
     assigner = build_assigner(config)
-    rttm_path = str(Path(output_dir) / f"{uri}.{assigner.output_tag}.rttm")
+    rttm_path = str(Path(output_dir) / "rttm" / f"{uri}.{assigner.output_tag}.rttm")
     writer = AppendOnlyRTTMWriter(
         rttm_path,
         uri,
@@ -102,7 +102,7 @@ def main() -> None:
     config = config_from_args(args)
     chunks_paths = collect_chunks_paths(args.input)
     os.makedirs(args.output_dir, exist_ok=True)
-    run_log_path = os.path.join(args.output_dir, "cluster.log")
+    run_log_path = os.path.join(args.output_dir, "logs", "cluster.log")
     setup_logger(bool(getattr(args, "verbose", False)), run_log_path)
 
     logger.info("Run log is written to %s", run_log_path)
