@@ -296,9 +296,11 @@ function mergeSegments(segments) {
   state.overlapFlags = computeOverlapFlags(segments);
   if (hasNewSpeaker) buildSpeakerChips(); // 新说话人需要补 chip（保留已有可见性）
   if (isPrefix && !hasNewSpeaker) {
+    const stickToBottom = isTranscriptAtBottom();
     for (let i = old.length; i < segments.length; i++) {
       appendTranscriptRow(segments[i], i);
     }
+    if (stickToBottom) scrollTranscriptToBottom();
   } else {
     renderTranscript();
   }
@@ -327,6 +329,7 @@ function setSession(uri, segments, audioUrl) {
   uncertainToggleWrap.hidden = !uncertainEnabled();
   buildSpeakerChips();
   renderTranscript();
+  scrollTranscriptToBottom(); // 加载/切换会话后定位到最新段
   if (audioUrl) {
     player.src = audioUrl;
   } else {
@@ -596,6 +599,14 @@ function buildSpeakerChips() {
 }
 
 // ---------- 转写列表 ----------
+// 滚动条贴底时新段落自动下翻；用户上翻阅读历史时保持位置不动
+function isTranscriptAtBottom() {
+  return transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 40;
+}
+function scrollTranscriptToBottom() {
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
 function appendTranscriptRow(s, i) {
   const eff = effId(s.speaker_id);
   if (state.speakerVisible.get(eff) === false) return;
@@ -613,8 +624,10 @@ function appendTranscriptRow(s, i) {
 }
 
 function renderTranscript() {
+  const stickToBottom = isTranscriptAtBottom();
   transcriptEl.innerHTML = "";
   state.segments.forEach((s, i) => appendTranscriptRow(s, i));
+  if (stickToBottom) scrollTranscriptToBottom();
 }
 
 function syncActiveRow() {
