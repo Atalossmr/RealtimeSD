@@ -9,12 +9,14 @@ ASR 转写的调参项已拆到独立的 `asr.yaml`（`python3 -m asr.app` 读�
 字段定义见 `asr/config.py` 的 `AsrConfig`），说明见文末"ASR 转写"一节。
 
 参数按模块分组，与 `diarization/config.py` 的 `ChunkPipelineConfig` 字段一一对应。
+下表"默认"列为仓库自带 `config.yaml` 的**生效值**；与 dataclass 默认值不同的
+以括注标出。
 
 ## 运行环境
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `device` | `cuda`（YAML 生效值；dataclass 默认 `cpu`，CLI 默认 `auto`） | 推理设备：`auto` / `cpu` / `cuda` / `cuda:0` |
+| `device` | `cpu`（dataclass 默认同为 `cpu`，CLI 默认 `auto`） | 推理设备：`auto` / `cpu` / `cuda` / `cuda:0` |
 | `hf_cache_dir` | `./pretrained/huggingface` | Hugging Face 缓存目录，相对路径按仓库根目录解析 |
 
 ## extract 阶段：模型
@@ -40,7 +42,7 @@ ASR 转写的调参项已拆到独立的 `asr.yaml`（`python3 -m asr.app` 读�
 | `min_segment_duration_for_embedding` | `0.30` | 允许提取 embedding 的最短拼接时长（秒）。**不要低于 0.105s@16k**（1680 samples），否则可能产生 NaN embedding 并触发 Hungarian 的 `matrix contains invalid numeric entries` |
 | `max_segment_duration_for_embedding` | `4.0` | 单 track 用于提 embedding 的最大拼接时长（秒）。实验结论：0→4s 是收益区，超过 4s 饱和（不限上限 DER 无变化），不建议调大 |
 | `region_priority` | `commit` | 纯净区选取优先级。`commit`：提交区内片段优先、不足再从两侧 margin 补齐（与"embedding 给哪段帧定身份"对齐，低阈值区更鲁棒）；`latest`：最新优先（旧默认，最优阈值下 DER 略优 0.1pp 量级）。压线段均保留头部截断 |
-| `segment_batch_size` | `8` | 批量提取 segment embedding 的 batch size |
+| `segment_batch_size` | `4`（dataclass 默认 `8`） | 批量提取 segment embedding 的 batch size |
 
 track 构造逻辑（`diarization/extract/track_builder.py`）：纯净帧 = 本 slot 活跃
 且无其他 slot 活跃的帧（≥2 人同时活跃即 overlap 帧）；纯净连通区按
@@ -53,7 +55,7 @@ track 构造逻辑（`diarization/extract/track_builder.py`）：纯净帧 = 本
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `clustering_backend` | `streaming` | `streaming`（增量聚类，纯流式）/ `ahc`（离线层次聚类：缓冲全部 embedding，音频结束一次聚类再重放输出）。新后端实现 `cluster/base.py` 接口并在 `build_assigner` 注册即可 |
-| `save_embeddings` | `false` | 把每文件全部 embedding 落盘为 `<stem>.embeddings.npz`，便于离线实验复用 |
+| `save_embeddings` | `true`（dataclass 默认 `false`） | 把每文件全部 embedding 落盘为 `<stem>.embeddings.npz`，便于离线实验复用 |
 
 ## cluster 阶段：streaming 后端（全局 speaker 匹配与 centroid 维护）
 
@@ -64,7 +66,7 @@ track 构造逻辑（`diarization/extract/track_builder.py`）：纯净帧 = 本
 | `max_speakers` | `50` | 最多维护的全局 speaker 数 |
 | `global_match_threshold` | `0.55` | observation 命中已有 speaker 的主阈值（相似度 ≥ 此值判 `matched`） |
 | `new_speaker_threshold` | `0.50` | 新建 speaker 的相似度阈值。**注意遮蔽语义**：`matched` 分支优先，new 只在 `similarity < new_speaker_threshold` 时触发，因此该阈值只有 ≤ match 阈值时才实际生效；两者之差构成 `fallback` 保守带（沿用但不更新）。当前值 0.55/0.50 是 aishell4-test 阈值扫描的最优点 |
-| `min_segment_duration_for_new_speaker` | `0.50` | track 时长达到该值才允许新建 speaker（秒） |
+| `min_segment_duration_for_new_speaker` | `1.00`（dataclass 默认 `0.50`） | track 时长达到该值才允许新建 speaker（秒） |
 | `min_segment_duration_for_centroid_update` | `1.50` | track 时长达到该值才允许更新 centroid（秒） |
 | `merge_threshold` | `0.70` | 每次加入新片段后，若最相似的一对 centroid 相似度 ≥ 此值则合并（count 小者并入大者，centroid 按 count 加权平均）。只影响后续分配：raw RTTM 已写出行不改（历史行由 refined 级修正），被合并者退出后续聚类；本 chunk 未写出的分配改挂幸存 id |
 
@@ -91,7 +93,7 @@ raw 级（`*.raw.rttm`，append-only 零重写）+ refined 级（`*.refined.rttm
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `post_merge_min_speech_duration` | `0.0` | 小样本簇的总发声时长阈值（秒），低于则作为被吸收候选；`0` = 关闭后处理。**推荐值 30s**（aishell4-test 全量 20 文件标定：streaming refined DER 12.84%→12.38%，ahc 13.22%→12.63%；45s 起边际收益消失，60s 以上开始误并真实少发言 speaker）。该值同时是 streaming 前端 uncertain 标记的解除阈值（speaker 时长未达标期间在 viewer 显示为 uncertain），短会议/存在"只说一两句"的边缘 speaker 的场景建议降到 10~15s |
+| `post_merge_min_speech_duration` | `30.0`（dataclass 默认 `0.0` = 关闭） | 小样本簇的总发声时长阈值（秒），低于则作为被吸收候选；`0` = 关闭后处理。**推荐值 30s**（aishell4-test 全量 20 文件标定：streaming refined DER 12.84%→12.38%，ahc 13.22%→12.63%；45s 起边际收益消失，60s 以上开始误并真实少发言 speaker）。该值同时是 streaming 前端 uncertain 标记的解除阈值（speaker 时长未达标期间在 viewer 显示为 uncertain），短会议/存在"只说一两句"的边缘 speaker 的场景建议降到 10~15s |
 | `post_merge_min_similarity` | `0.0` | 强制合并的相似度下限：与目标簇质心相似度低于该值时保留原身份。aishell4 上 `0.0`（不拦截）最优——小簇几乎都是 false split；换数据集建议 `0.3` 兜底防错并（代价约 0.01pp） |
 
 调参复验（复用 chunks.npz，秒级重跑聚类，详见本文末"实验存档"节）：
@@ -110,9 +112,9 @@ python3 tools/sweep_post_merge.py --input <chunks.npz 目录> --ref <参考 rttm
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `separation_enabled` | `false` | 是否启用分段音频导出 |
+| `separation_enabled` | `true`（dataclass 默认 `false`） | 是否启用分段音频导出 |
 | `separation_model` | `JusperLee/TIGER-speech` | TIGER 分离模型（HF，固定 2 路输出、16kHz），缓存到 `hf_cache_dir` |
-| `separation_energy_ratio` | `0.10` | 能量门控：分离音轨在重叠帧区间的 RMS / 混合音频同区间 RMS，低于判为伪源（OSD 疑似误报），整窗回退原始音频 |
+| `separation_energy_ratio` | `0.05`（dataclass 默认 `0.10`） | 能量门控：分离音轨在重叠帧区间的 RMS / 混合音频同区间 RMS，低于判为伪源（OSD 疑似误报），整窗回退原始音频 |
 | `separation_min_match_similarity` | `0.10` | 2x2 匹配结果的最小余弦相似度，低于判分离质量不可靠，回退原始音频。aishell4 全量标定表明真/假重叠窗的 min_sim 分布高度重合（中位数 0.406 vs 0.388），该阈值无法区分 OSD 误报，仅防极端分离崩溃，不宜调高（0.30 时误伤 27.7% 真重叠窗） |
 | `separation_match_reference` | `observation` | 分离音轨归属匹配的参照 embedding：`observation`（默认，本 chunk 观测，与分离音轨同时间窗、域最接近；候选 speaker 必有观测）/ `centroid`（全局质心，不受本 chunk 观测质量影响，更稳但分数偏低） |
 

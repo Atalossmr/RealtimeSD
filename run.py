@@ -18,7 +18,7 @@
     HF_CACHE_DIR    → --hf_cache_dir  DEBUG=1      → --debug
     SHOW_RTTM=1     → --show_rttm     OUTPUT_ROOT  → --output_root
     RUN_NAME        → --run_name      VIEWER_PORT  → --viewer_port
-    ASR_CONFIG_PATH → --asr_config
+    ASR_CONFIG_PATH → --asr_config    WAIT_VIEWER=0 → --no-wait
 
 用法：
 
@@ -95,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         default=_env_flag("WITH_VIEWER", True),
         help="不启动 viewer 服务器",
+    )
+    parser.add_argument(
+        "--no-wait",
+        dest="wait",
+        action="store_false",
+        default=_env_flag("WAIT_VIEWER", True),
+        help="管线结束后不挂起等待 Ctrl+C，直接收尾退出（无人值守/批处理场景）",
     )
     parser.add_argument(
         "--viewer_port", type=int, default=int(os.environ.get("VIEWER_PORT", "9331"))
@@ -296,9 +303,10 @@ def main() -> int:
             _finish_asr(asr_proc, done_file)
             asr_proc = None
 
-        # 管线跑完后不立即退出：viewer 保持可访问，等用户 Ctrl+C
-        # （或 server 因其他原因退出，poll 检测到后同样放行）。
-        if viewer_proc is not None:
+        # 管线跑完后默认不立即退出：viewer 保持可访问，等用户 Ctrl+C
+        # （或 server 因其他原因退出，poll 检测到后同样放行）；
+        # --no-wait / WAIT_VIEWER=0 时跳过等待，直接收尾（无人值守场景）。
+        if viewer_proc is not None and args.wait:
             if pipeline_rc == 0:
                 print("音频已处理完成。")
             else:

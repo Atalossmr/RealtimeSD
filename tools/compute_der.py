@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -91,14 +92,17 @@ def _resolve_md_eval_path() -> str:
 def compute_der(
     ref_rttm: str,
     sys_rttm: str,
-    collar: float = 0.25,
+    collar: float = 0.0,
     ignore_overlap: bool = False,
 ) -> tuple[float, float, float, float]:
     """计算单对 RTTM 的 DER，返回 (MS, FA, SER, DER)。"""
 
     md_eval_pl = _resolve_md_eval_path()
+    perl = shutil.which("perl")
+    if perl is None:
+        raise RuntimeError("找不到 perl 解释器（md-eval.pl 依赖），请先安装 perl")
     cmd = [
-        "perl",
+        perl,
         md_eval_pl,
         "-af",
         "-r",
@@ -114,7 +118,12 @@ def compute_der(
     try:
         stdout = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as ex:
-        stdout = ex.output
+        # md-eval 失败时其输出不含统计行，继续解析只会得到假 DER，直接报错。
+        excerpt = ex.output.decode("utf-8", errors="replace")[-500:]
+        raise RuntimeError(
+            f"md-eval 执行失败（rc={ex.returncode}）: ref={ref_rttm} "
+            f"sys={sys_rttm}\n{excerpt}"
+        ) from ex
 
     text = stdout.decode("utf-8")
     scored_speaker_times = np.array(
@@ -123,6 +132,14 @@ def compute_der(
     miss_speaker_times = np.array([float(m) for m in MISS_SPEAKER_TIME.findall(text)])
     fa_speaker_times = np.array([float(m) for m in FA_SPEAKER_TIME.findall(text)])
     error_speaker_times = np.array([float(m) for m in ERROR_SPEAKER_TIME.findall(text)])
+
+    if scored_speaker_times.size == 0:
+        # md-eval 退出码为 0 但输出无统计行（如输入为空/格式错误），
+        # 此时 [-1] 取值会得到裸 IndexError，报出可诊断的错误。
+        raise RuntimeError(
+            f"md-eval 输出缺少统计行: ref={ref_rttm} sys={sys_rttm}\n"
+            f"{text[-500:]}"
+        )
 
     with np.errstate(invalid="ignore", divide="ignore"):
         tot_error_times = miss_speaker_times + fa_speaker_times + error_speaker_times
@@ -278,14 +295,19 @@ def _concat_rttm_files(paths: list[str], concat_path: str) -> None:
     with open(concat_path, "w", encoding="utf-8") as out_f:
         for p in paths:
             with open(p, "r", encoding="utf-8") as in_f:
-                out_f.write(in_f.read())
+                content = in_f.read()
+            out_f.write(content)
+            # 文件末尾缺换行时补齐，否则下一文件的首行与之粘连，
+            # 粘连行会被 md-eval 静默忽略，全局 DER 被低估。
+            if content and not content.endswith("\n"):
+                out_f.write("\n")
 
 
 def compute_der_batch(
     *,
     ref_path: str,
     sys_path: str,
-    collar: float = 0.25,
+    collar: float = 0.0,
     ignore_overlap: bool = False,
     sys_suffix: str = ".refined.rttm",
     ref_suffix: str = ".rttm",
@@ -316,6 +338,11 @@ def compute_der_batch(
         if current_ref is None:
             skipped.append((filename, str(reason)))
             continue
+
+        ref_stats = analyze_rttm(current_ref)
+        if ref_stats is not None and ref_stats["num_segments"] == 0:
+            # 空参考标注会算出 DER=0%（rectify 把 NaN 归 0），掩盖数据问题。
+            print(f"WARNING: 参考标注无有效语音段: {current_ref}")
 
         ms, fa, ser, der = compute_der(
             current_ref,
@@ -416,7 +443,7 @@ def main() -> int:
     parser.add_argument(
         "--sys-suffix",
         default=".rttm",
-        help="批量模式下系统 RTTM 文件后缀，默认 .refined.rttm",
+        help="批量模式下系统 RTTM 文件后缀，默认 .rttm",
     )
     parser.add_argument(
         "--ref-suffix",
@@ -490,19 +517,18 @@ def main() -> int:
     if args.summary_file:
         _write_summary(args.summary_file, results, skipped, global_result)
         print(f"\n摘要已保存到: {args.summary_file}")
-    elif os.path.isfile(args.sys):
-        output_dir = os.path.dirname(args.sys)
-        if output_dir:
-            result_file = os.path.join(output_dir, "der_result.txt")
-            _write_summary(result_file, results, skipped, global_result)
-            print(f"\n结果已保存到: {result_file}")
 
+    if not results:
+        # 一个样本都没评上（全部 skip）时返回非零，避免 sweep/CI 把
+        # "没评上" 当成评估成功。
+        if skipped:
+            print("\n错误: 全部文件被跳过，未产生任何 DER 结果")
+            return 1
+        return 0
     if global_result:
         return 0 if np.isfinite(float(global_result["der"])) else 1
-    if results:
-        avg_der = sum(float(item["der"]) for item in results) / len(results)
-        return 0 if np.isfinite(avg_der) else 1
-    return 0
+    avg_der = sum(float(item["der"]) for item in results) / len(results)
+    return 0 if np.isfinite(avg_der) else 1
 
 
 if __name__ == "__main__":
