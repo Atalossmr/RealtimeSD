@@ -1,8 +1,8 @@
 # RealtimeSD
 
-基于 `pyannote/segmentation-3.0`(<https://github.com/pyannote/pyannote-audio>) 与 `3D-Speaker/ERes2NetV2`(<https://github.com/modelscope/3D-Speaker>) 的实时说话人分离（speaker diarization）管线。
+基于 `pyannote/segmentation-3.0`(<https://github.com/pyannote/pyannote-audio>) 与 `3D-Speaker/ERes2NetV2`(<https://github.com/modelscope/3D-Speaker>) 的实时说话人识别（speaker diarization）管线。
 
-架构：segmentation-3.0 在 10s chunk 内做局部说话人识别，ERes2NetV2 + 可插拔聚类后端实现全局 speaker ID 一致（默认 streaming 后端：Hungarian 分配 + SMA centroid，身份一次定案）。无 merge、无 RTTM 重写，输出 append-only。嵌入提取与聚类可拆成两个阶段独立运行（`python3 -m diarization.extract.app` / `python3 -m diarization.cluster.app`）。
+架构：segmentation-3.0 在 10s chunk 内做局部说话人识别，ERes2NetV2 和流式聚类后端实现全局 speaker ID 一致。嵌入提取与聚类可拆成两个阶段独立运行（`python3 -m diarization.extract.app` / `python3 -m diarization.cluster.app`）。
 
 ## 项目内容
 
@@ -19,6 +19,7 @@
 - Python `>= 3.13`
 - 建议 Linux + CUDA 环境
 - 首次运行需要可访问 Hugging Face 和 ModelScope（当使用自动下载模型时）
+- FFmpeg `<= 9`
 
 ## 安装
 
@@ -41,7 +42,9 @@ pip install -r requirements.txt
 默认运行依赖：
 
 - `ERes2NetV2`（说话人 embedding）
-- `pyannote/segmentation-3.0`（局部说话人分割）
+- `pyannote/segmentation-3.0`（局部说话人识别）
+- `TIGER`（语音分离）
+- `FunASR-nano`（ASR）
 
 默认行为：
 
@@ -157,7 +160,7 @@ python3 test_der.py <音频目录>
 
 - `run.py` 的启动顺序为：先启动 ASR 跟随进程并等待模型就绪（就绪哨兵
   `.asr_ready`），再启动 viewer 服务器（`viewer/server.py`，浏览器打开
-  http://127.0.0.1:${VIEWER_PORT:-9331} 查看波形 + ASR 时间线）与
+  <http://127.0.0.1:${VIEWER_PORT:-9331}> 查看波形 + ASR 时间线）与
   diarization 管线
 - 管线跑完后 `run.py` 不立即退出：打印"音频已处理完成"并挂起等待，
   viewer 保持可访问；按 Ctrl+C 后脚本退出并关闭 viewer（无人值守场景
@@ -205,14 +208,13 @@ python3 test_der.py <音频目录>
 - `tools/compute_der.py`：DER 统计与批量评估
 - `tools/analyze_log.py`：运行日志事件统计（模块 × 事件 × 级别）
 - `run.py`：运行编排脚本（ASR 先就绪，再启管线与 viewer）
-- `asr/`：独立转写模块（`python3 -m asr.app`，接口与用法见 `asr/README.md`）
+- `asr/`：独立ASR模块（`python3 -m asr.app`，接口与用法见 `asr/README.md`）
 - `viewer/`：ASR 结果时间线可视化（`viewer/server.py`，见 `viewer/README.md`）
 - `test_der.py`：运行 + DER 评估脚本
 - `diarization/README.md`：按模块组织的详细实现说明
 
 三个模块（diarization / asr / viewer）之间无 IPC，全部经共享输出目录的
-文件交互（manifest / transcript / speakers.json sidecar / 哨兵），接口
-字段定义见各模块 README 的"文件交互接口"/"数据接口"章节。
+文件交互（manifest / transcript / speakers.json sidecar / 哨兵），接口字段定义见各模块 README 的"文件交互接口"/"数据接口"章节。
 
 ## 备注
 
