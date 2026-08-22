@@ -19,7 +19,7 @@
 - Python `>= 3.13`
 - 建议 Linux + CUDA 环境
 - 首次运行需要可访问 Hugging Face 和 ModelScope（当使用自动下载模型时）
-- FFmpeg `<= 9`
+- FFmpeg 4–8
 
 ## 安装
 

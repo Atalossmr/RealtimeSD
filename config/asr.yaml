@@ -5,7 +5,7 @@
 sample_rate: 16000
 
 # ---- 推理 ----
-device: cuda
+device: auto
 model: FunAudioLLM/Fun-ASR-Nano-2512
 
 # ---- 长段滑窗续写 ----
