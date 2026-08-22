@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -121,6 +122,21 @@ def _resolve_merged(global_id: int, merged_into: dict[int, int]) -> int:
     return global_id
 
 
+def _atomic_replace(tmp_path: str, dst_path: str) -> None:
+    """os.replace 的 Windows 容错封装：目标文件被杀毒软件/索引器等短暂占用时
+    会抛 PermissionError [WinError 5]，退避重试若干次再放弃。"""
+
+    attempts, delay = 10, 0.2
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp_path, dst_path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
 def write_refined_rttm(
     src_path: str,
     dst_path: str,
@@ -176,7 +192,7 @@ def write_refined_rttm(
         for parts in speaker_lines:
             parts[7] = str(final_survivor(int(parts[7])))
             file_obj.write(" ".join(parts) + "\n")
-    os.replace(tmp_path, dst_path)
+    _atomic_replace(tmp_path, dst_path)
 
     logger.info(
         "[refined] wrote refined RTTM %s (%d speaker(s) post-merged)",
@@ -241,7 +257,7 @@ def write_speaker_status(
     tmp_path = status_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as file_obj:
         json.dump(payload, file_obj, ensure_ascii=False)
-    os.replace(tmp_path, status_path)
+    _atomic_replace(tmp_path, status_path)
 
 
 class RefinedRTTMWriter:
