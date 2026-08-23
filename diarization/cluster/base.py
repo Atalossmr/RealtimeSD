@@ -1,0 +1,67 @@
+"""聚类后端（clusterer）接口。
+
+设计要点：
+
+- embedding 提取（extract/）与聚类分配（clusterer）解耦，
+  后端通过 `build_clusterer(config)`（见 backends/__init__.py）按 YAML 配置插拔；
+- 流式后端（deferred=False）：`assign_chunk` 立即返回最终 local->global 映射，
+  调用方逐 chunk 写出 RTTM；
+- 离线后端（deferred=True）：`assign_chunk` 只缓冲 observations，
+  `finalize()` 统一聚类并返回逐 chunk 的映射，调用方在音频结束后
+  用同一 writer 逻辑重放帧级输出。
+
+新增聚类方法：在本包 backends/ 下新建模块实现本接口，
+并在 backends/__init__.py 的 `build_clusterer` 注册即可。
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Optional
+
+from ..schema import ChunkDebugInfo, ChunkObservation
+
+if TYPE_CHECKING:
+    import numpy as np
+
+
+class BaseChunkClusterer(ABC):
+    """chunk 级 local->global 分配后端接口。"""
+
+    # False：assign_chunk 立即返回最终 id；True：缓冲到 finalize 统一分配。
+    deferred: bool = False
+    # 输出 RTTM 文件名后缀：<stem>.<output_tag>.rttm，各后端必须覆盖。
+    output_tag: str
+
+    # ---- refined 级（post_process.RefinedRTTMWriter）读取的合并状态 ----
+    # 每个后端都必须维护以下三个属性，否则 refined 级退化为 raw 的拷贝
+    # （不做 merge 历史修正与小样本合并，sidecar 无计数/uncertain 信息）。
+    # L2 归一化的簇质心（post-merge 的相似度计算）。
+    centroids: dict[int, np.ndarray] = {}
+    # 各 speaker 的样本计数（post_merge_min_count 判定与 uncertain 标记；
+    # 口径由后端自定：streaming 为有效 centroid 更新次数，ahc 为簇内
+    # observation 数）。
+    counts: dict[int, int] = {}
+    # 流式 merge 链（absorbed -> survivor；无流式 merge 的后端恒为空）。
+    merged_into: dict[int, int] = {}
+
+    @abstractmethod
+    def assign_chunk(
+        self,
+        observations: list[ChunkObservation],
+    ) -> tuple[Optional[dict[int, int]], ChunkDebugInfo]:
+        """处理一个 chunk 的 observations。
+
+        流式后端返回 (local_to_global, debug_info)；
+        离线后端返回 (None, debug_info)，映射由 finalize() 统一给出。
+        """
+
+    def finalize(self) -> list[dict[int, int]]:
+        """离线后端在音频结束后统一分配，返回逐 chunk 的 local->global 列表。"""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 不是 deferred 后端，无需 finalize"
+        )
+
+
+__all__ = ["BaseChunkClusterer"]
