@@ -397,16 +397,6 @@ def _write_summary(
 ) -> None:
     """把批量 DER 摘要写成简单 key=value 文件，便于 shell 直接读取。"""
 
-    avg_der = "NA"
-    avg_ms = "NA"
-    avg_fa = "NA"
-    avg_ser = "NA"
-    if results:
-        avg_der = f"{sum(float(item['der']) for item in results) / len(results):.4f}"
-        avg_ms = f"{sum(float(item['ms']) for item in results) / len(results):.4f}"
-        avg_fa = f"{sum(float(item['fa']) for item in results) / len(results):.4f}"
-        avg_ser = f"{sum(float(item['ser']) for item in results) / len(results):.4f}"
-
     global_ms = "NA"
     global_fa = "NA"
     global_ser = "NA"
@@ -422,10 +412,6 @@ def _write_summary(
     with open(summary_file, "w", encoding="utf-8") as file_obj:
         file_obj.write(f"files={len(results)}\n")
         file_obj.write(f"skipped={len(skipped)}\n")
-        file_obj.write(f"avg_ms={avg_ms}\n")
-        file_obj.write(f"avg_fa={avg_fa}\n")
-        file_obj.write(f"avg_ser={avg_ser}\n")
-        file_obj.write(f"avg_der={avg_der}\n")
         file_obj.write(f"global_files={global_files}\n")
         file_obj.write(f"global_ms={global_ms}\n")
         file_obj.write(f"global_fa={global_fa}\n")
@@ -495,19 +481,16 @@ def main() -> int:
                 f"\tSER={float(item['ser']):.2f}\tDER={float(item['der']):.2f}"
             )
         print("-" * 60)
-        if results:
-            avg_der = sum(float(item["der"]) for item in results) / len(results)
-            print(f"AVERAGE\tfiles={len(results)}\tDER={avg_der:.2f}")
-            if global_result:
-                print(
-                    f"GLOBAL\tfiles={int(global_result['files'])}\t"
-                    f"MS={float(global_result['ms']):.2f}\t"
-                    f"FA={float(global_result['fa']):.2f}\t"
-                    f"SER={float(global_result['ser']):.2f}\t"
-                    f"DER={float(global_result['der']):.2f}"
-                )
+        if global_result:
+            print(
+                f"GLOBAL\tfiles={int(global_result['files'])}\t"
+                f"MS={float(global_result['ms']):.2f}\t"
+                f"FA={float(global_result['fa']):.2f}\t"
+                f"SER={float(global_result['ser']):.2f}\t"
+                f"DER={float(global_result['der']):.2f}"
+            )
         else:
-            print("AVERAGE\tfiles=0\tDER=NA")
+            print("GLOBAL\tfiles=0\tDER=NA")
 
     if skipped:
         print("")
@@ -526,10 +509,9 @@ def main() -> int:
             print("\n错误: 全部文件被跳过，未产生任何 DER 结果")
             return 1
         return 0
-    if global_result:
-        return 0 if np.isfinite(float(global_result["der"])) else 1
-    avg_der = sum(float(item["der"]) for item in results) / len(results)
-    return 0 if np.isfinite(avg_der) else 1
+    # results 非空必有匹配样本，global_result 一定已算出。
+    assert global_result is not None
+    return 0 if np.isfinite(float(global_result["der"])) else 1
 
 
 if __name__ == "__main__":

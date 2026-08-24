@@ -1,6 +1,6 @@
 """离线 AHC 聚类后端：缓冲全部 embedding，音频结束后一次层次聚类。
 
-输出与 streaming 后端同为两级：帧级结果写出 raw 级（`*.ahc.rttm`），
+输出与 streaming 后端同为两级：帧级结果写出 raw 级（`*.raw.rttm`），
 小样本强制合并等修正在 refined 级（`post_process.RefinedRTTMWriter`）
 于 EOF 最终刷新时叠加，生成 `*.refined.rttm` 与 speakers.json sidecar。
 """
@@ -39,7 +39,8 @@ class AHCChunkClusterer(BaseChunkClusterer):
     """离线 AHC 后端：缓冲全部 embedding，音频结束后一次层次聚类。"""
 
     deferred = True
-    output_tag = "ahc"
+    # 与 streaming 后端统一：raw 级一律为 <stem>.raw.rttm。
+    output_tag = "raw"
 
     def __init__(self, config: ChunkPipelineConfig):
         self.config = config
@@ -104,7 +105,7 @@ class AHCChunkClusterer(BaseChunkClusterer):
             {label: round(durations[label], 2) for label in sorted(durations)},
         )
 
-        # 小样本强制合并不在这里做：标签按原样写出为 raw 级（*.ahc.rttm），
+        # 小样本强制合并不在这里做：标签按原样写出为 raw 级（*.raw.rttm），
         # 由 refined 级（post_process.RefinedRTTMWriter）在 EOF 最终刷新时
         # 叠加合并映射生成 *.refined.rttm，与 streaming 后端同一流程。
 

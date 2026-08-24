@@ -125,8 +125,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output_dir",
         default=None,
-        help="输出目录；RTTM 写入其 rttm/ 子目录（raw 级 .raw.rttm / ahc 后端为 "
-        ".ahc.rttm，最终输出 .refined.rttm + .speakers.json），"
+        help="输出目录；RTTM 写入其 rttm/ 子目录（raw 级 .raw.rttm，"
+        "最终输出 .refined.rttm + .speakers.json），"
         "embeddings npz 在 embeddings/，分段音频在 segments/，日志在 logs/",
     )
     parser.add_argument(

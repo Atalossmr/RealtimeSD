@@ -212,8 +212,8 @@ def main() -> int:
                     return proc.returncode
                 if der_summary.is_file():
                     values = _read_summary_values(der_summary)
-                    der = values.get("global_der") or values.get("avg_der", "NA")
-                    files = values.get("global_files") or values.get("files", "0")
+                    der = values.get("global_der", "NA")
+                    files = values.get("global_files", "0")
                     print(
                         f"{args.run_name} -> DER(global): {der}% over {files} file(s)"
                     )

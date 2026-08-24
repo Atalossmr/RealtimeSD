@@ -20,8 +20,21 @@ python3 -m asr.app --segments_dir <exp_dir>/segments --config config/asr.yaml \
     --follow --done_file <exp_dir>/.diarization_done --ready_file <path>
 ```
 
-转写调参项全部在 `config/asr.yaml`（不在 CLI 上，字段见 `asr/config.py`
-的 `AsrConfig`，逐项说明见 `config/README.md` 文末）。
+转写调参项全部在 `config/asr.yaml`（逐项说明见 `config/README.md` 的
+asr 板块），CLI 仅保留运行时参数：
+
+## CLI 参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `--segments_dir` | 必填；exporter 输出目录（扫描其中所有 `*.segments.jsonl`） |
+| `--config` | YAML 配置文件路径，默认 `config/asr.yaml` |
+| `--output_dir` | transcript 输出目录，缺省与 `--segments_dir` 相同 |
+| `--follow` | 跟随模式：与管线同时启动，轮询增量转写，需配合 `--done_file` |
+| `--done_file` | 跟随模式的结束哨兵：出现且积压清空后做最终落盘并退出 |
+| `--ready_file` | 就绪哨兵：模型加载完成后 touch，供 run.py 等外部编排脚本等待 |
+| `--log_file` | 转写日志路径，默认 `{output_dir}/transcribe.log` |
+| `--verbose` | 启用 DEBUG 级日志 |
 
 ## 文件交互接口
 

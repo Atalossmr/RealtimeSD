@@ -22,6 +22,15 @@ python3 viewer/server.py --exp_root exp --audio_root datasets --port 8000
 - 音频不在扫描目录时：`--audio URI=/path/to/audio.wav` 显式指定；
 - 音频支持 HTTP Range，长会议音频 seek 无压力。
 
+CLI 参数（viewer 无 YAML 配置，全部选项都在 CLI 上）：
+
+| 参数 | 说明 |
+|---|---|
+| `--exp_root` | transcript 扫描根目录，可重复，默认 `exp` |
+| `--audio_root` | 原始音频扫描根目录，可重复，默认 `datasets` |
+| `--audio URI=PATH` | 显式指定某 uri 的音频路径，可重复 |
+| `--port` | 监听端口，默认 `8000` |
+
 ## 数据接口（消费的文件）
 
 viewer 只读文件、不写；与管线/ASR 的交互全部经以下产物：

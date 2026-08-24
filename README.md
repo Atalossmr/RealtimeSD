@@ -1,9 +1,7 @@
 # RealtimeSD
 
 ![flowchart](docs/pipline.drawio.png)
-基于 `pyannote/segmentation-3.0`(<https://github.com/pyannote/pyannote-audio>) 与 `3D-Speaker/ERes2NetV2`(<https://github.com/modelscope/3D-Speaker>) 的实时说话人识别（speaker diarization）管线。
-
-架构：segmentation-3.0 在 10s chunk 内做局部说话人识别，ERes2NetV2 和流式聚类后端实现全局 speaker ID 一致。嵌入提取与聚类可拆成两个阶段独立运行（`python3 -m diarization.extract.app` / `python3 -m diarization.cluster.app`）。
+基于 [pyannote/segmentation-3.0](<https://github.com/pyannote/pyannote-audio>) 与 [3D-Speaker/ERes2NetV2](<https://github.com/modelscope/3D-Speaker>) 的实时说话人识别（speaker diarization）管线。
 
 ## 项目内容
 
@@ -99,15 +97,13 @@ python3 -m diarization.app \
 - `--debug`：输出调试信息
 - `--show_rttm`：运行时把新写出的 RTTM 行同步打印到控制台
 
-说明：调参项只通过 `config/config.yaml` 配置；CLI 仅保留运行时输入（`--wav`/`--output_dir`/`--config`）、模型/环境参数（`--model_path`/`--model_type`/`--segmentation_model`/`--hf_token`/`--hf_cache_dir`/`--device`）与 `--debug`/`--verbose`/`--show_rttm` 开关。
-
 ## 输出说明
 
 输出目录按内容类型分子文件夹（`output_dir/` 下）：
 
 ```
 output_dir/
-  rttm/           # {uri}.raw.rttm（ahc 后端为 .ahc.rttm；raw 级 append-only）
+  rttm/           # {uri}.raw.rttm（两后端统一；raw 级 append-only）
                   # {uri}.refined.rttm（两后端通用；修正与后处理后的最终输出）
                   # {uri}.speakers.json（refined 级 sidecar）
   segments/       # {uri}.segments.jsonl + {uri}/*.wav（仅 separation_enabled）
@@ -161,16 +157,6 @@ python3 test_der.py <音频目录>
 - 管线跑完后 `run.py` 不立即退出：打印"音频已处理完成"并挂起等待，
   viewer 保持可访问；按 Ctrl+C 后脚本退出并关闭 viewer（无人值守场景
   用 `--no-wait` / `WAIT_VIEWER=0` 跳过等待，跑完直接退出
-
-## 语音识别流程行为概览
-
-每个 chunk（10s 窗口，`hop_duration` 推进）主流程：
-
-1. 切出 10s 窗口并运行 segmentation-3.0，得到帧级多标签分数（局部 ≤3 人）
-2. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding，不足时回退 `overlap_fallback`
-3. clusterer 做 local->global 分配
-4. 只提交窗口中段 `hop_duration` 中的帧级结果（边界缓冲），写入 RTTM
-5. 音频结束：闭合全部 open turn，在rttm中追加收尾，全程零重写
 
 ## 配置
 

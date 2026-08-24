@@ -3,7 +3,7 @@
 两个聚类后端的输出都分两级：
 
 - raw 级：AppendOnlyRTTMWriter 的 append-only 输出，每行写出即最终
-  （streaming 为 `<stem>.raw.rttm`，ahc 为 `<stem>.ahc.rttm`）；
+  （两后端统一为 `<stem>.raw.rttm`）；
 - refined 级（`<stem>.refined.rttm`）：由 RefinedRTTMWriter 维护，读取
   raw 文件与 clusterer 当前合并状态整体重生成——streaming 在流式期间
   每次 merge 事件动态刷新（修正 merge 前写出的旧身份行），ahc 无流式

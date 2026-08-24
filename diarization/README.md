@@ -1,6 +1,6 @@
 # 实时说话人识别管线
 
-本文档按当前代码实现说明 pipeline 的结构、chunk 级流程与关键参数。
+本文档记录当前diarization包的结构、chunk 级流程与关键参数。
 
 ## 总体流程
 
@@ -9,11 +9,11 @@
 1. 读取音频并重采样到 `config.sample_rate`（默认 16k）
 2. 按 `hop_duration` 沿时间轴推进，每次切出 `chunk_duration`（默认 10s）窗口
 3. 对窗口运行 `pyannote/segmentation-3.0`，得到帧级多标签分数（局部 ≤3 人、帧级 ≤2 人，含重叠）
-4. 每个 local slot 聚合纯净（非重叠）语音区提 ERes2NetV2 embedding；纯净区不足时回退 `overlap_fallback`
-5. clusterer 做 local->global 分配（后端可插拔，见 `diarization/cluster/backends/`）：默认 streaming 后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；每次加入新片段后按 `merge_threshold` 尝试合并最相似的一对 speaker（小并入大）
+4. 聚合每个local slot的非重叠语音区，整体提取一个embedding；纯净区不足时回退到 `overlap_fallback`，将重叠区域也加入语音区计算。
+5. clusterer 负责进行local->global分配（后端可替换，见 `diarization/cluster/backends/`，项目内置了streaming和ahc两种）。默认的streaming后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；此外每次加入新片段后按 `merge_threshold` 尝试合并最相似的一对 speaker（小并入大）
 6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线（raw 级），无缓冲、无延迟确认；ahc 后端（deferred，离线）逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
-7. refined 级（两后端通用）：`post_process.RefinedRTTMWriter` 读取 raw RTTM + 当前 `merged_into`/centroid/counts 状态整体重生成 `*.refined.rttm`；streaming 在流式期间每次 merge 事件动态刷新（修正 merge 前写出的旧身份行），ahc 无流式 merge、EOF 重放完成后刷新；两者 EOF 最终刷新均叠加小样本强制合并（`post_merge_min_count > 0` 时生效）
-8. 音频结束：闭合全部 open turn，writer 纯追加收尾——raw 全程零重写，修正只发生在 refined 级
+7. refined级：`post_process.RefinedRTTMWriter` 读取 raw RTTM + 当前 `merged_into`/centroid/counts 状态整体重生成 `*.refined.rttm`；streaming 在流式期间每次 merge 事件动态刷新（修正 merge 前写出的旧身份行），ahc 无流式 merge、EOF 重放完成后刷新；两者 EOF 最终刷新均叠加小样本强制合并（`post_merge_min_count > 0` 时生效）
+8. 音频结束：闭合全部 open turn，writer 纯追加收尾。
 
 链路分层：
 
@@ -25,8 +25,7 @@
 设计要点：
 
 - **raw 级纯流式：无 probationary/确认机制、无 RTTM 重写（含终局）、无 stable/延迟输出机制**；修正全部发生在 refined 级（独立文件，可整体重生成）
-- 分配一次定案，但支持事后 merge：每次加入新片段后，若最相似的一对 centroid 相似度 ≥ `merge_threshold` 则合并（count 小者并入大者）；raw 已写出的行不改，由 refined 级在下一次重生成时修正，被合并者退出后续聚类
-- false split 可由 merge 修复，false glue 仍不可修复，因此阈值策略仍为"宁可 glue 不可 split"：`new_speaker_threshold` 应适当调高
+- 说话人合并：每次加入新片段后，若最相似的一对 centroid 相似度 ≥ `merge_threshold` 则合并（count 小者并入大者）；raw 已写出的行不改，由 refined 级在下一次重生成时修正，被合并者退出后续聚类
 - 收益：新 speaker 的首次发言在所属 chunk 提交区写出时即刻出现在输出中，输出延迟 ≈ 一个 hop + 沉默闭合确认
 
 ## 关键策略
@@ -35,14 +34,14 @@
 
 每个 local slot 在 chunk 内：
 
-- 活跃总时长 < `min_local_activity_duration` → 跳过（不建 track、帧也不输出）
-- 优先拼接非重叠纯净区（连通区固定按 commit 优先级选取：提交区内片段优先、不足再从两侧 margin 补齐；总长封顶 `max_segment_duration_for_embedding`，压线段保留头部截断）→ `non_overlap`，允许更新 centroid
-- 纯净区总长 < `min_segment_duration_for_embedding` → 回退全活跃区拼接 → `overlap_fallback`，embedding 可提取但不允许常规更新
+- 活跃总时长 < `min_local_activity_duration` → 跳过
+- 优先拼接非重叠纯净区（连通区固定按 commit 优先级选取：提交区内片段优先、不足再从两侧 margin 补齐；总长封顶 `max_segment_duration_for_embedding`）→ `non_overlap`，允许更新 centroid
+- 若纯净区总长 < `min_segment_duration_for_embedding` → 回退全活跃区拼接 → `overlap_fallback`，embedding 可提取但不允许常规更新
 - 回退后仍不足 → 跳过
 
-相关代码：`diarization/extract/track_builder.py`
+相关代码见`diarization/extract/track_builder.py`
 
-### 2) 同窗联合分配（Hungarian）
+### 2) Hungarian联合分配
 
 同一 chunk 内所有 local track 与全部 global centroid 做 cost = 1 - cosine 的 Hungarian 分配，隐式实现 cannot-link：同一 chunk 的不同 local slot 不会分配给同一 global speaker。
 
@@ -52,34 +51,25 @@
 - `new`：相似度 < `new_speaker_threshold` 且 track 时长 ≥ `min_segment_duration_for_new_speaker`（立即成为永久身份）
 - `fallback`：介于两者之间，沿用最近 centroid，不更新
 
-注意：false split 可由 merge 修复（见下节），false glue 不可修复，因此 `new_speaker_threshold` 应适当调高，偏保守建簇。
+相关代码见`diarization/cluster/backends/streaming.py`
 
-相关代码：`diarization/cluster/backends/streaming.py`
+### 3) 基于相似度的说话人合并
 
-### 3) 事后 merge
+每次新片段分配完成后，计算当前所有说话人centroid之间的余弦相似度，若最相似的一对 ≥ `merge_threshold` 则合并：count 小者并入大者（count 相同保留 id 较小者），centroid 按 count 加权平均后重归一化。合并只影响后续分配：
 
-每次加入新片段（observation 完成分配）后，计算全部 centroid 两两余弦相似度，若最相似的一对 ≥ `merge_threshold` 则合并：count 小者并入大者（count 相同保留 id 较小者），centroid 按 count 加权平均后重归一化。合并只影响后续分配：
-
-- 已写出的 raw RTTM 行不受影响（writer 全程 append-only），历史行的归属修正由 refined 级（`post_process.RefinedRTTMWriter`）在下一次重生成时完成；
+- 已写出的 raw RTTM 行不受影响，历史行的归属修正由 refined 级（`post_process.RefinedRTTMWriter`）在下一次重生成时完成；
 - 被合并 speaker 从 centroid 集中移除，不再参与后续 Hungarian 分配与 merge 判定；
-- 本 chunk 尚未写出的分配（含 Hungarian 结果里指向被合并者的 stale 匹配）改挂到幸存 id；
+- 尚未写出的分配中被合并的部分改挂到幸存 id；
 - 被合并 id → 幸存 id 记录在 `merged_into`，合并事件以 `[merge]` 日志输出。
 
-相关代码：`diarization/cluster/backends/streaming.py` 的 `_try_merge_speakers`
+相关代码见`diarization/cluster/backends/streaming.py` 的 `_try_merge_speakers`
 
-### 4) centroid 更新
-
-- 全程 SMA 增量更新：`alpha = 1 / (count + 1)`
-- 常规更新门控：track 时长 ≥ `min_segment_duration_for_centroid_update`
-- `overlap_fallback` 片段可提 embedding 参与分配，但不更新 centroid
-
-### 5) 提交区与零重写输出
+### 4) 提交区与零重写输出
 
 - 重叠滑窗（`hop_duration < chunk_duration`）时，每窗口只提交中段 `hop_duration` 秒，两侧各留 `(chunk-hop)/2` 边界缓冲；首窗从 0 开始
-- 每个 speaker 维护一个未闭合的 open turn（驻留内存）：后续帧/段间隔 ≤ `segment_merge_gap` 即在写出前扩展拼接，跨 chunk 生效
-- 沉默闭合：每 chunk 提交后检查，open turn 终点距 commit_end 已超过 `segment_merge_gap` 即判定说话结束、提前闭合写出（与"下次开口回头闭合"产出等价，但尾段输出延迟从等到 EOF 降到约一个 hop）；EOF 时 `finalize` 兜底闭合全部残余 turn
+- 对每个speaker各维护一个未闭合的 open turn，若下一次活跃的间隔 ≤ `segment_merge_gap` 即在写出前扩展拼接，跨 chunk 生效
 - 短于 `min_segment_duration` 的 turn 在闭合时丢弃
-- `finalize`：闭合全部 open turn，纯追加，不重写文件
+- `finalize`：闭合全部 open turn。
 
 相关代码：`diarization/cluster/rttm_writer.py`
 
@@ -117,75 +107,52 @@ diarization/
     audio.py           #   切片/能量纯函数：slice_absolute / rms / rms_over_regions
 ```
 
-- YAML 是全部调参项的唯一来源；CLI 仅保留 `--wav`、`--output_dir`、`--config`、
-  模型/环境参数与 `--debug`、`--verbose`、`--show_rttm`；
-- 新增聚类方法：在 `cluster/backends/` 下新建模块实现 `BaseChunkClusterer`
-  （接口见 `cluster/base.py`）并在 `build_clusterer` 注册即可，
-  提取侧与输出侧都不用动。
-
-## 参数分组与作用
-
-以下调参项全部通过 `config/config.yaml` 配置（YAML 是唯一来源），按模块分组；逐项详细说明见 `config/README.md`
-
-### 1) extract 阶段：调度
-
-- `chunk_duration`：窗口时长（segmentation-3.0 原生为 10s）
-- `hop_duration`：推进步长；等于 chunk 时退化为非重叠
-
-### 2) extract 阶段：track 构造与 embedding
-
-- `min_local_activity_duration`
-- `min_segment_duration_for_embedding`（16k 下建议 ≥ 0.105s，防 NaN embedding）
-- `max_segment_duration_for_embedding`
-- `segment_batch_size`
-
-### 3) cluster 阶段：后端选择与通用
-
-- `clustering_backend`：`streaming`（默认，增量聚类）/ `ahc`（离线层次聚类）
-
-### 4) cluster 阶段：streaming 后端
-
-- `max_speakers`
-- `new_speaker_threshold`
-- `global_match_threshold`
-- `min_segment_duration_for_new_speaker`
-- `min_segment_duration_for_centroid_update`
-- `merge_threshold`（每次加入新片段后，最相似的一对 centroid 相似度 ≥ 此值即合并，小并入大）
-
-### 5) cluster 阶段：ahc 后端
-
-- `ahc_similarity_threshold` / `ahc_linkage`：仅 ahc 后端生效
-
-### 5b) cluster 阶段：后处理（小样本簇强制合并，两后端共用）
-
-- `post_merge_min_count`：样本计数低于该值的簇并入质心最相似的达标簇（计数口径：streaming 为有效 centroid 更新次数 `counts`，ahc 为簇内 observation 数）；两后端统一在 refined 级 EOF 最终刷新时叠加（raw 文件不动）；0 = 关闭
-- `post_merge_min_similarity`：强制合并的相似度下限，低于则保留原身份
-
-### 6) RTTM 输出
-
-- `min_segment_duration`
-- `segment_merge_gap`
-- `show_rttm`
+- 若要新增聚类方法，则需在 `cluster/backends/` 下新建模块实现 `BaseChunkClusterer`（具体接口见 `cluster/base.py`）并在 `build_clusterer` 注册。
 
 ## 输入输出与调试
 
-### 两阶段独立运行（提取 / 聚类分离）
+### 两阶段独立运行
 
-嵌入提取与聚类可以完全拆开运行，中间产物为 `embeddings/<stem>.chunks.npz`
-（逐 chunk 的 observations 含 embedding + 帧级输出参数，纯 numpy 无 pickle）：
+嵌入提取与聚类可以分别运行，中间产物为 `embeddings/<stem>.chunks.npz`
+（逐 chunk 的 observations 含 embedding + 帧级输出参数）
 
 ```bash
-# 阶段 1：嵌入提取（需要音频与模型，产出 embeddings/<stem>.chunks.npz）
+# 阶段 1：嵌入提取（产出 embeddings/<stem>.chunks.npz）
 python3 -m diarization.extract.app --wav <音频> --output_dir <dir> --config config/config.yaml
 
-# 阶段 2：聚类 + RTTM 输出（只需 npz，后端由 YAML 的 clustering_backend 决定；
-# 输出写入 <dir>/rttm/）
+# 阶段 2：聚类 + RTTM 输出（需要阶段1输出的npz，输出写入 <dir>/rttm/）
 python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --config config/config.yaml
 ```
 
-- 阶段 2 不加载任何模型，换后端/调阈值只需改 YAML 重跑，秒级完成；
-- 两端共用的 chunk 生产逻辑在 `extract/extractor.py` 的 `iter_chunk_artifacts`，保证一致；
-- 端到端用法（`python3 -m diarization.app`）行为不变。
+- 两端共用的 chunk 定义在`utils/chunk_io.py`；
+
+### CLI 参数
+
+三个入口（`diarization.app` 端到端 / `diarization.extract.app` 提取 /
+`diarization.cluster.app` 聚类）共用 `diarization/config.py` 的同一个参数
+解析器。全部调参项以 `config/config.yaml` 为唯一来源（逐项说明见
+`config/README.md`），CLI 仅保留运行时输入、模型/环境覆盖与开关；合并优先级：
+argparse 默认值 < YAML 配置 < 显式 CLI 参数。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--wav` | 输入音频（`diarization.app` / `extract.app` 必填）：单个 wav/flac/mp3、目录，或每行一个路径的文本文件 |
+| `--input` | 仅 `diarization.cluster.app`（必填）：`.chunks.npz`、含 npz 的目录，或路径清单文本 |
+| `--output_dir` | 必填；输出目录（RTTM 在 `rttm/`、npz 在 `embeddings/`、分段音频在 `segments/`、日志在 `logs/`） |
+| `--config` | YAML 配置文件路径，默认 `config/config.yaml` |
+| `--model_path` | 预训练 ERes2NetV2 checkpoint 路径；缺省自动从 ModelScope 下载默认模型 |
+| `--device` | 运行设备（`auto`/`cpu`/`cuda:0`），默认 `auto`；cluster 阶段不加载模型，无需设置 |
+| `--model_type` | speaker encoder 类型，当前仅支持 `eres2netv2` |
+| `--segmentation_model` | pyannote segmentation 模型名（仅 extract 阶段使用） |
+| `--hf_token` | Hugging Face token |
+| `--hf_cache_dir` | Hugging Face 模型缓存目录，默认仓库内 `pretrained/huggingface` |
+| `--show_rttm` | 把新生成的 RTTM 行同步输出到控制台 |
+| `--debug` | 输出 chunk 级 debug 信息 |
+| `--verbose` | 启用 DEBUG 级日志 |
+
+模型类参数（`--model_path` / `--device` / `--model_type` /
+`--segmentation_model` / `--hf_*`）在 cluster 阶段不生效，挂在共用解析器上
+仅为兼容同一份 `config.yaml`。
 
 ### 输入形式
 
@@ -201,23 +168,22 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 
 输出目录按内容类型分子文件夹。每个输入音频默认输出：
 
-- `rttm/*.<backend_tag>.rttm`（raw 级：streaming 后端为 `*.raw.rttm`，ahc 后端为 `*.ahc.rttm`）
-- `rttm/*.refined.rttm`（两后端通用；streaming 随 merge 事件动态重生成，ahc 在 EOF 重放后生成；EOF 均叠加小样本合并，为最终输出）
+- `rttm/*.<backend_tag>.rttm`
+- `rttm/*.refined.rttm`（经过后处理的最终输出）
 - `rttm/*.speakers.json`（两后端通用；refined 级 sidecar）
 - `embeddings/*.chunks.npz`（仅提取阶段 `python3 -m diarization.extract.app` 产出）
 - `logs/run.log`
 
-### 文件交互接口（下游消费契约）
+### 文件交互接口
 
-diarization 与 ASR / viewer 之间无 IPC，全部经共享输出目录的文件交互。
+diarization 与 ASR / viewer 之间全部经共享输出目录的文件交互。
 **核心约定：所有对外文件里的 speaker id 都是 clusterer 的 global id**
 （含 RTTM 行内的 speaker 字段）。
-写读时序保证：追加在依赖之后、JSON/RTTM 重写均走临时文件 + 原子替换，
-消费者永远读不到半写文件。
+写读时序保证：追加在依赖之后、JSON/RTTM 重写均走临时文件 + 原子替换，保证消费者永远读不到半写文件。
 
-#### `rttm/{uri}.raw.rttm` / `rttm/{uri}.ahc.rttm` + `rttm/{uri}.refined.rttm`
+#### `rttm/{uri}.raw.rttm` + `rttm/{uri}.refined.rttm`
 
-- raw 级（streaming 为 `.raw.rttm`，ahc 为 `.ahc.rttm`）：append-only 零重写，行写出即最终；refined：整体重生成（原子替换），merge 历史修正（仅 streaming 有流式 merge）+ EOF 小样本合并后的最终输出，**下游应消费 refined**；
+- raw 级（`.raw.rttm`，两后端统一）：append-only 零重写，行写出即最终；refined：整体重生成（原子替换），merge 历史修正（仅 streaming 有流式 merge）+ EOF 小样本合并后的最终输出，**下游应消费 refined**；
 - 行格式（标准 RTTM）：`SPEAKER <uri> 0 <start> <dur> <NA> <NA> <speaker global id> <NA> <NA>`。
 
 #### `rttm/{uri}.speakers.json`（refined 级 sidecar）
