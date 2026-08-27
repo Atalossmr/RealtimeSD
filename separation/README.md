@@ -28,6 +28,7 @@ local->global 分配后，把每个 commit 区的音频按 global speaker 拆成
 
 ```
 separation/
+  app.py           # stage2 CLI（骨架：`python3 -m separation.app` 仅打印契约说明并以退出码 2 退出）
   exporter.py      # StreamingSegmentExporter：编排（重叠检测、dispatch、回退策略、段闭合调度）
   attribution.py   # 身份确认纯函数：overlap_regions / cosine / reference_embeddings /
                    #   energy_gate / match_pair / best_match
@@ -43,6 +44,14 @@ pyannote）统一在 common/models；本包只做管线编排与归属判定，�
 本包与 diarization 互不 import；共享契约（ChunkArtifacts、
 iter_commit_frames、ChunkPipelineConfig）统一从 `common.contracts` /
 `common.config` 取。
+
+## 独立入口（骨架）
+
+`python3 -m separation.app` 目前是骨架：separation 的输入契约（commit 区
+波形 + 本 chunk 聚类分配 + 参照 embedding）只有 stage1 流式循环在分配完成时
+才齐备，因此暂不可独立离线运行（该命令仅打印此说明并以退出码 2 退出）。
+请用 `python3 run.py <音频> --stage 2`（或默认 `--stage 3`）驱动；读
+refined RTTM 重放驱动分离导出是未来工作。
 
 ## 输出文件契约
 

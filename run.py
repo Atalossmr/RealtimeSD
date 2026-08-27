@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """实时管线一键运行编排脚本。
 
-启动顺序（ASR 模型加载慢，先就绪再开跑，避免管线空跑或段积压）：
+`--stage N` 为累积式：1=只 diarization（RTTM）；2=+separation（分段音频）；
+3=+ASR 转写（默认，保持现有行为）。
+
+启动顺序（stage 3 时 ASR 模型加载慢，先就绪再开跑，避免管线空跑或段积压）：
 
 1. ASR 跟随进程（python -m asr.app --follow）先启动，轮询等待其就绪哨兵
    （--ready_file，模型加载完成后 touch）；ASR 进程提前退出或超时则整体失败；
+   仅 stage >= 3 时启动；
 2. ASR 就绪后启动 viewer 服务器，并在本进程内跑 diarization 管线
-   （`run_diarization` = extract + cluster + 分段音频导出）；
+   （`run_diarization` = extract + cluster + 分段音频导出；stage 1 不启用
+   separation）；
 3. 管线结束（无论成败）→ touch done 哨兵 → 等 ASR 收尾落盘 transcript →
    打印"音频已处理完成"并挂起等待（viewer 保持可访问）；用户 Ctrl+C
    （或 server 因其他原因退出，如 POST /api/shutdown）后脚本才退出并
@@ -14,7 +19,7 @@
 
 环境变量作为对应命令行参数的缺省值：
 
-    WITH_ASR=0      → --no-asr        CONFIG_PATH  → --config
+    STAGE           → --stage         CONFIG_PATH  → --config
     MODEL_PATH      → --model_path    HF_TOKEN     → --hf_token
     HF_CACHE_DIR    → --hf_cache_dir  DEBUG=1      → --debug
     SHOW_RTTM=1     → --show_rttm     OUTPUT_ROOT  → --output_root
@@ -99,22 +104,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", action="store_true", help="启用 DEBUG 级日志")
     parser.add_argument(
+        "--stage",
+        type=int,
+        choices=[1, 2, 3],
+        default=int(os.environ.get("STAGE", "3")),
+        help="累积式运行阶段：1=只 diarization（RTTM）；2=+separation 分段音频；"
+        "3=+ASR 转写（默认）",
+    )
+    parser.add_argument(
         "--asr_config",
         default=os.environ.get("ASR_CONFIG_PATH", "./config/asr.yaml"),
-        help="ASR 转写的 YAML 配置（传给 python -m asr.app）",
+        help="ASR 转写的 YAML 配置（传给 python -m asr.app；仅 --stage 3 生效）",
     )
     parser.add_argument(
         "--debug", action="store_true", default=env_flag("DEBUG", False)
     )
     parser.add_argument(
         "--show_rttm", action="store_true", default=env_flag("SHOW_RTTM", False)
-    )
-    parser.add_argument(
-        "--no-asr",
-        dest="asr",
-        action="store_false",
-        default=env_flag("WITH_ASR", True),
-        help="不启动 ASR 跟随进程",
     )
     parser.add_argument(
         "--no-viewer",
@@ -206,10 +212,12 @@ def run_diarization(
     audio_path: str,
     exp_dir: Path,
     model_path: Optional[str] = None,
+    with_separation: bool = True,
 ) -> str:
     """单条音频的 diarization 管线：extract + cluster + RTTM/segments 输出。
 
     供 run.py main 与 test_der.py 复用；返回 raw RTTM 路径。
+    with_separation=False 时不创建分段音频导出器（无 segments 输出）。
     """
 
     config.output_dir = str(exp_dir)
@@ -234,7 +242,7 @@ def run_diarization(
     # 默认 WavSegmentSink 落盘 wav + manifest，转写由 ASR 跟随进程
     # 读取输出目录独立完成；TIGER 仍是按需惰性加载。
     exporter = None
-    if config.separation_enabled:
+    if config.separation_enabled and with_separation:
         if clusterer.deferred:
             logger.warning(
                 "[separation] separation 仅支持 streaming 后端，当前后端 %s 已跳过",
@@ -341,7 +349,7 @@ def main() -> int:
     done_file = exp_dir / ".diarization_done"
     ready_file = exp_dir / ".asr_ready"
 
-    if args.asr:
+    if args.stage >= 3:
         validate_follow_requirements(config_path)
 
     # 合并 CLI 与 YAML（argparse 默认值 < YAML < 显式 CLI），构建管线配置。
@@ -368,7 +376,7 @@ def main() -> int:
             print(f"{name} override enabled")
     if args.hf_token:
         print("hf_token override enabled")
-    print(f"with_asr={args.asr} with_viewer={args.viewer}")
+    print(f"stage={args.stage} with_viewer={args.viewer}")
     print("==========================================")
 
     # results.txt 按 run 追加：同一 output_root 下历史 run 的汇总记录保留。
@@ -381,7 +389,8 @@ def main() -> int:
             "config_path": config_path,
             "model_path_override": args.model_path,
             "hf_cache_dir_override": args.hf_cache_dir,
-            "with_asr": args.asr,
+            "with_asr": args.stage >= 3,
+            "stage": args.stage,
         },
     )
 
@@ -432,7 +441,7 @@ def main() -> int:
             f" segmentation_model={config.segmentation_model},"
             f" backend={config.clustering_backend})\n"
         )
-        if args.asr:
+        if args.stage >= 3:
             log.write(f"ASR Command: {shlex.join(asr_cmd)}\n")
         if args.viewer:
             log.write(f"Viewer Command: {shlex.join(viewer_cmd)}\n")
@@ -441,8 +450,8 @@ def main() -> int:
     viewer_proc: subprocess.Popen | None = None
     pipeline_rc = 0
     try:
-        # 1. ASR 先启动并等模型就绪。
-        if args.asr:
+        # 1. ASR 先启动并等模型就绪（仅 stage >= 3）。
+        if args.stage >= 3:
             print(f"Starting ASR follow process: {shlex.join(asr_cmd)}")
             asr_proc = subprocess.Popen(asr_cmd)
             print("Waiting for ASR model ready ...")
@@ -478,7 +487,13 @@ def main() -> int:
         )
         print(f"Starting diarization pipeline (in-process): {audio}")
         try:
-            run_diarization(config, str(audio), exp_dir, model_path=merged_args.model_path)
+            run_diarization(
+                config,
+                str(audio),
+                exp_dir,
+                model_path=merged_args.model_path,
+                with_separation=args.stage >= 2,
+            )
         except Exception:
             # 管线失败不跳过收尾：记录后继续走 ASR/viewer 的 finally 清理。
             logger.exception("Diarization pipeline failed")
@@ -533,7 +548,7 @@ def main() -> int:
         file_obj.write(
             f"{args.run_name} -> refined_rttm_files={rttm_count} | config={config_path}\n"
         )
-        if args.asr:
+        if args.stage >= 3:
             transcript_count = len(
                 list((exp_dir / "transcripts").glob("*.transcript.jsonl"))
             )
@@ -542,7 +557,7 @@ def main() -> int:
             )
     print(f"Result: {args.run_name} -> refined_rttm_files={rttm_count}")
     print(f"Pipeline log: {exp_dir}/logs/run.log")
-    if args.asr:
+    if args.stage >= 3:
         print(f"ASR log: {exp_dir}/logs/transcribe.log")
 
     return pipeline_rc

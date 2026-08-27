@@ -76,11 +76,13 @@
 ## 模块分工
 
 包按两个阶段拆成两个顶层包，共享契约与模型代码上提 `common/`；端到端组合层
-（原 `diarization/pipeline.py` + `diarization/app.py`）已并入仓库根目录的
-`run.py`（`run_diarization`）：
+（原 `diarization/pipeline.py` + 原 `diarization/app.py` 的组合逻辑）已并入
+仓库根目录的 `run.py`（`run_diarization`），现 `diarization/app.py` 只是
+委托它的 stage1 薄 CLI：
 
 ```
 diarization/           # stage1：嵌入提取 + 聚类 + RTTM 输出
+  app.py               # stage1 端到端 CLI（python3 -m diarization.app，委托 run.py 的 run_diarization，with_separation=False）
   utils/               # 通用工具子包：device / numeric / audio / paths / chunk_io（两阶段中间文件 <stem>.chunks.npz 存取）
   extract/             # 子模块 1：嵌入提取
     extractor.py       #   ChunkExtractor：模型加载、波形预处理、chunk 生成器（chunk 生产唯一来源）
@@ -126,6 +128,9 @@ common/
 （逐 chunk 的 observations 含 embedding + 帧级输出参数）
 
 ```bash
+# stage1 端到端（等价于 run.py --stage 1，不启用 separation）
+python3 -m diarization.app --wav <音频> --output_dir <dir> --config config/config.yaml
+
 # 阶段 1：嵌入提取（产出 embeddings/<stem>.chunks.npz）
 python3 -m diarization.extract.app --wav <音频> --output_dir <dir> --config config/config.yaml
 
@@ -138,8 +143,9 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 ### CLI 参数
 
 两个分阶段入口（`diarization.extract.app` 提取 / `diarization.cluster.app` 聚类）
-共用 `common/config/pipeline.py` 的同一个参数解析器（端到端入口为仓库根目录的
-`run.py`）。全部调参项以 `config/config.yaml` 为唯一来源（逐项说明见
+与 stage1 端到端入口 `diarization.app` 共用 `common/config/pipeline.py` 的同一个
+参数解析器（完整编排入口为仓库根目录的 `run.py`）。全部调参项以 `config/config.yaml`
+为唯一来源（逐项说明见
 `config/README.md`），CLI 仅保留运行时输入、模型/环境覆盖与开关；合并优先级：
 argparse 默认值 < YAML 配置 < 显式 CLI 参数。
 

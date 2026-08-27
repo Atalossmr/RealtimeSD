@@ -5,7 +5,7 @@
 
 ## 项目内容
 
-- 入口：`python3 run.py <音频文件>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）
+- 入口：`python3 run.py <音频文件>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer；`--stage {1,2,3}` 控制推进阶段）、`python3 -m diarization.app`（仅 diarization 阶段）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）
 - 配置文件：`config/config.yaml`（diarization）、`config/asr.yaml`（ASR 转写）
 - 管线实现：`diarization/`（extract + cluster）+ `separation/`（分段音频导出），模型代码统一在 `common/models/`
 - 运行脚本：`run.py`（一键编排）、`test_der.py`（DER 评估）
@@ -85,8 +85,14 @@ python3 run.py <音频.wav> \
 仅跑 diarization（不启动 ASR/viewer，跑完直接退出）：
 
 ```bash
-python3 run.py <音频.wav> --no-asr --no-viewer --no-wait
+python3 run.py <音频.wav> --stage 1 --no-viewer --no-wait
 ```
+
+`--stage` 控制流水线推进到哪一阶段（累积式，默认 3 跑完整管线）：
+
+- `--stage 1`：仅 diarization（RTTM 产物；等价于 `python3 -m diarization.app`）
+- `--stage 2`：diarization + speech separation（导出分段音频）
+- `--stage 3`：再加 ASR 转写（完整管线）
 
 调试与可视化：
 
@@ -140,7 +146,7 @@ python3 test_der.py <wav 文件>
 - `RUN_NAME`
 - `DEBUG`
 - `SHOW_RTTM`
-- `WITH_ASR`（=0 时不启动 ASR 跟随进程）
+- `STAGE`（流水线阶段 1/2/3，对应 `--stage`，默认 3）
 - `ASR_CONFIG_PATH`（ASR 转写配置，默认 `./config/asr.yaml`）
 - `WITH_VIEWER`（=0 时不启动结果可视化服务器）
 - `VIEWER_PORT`（默认为 8000）
