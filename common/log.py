@@ -1,7 +1,8 @@
-"""日志初始化（asr / diarization 共用）。"""
+"""日志初始化与结构化日志（asr / diarization / separation 共用）。"""
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -31,4 +32,22 @@ def setup_logger(verbose: bool, run_log_path: Optional[str] = None) -> None:
     logging.captureWarnings(True)
 
 
-__all__ = ["setup_logger"]
+def log_structured(
+    logger: logging.Logger, level: int, prefix: str, title: str, payload: object
+) -> None:
+    """输出结构化日志事件：`<prefix> <title>:` 后跟 indent=2 的 JSON payload。
+
+    日志行格式与 tools/ 下的分析脚本（如 analyze_log.py）约定一致，
+    改动格式需同步消费者。
+    """
+
+    logger.log(
+        level,
+        "%s %s:\n%s",
+        prefix,
+        title,
+        json.dumps(payload, indent=2, ensure_ascii=False),
+    )
+
+
+__all__ = ["setup_logger", "log_structured"]

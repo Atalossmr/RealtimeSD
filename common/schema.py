@@ -23,15 +23,6 @@ class ChunkObservation:
 
 
 @dataclass
-class SpeakerTurn:
-    """写入 RTTM 的说话人时间段（speaker 为内部 global id）。"""
-
-    start: float
-    end: float
-    speaker_id: int
-
-
-@dataclass
 class ChunkArtifacts:
     """一个 chunk 的全部生产物：observations + 帧级输出所需的参数。
 

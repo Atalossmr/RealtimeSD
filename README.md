@@ -5,10 +5,10 @@
 
 ## 项目内容
 
-- 入口：`python3 -m diarization.app`（端到端）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）
+- 入口：`python3 run.py <音频文件>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）
 - 配置文件：`config/config.yaml`（diarization）、`config/asr.yaml`（ASR 转写）
-- 管线实现：`diarization/`
-- 运行脚本：`run.py`（一键编排：ASR 先就绪，再启管线与 viewer）、`test_der.py`
+- 管线实现：`diarization/`（extract + cluster）+ `separation/`（分段音频导出），模型代码统一在 `common/models/`
+- 运行脚本：`run.py`（一键编排）、`test_der.py`（DER 评估）
 - DER 评估：`tools/compute_der.py`
 - 运行日志分析：`tools/analyze_log.py`
 - 结果可视化：`viewer/`（波形 + ASR 时间线）
@@ -65,31 +65,27 @@ export HF_TOKEN=your_token
 单文件：
 
 ```bash
-python3 -m diarization.app \
-  --wav <音频.wav> \
-  --output_dir ./exp/demo \
-  --config ./config/config.yaml
-```
-
-目录批量：
-
-```bash
-python3 -m diarization.app \
-  --wav <音频目录> \
-  --output_dir ./exp/batch_demo \
-  --config ./config/config.yaml
+python3 run.py <音频.wav> \
+  --config ./config/config.yaml \
+  --run_name demo
 ```
 
 常见覆盖参数：
 
 ```bash
-python3 -m diarization.app \
-  --wav <音频目录> \
-  --output_dir ./exp/batch_demo \
+python3 run.py <音频.wav> \
   --config ./config/config.yaml \
+  --run_name demo \
   --model_path <本地 ckpt 路径> \
   --hf_cache_dir ./pretrained/huggingface \
+  --device cuda:0 \
   --verbose
+```
+
+仅跑 diarization（不启动 ASR/viewer，跑完直接退出）：
+
+```bash
+python3 run.py <音频.wav> --no-asr --no-viewer --no-wait
 ```
 
 调试与可视化：
@@ -117,13 +113,13 @@ output_dir/
 基础运行：
 
 ```bash
-python3 run.py <音频目录或 wav 文件>
+python3 run.py <wav 文件>
 ```
 
 运行时同步在控制台打印 RTTM：
 
 ```bash
-SHOW_RTTM=1 python3 run.py <音频目录>
+SHOW_RTTM=1 python3 run.py <wav 文件>
 ```
 
 带 DER 评估（需提供参考 RTTM 目录）：
@@ -131,7 +127,7 @@ SHOW_RTTM=1 python3 run.py <音频目录>
 ```bash
 REF_RTTM=<参考 rttm 目录> \
 RUN_NAME=baseline \
-python3 test_der.py <音频目录>
+python3 test_der.py <wav 文件>
 ```
 
 脚本常用环境变量（在 `run.py` 中作为对应命令行参数的缺省值）：
@@ -164,8 +160,9 @@ python3 test_der.py <音频目录>
 
 ## 仓库结构
 
-- `diarization/`：说话人识别及语音分离部分
-- `common/`：公共实现（配置合并、日志、ModelScope 缓存解析）
+- `diarization/`：说话人识别（extract + cluster 两级，chunk 管线）
+- `separation/`：分段音频导出（commit 区重叠检测 + TIGER 分离，接流式 ASR）
+- `common/`：公共实现（配置合并、日志、chunk 契约 schema/frames、模型封装 `common/models/`、ModelScope 缓存解析）
 - `speakerlab/`：3D-Speaker相关依赖与 `md-eval.pl`
 - `look2hear`：TIGER相关依赖
 - `tools`：常用工具，包括参数扫描，log分析等

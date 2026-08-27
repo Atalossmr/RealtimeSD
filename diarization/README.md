@@ -75,38 +75,45 @@
 
 ## 模块分工
 
-包按两个阶段拆成两个子模块，顶层为共享层与端到端组合：
+包按两个阶段拆成两个顶层包，共享契约与模型代码上提 `common/`；端到端组合层
+（原 `diarization/pipeline.py` + `diarization/app.py`）已并入仓库根目录的
+`run.py`（`run_diarization`）：
 
 ```
-diarization/
-  app.py               # 端到端 CLI 主入口
-  pipeline.py          # 端到端组合：ChunkDiarizationPipeline = extract + cluster
-  config.py            # ChunkPipelineConfig + YAML 加载/键名校验 + CLI 定义 + 合并
-  constants.py         # 路径常量
-  schema.py            # 共享数据结构：ChunkObservation / ChunkArtifacts / SpeakerTurn / 调试 TypedDict
-  utils/               # 通用工具子包：log / device / numeric / audio / paths / frames（commit 区帧裁剪）/ chunk_io（两阶段中间文件 <stem>.chunks.npz 存取）
+diarization/           # stage1：嵌入提取 + 聚类 + RTTM 输出
+  utils/               # 通用工具子包：device / numeric / audio / paths / chunk_io（两阶段中间文件 <stem>.chunks.npz 存取）
   extract/             # 子模块 1：嵌入提取
     extractor.py       #   ChunkExtractor：模型加载、波形预处理、chunk 生成器（chunk 生产唯一来源）
     track_builder.py   #   chunk 内 local track 构造：纯净区优先、overlap_fallback 回退、时长门控
-    models/            #   embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/ hf_resolver
     app.py             #   提取阶段 CLI（python3 -m diarization.extract.app）
   cluster/             # 子模块 2：聚类与输出
     base.py            #   后端接口 BaseChunkClusterer
     backends/          #   内置后端与工厂 build_clusterer
       streaming.py     #     StreamingChunkClusterer：默认 streaming 后端（Hungarian + SMA，一次定案）
       ahc.py           #     AHCChunkClusterer：离线层次聚类后端
-    rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加）
+    rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加；SpeakerTurn 定义于此）
     post_process.py    #   refined 级输出（RefinedRTTMWriter，merge 事件动态重生成）+ 小样本簇强制合并（ahc finalize 内重映射）
-    runner.py          #   run_clustering：聚类消费循环（pipeline.py 与 cluster/app 共用）
+    runner.py          #   run_clustering：聚类消费循环（run.py 与 cluster/app 共用）
     app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
-  separation/          # 子模块 3：分段音频导出（接流式 ASR；仅 streaming 后端生效）
-    exporter.py        #   StreamingSegmentExporter：commit 区重叠检测、能量门控、归属匹配与回退决策
-    separator.py       #   TigerSeparator：TIGER 2 路分离的惰性封装
-    assembler.py       #   SegmentAssembler：open-segment 跨 commit 区拼接与闭合推出（与 rttm_writer 的 open-turn 同构）
-    sink.py            #   SegmentCallback / WavSegmentSink：wav 落盘 + manifest.jsonl
-    audio.py           #   切片/能量纯函数：slice_absolute / rms / rms_over_regions
+
+separation/            # stage2：分段音频导出（接流式 ASR；仅 streaming 后端生效）
+  exporter.py          #   StreamingSegmentExporter：commit 区重叠检测、能量门控、归属匹配与回退决策
+  assembler.py         #   SegmentAssembler：open-segment 跨 commit 区拼接与闭合推出（与 rttm_writer 的 open-turn 同构）
+  sink.py              #   SegmentCallback / WavSegmentSink：wav 落盘 + manifest.jsonl
+  audio.py             #   切片/能量纯函数：slice_absolute / rms / rms_over_regions
+
+common/
+  constants.py         # 路径常量（BASE_DIR）
+  schema.py            # 共享数据结构：ChunkObservation / ChunkArtifacts / 调试 TypedDict
+  frames.py            # commit 区帧裁剪（RTTM writer 与 separation 共用单份实现）
+  pipeline_config.py   # ChunkPipelineConfig + YAML 加载/键名校验 + CLI 定义 + 合并
+  log.py               # setup_logger / log_structured
+  models/              # 模型封装：embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/
+                       #   hf_resolver / tiger（TigerSeparator：TIGER 2 路分离的惰性封装）
 ```
 
+- diarization 与 separation 两包互不 import，共享契约（schema / frames /
+  pipeline_config / models）统一从 `common` 取，由 `run.py` 做组合接线。
 - 若要新增聚类方法，则需在 `cluster/backends/` 下新建模块实现 `BaseChunkClusterer`（具体接口见 `cluster/base.py`）并在 `build_clusterer` 注册。
 
 ## 输入输出与调试
@@ -128,15 +135,15 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 
 ### CLI 参数
 
-三个入口（`diarization.app` 端到端 / `diarization.extract.app` 提取 /
-`diarization.cluster.app` 聚类）共用 `diarization/config.py` 的同一个参数
-解析器。全部调参项以 `config/config.yaml` 为唯一来源（逐项说明见
+两个分阶段入口（`diarization.extract.app` 提取 / `diarization.cluster.app` 聚类）
+共用 `common/pipeline_config.py` 的同一个参数解析器（端到端入口为仓库根目录的
+`run.py`）。全部调参项以 `config/config.yaml` 为唯一来源（逐项说明见
 `config/README.md`），CLI 仅保留运行时输入、模型/环境覆盖与开关；合并优先级：
 argparse 默认值 < YAML 配置 < 显式 CLI 参数。
 
 | 参数 | 说明 |
 | --- | --- |
-| `--wav` | 输入音频（`diarization.app` / `extract.app` 必填）：单个 wav/flac/mp3、目录，或每行一个路径的文本文件 |
+| `--wav` | 输入音频（`extract.app` 必填）：单个 wav/flac/mp3、目录，或每行一个路径的文本文件 |
 | `--input` | 仅 `diarization.cluster.app`（必填）：`.chunks.npz`、含 npz 的目录，或路径清单文本 |
 | `--output_dir` | 必填；输出目录（RTTM 在 `rttm/`、npz 在 `embeddings/`、分段音频在 `segments/`、日志在 `logs/`） |
 | `--config` | YAML 配置文件路径，默认 `config/config.yaml` |
@@ -233,10 +240,10 @@ diarization 与 ASR / viewer 之间全部经共享输出目录的文件交互。
 
 ### 调试建议
 
-常用启动：
+常用启动（端到端入口为 `run.py`）：
 
 ```bash
-python3 -m diarization.app --debug --verbose --show_rttm ...
+python3 run.py <音频.wav> --debug --verbose --show_rttm
 ```
 
 重点日志字段：

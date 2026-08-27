@@ -16,14 +16,25 @@ RTTM 行内的 speaker 字段直接写 clusterer 的 global id，无额外编号
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import numpy as np
 
-from ..schema import SpeakerTurn
-from ..utils import ensure_parent_dir, iter_commit_frames
+from common.frames import iter_commit_frames
+
+from ..utils import ensure_parent_dir
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SpeakerTurn:
+    """写入 RTTM 的说话人时间段（speaker 为内部 global id）。"""
+
+    start: float
+    end: float
+    speaker_id: int
 
 
 class AppendOnlyRTTMWriter:

@@ -1,8 +1,8 @@
 """嵌入提取阶段：音频 -> 逐 chunk 的 ChunkArtifacts（含 embedding）。
 
-`ChunkExtractor` 是 chunk 生产的唯一来源：端到端流程（diarization/pipeline.py）与
-提取 CLI（extract/app.py）共用它，保证两个阶段的 chunk 切分、
-segmentation、track 聚合与 embedding 完全一致。
+`ChunkExtractor` 是 chunk 生产的唯一来源：端到端流程（run.py 的
+`run_diarization`）与提取 CLI（extract/app.py）共用它，保证两个阶段的
+chunk 切分、segmentation、track 聚合与 embedding 完全一致。
 """
 
 from __future__ import annotations
@@ -17,15 +17,15 @@ import torch.nn.functional as F
 from speakerlab.process.processor import FBank
 from speakerlab.utils.fileio import load_audio
 
-from ..utils import save_chunks
-from ..config import ChunkPipelineConfig
-from ..schema import ChunkArtifacts, ChunkObservation
-from ..utils import resample_waveform_if_needed, resolve_device
-from .models.embedding_infer import (
+from common.models.embedding_infer import (
     NativeERes2NetV2SegmentEmbedder,
     load_embedding_model,
 )
-from .models.segmentation_infer import PyannoteStreamingSegmentation
+from common.models.segmentation_infer import PyannoteStreamingSegmentation
+from common.pipeline_config import ChunkPipelineConfig
+from common.schema import ChunkArtifacts, ChunkObservation
+
+from ..utils import resample_waveform_if_needed, resolve_device, save_chunks
 from .track_builder import ChunkTrackBuilder, LocalTrack
 
 

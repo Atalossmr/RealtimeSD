@@ -1,14 +1,13 @@
 """run.py / test_der.py 共用的编排辅助。
 
 两脚本共有的部分统一收敛到这里：环境变量布尔缺省、公共 CLI 参数、
-diarization 管线子进程命令组装、results.txt 按 run 追加的记录头。
+results.txt 按 run 追加的记录头。
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 
@@ -34,38 +33,6 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_pipeline_cmd(
-    args: argparse.Namespace, audio: object, exp_dir: Path, config: object
-) -> list[str]:
-    """组装 diarization 管线子进程命令（两脚本共用）。"""
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "diarization.app",
-        "--wav",
-        str(audio),
-        "--output_dir",
-        str(exp_dir),
-        "--config",
-        str(config),
-    ]
-    if args.model_path:
-        cmd += ["--model_path", args.model_path]
-    if getattr(args, "device", None):
-        # run.py 暂无 --device 参数，故用 getattr 兜底；显式 CLI 优先于 YAML。
-        cmd += ["--device", args.device]
-    if args.hf_cache_dir:
-        cmd += ["--hf_cache_dir", args.hf_cache_dir]
-    if args.hf_token:
-        cmd += ["--hf_token", args.hf_token]
-    if args.debug:
-        cmd += ["--debug", "--verbose"]
-    if args.show_rttm:
-        cmd += ["--show_rttm"]
-    return cmd
-
-
 def append_run_header(
     results_file: Path,
     run_name: str,
@@ -89,6 +56,5 @@ def append_run_header(
 __all__ = [
     "env_flag",
     "add_common_args",
-    "build_pipeline_cmd",
     "append_run_header",
 ]

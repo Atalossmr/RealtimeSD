@@ -4,7 +4,7 @@
 
 1. 用 seg_scores 硬标签逐帧统计活跃 global speaker，>=2 人活跃即重叠帧；
 2. 无重叠帧：各 speaker 的活跃帧直接从原始波形切片，拼成音频段输出；
-3. 有重叠帧：TIGER 分离整个 commit 区（固定 2 路，见 separator.py），在
+3. 有重叠帧：TIGER 分离整个 commit 区（固定 2 路，见 common/models/tiger.py），在
    重叠帧区间做能量门控（音轨 RMS / 混合 RMS）：
    - 两路都过：2x2 embedding 互斥匹配（参照为本 chunk 观测 embedding），
      重叠帧用各自分到的音轨、独占帧用原始音频；
@@ -28,16 +28,18 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 import torch
 
-from ..config import ChunkPipelineConfig
-from ..schema import ChunkArtifacts
-from ..utils import iter_commit_frames, log_structured
+from common.frames import iter_commit_frames
+from common.log import log_structured
+from common.models import TigerSeparator
+from common.pipeline_config import ChunkPipelineConfig
+from common.schema import ChunkArtifacts
+
 from .assembler import SegmentAssembler, SpeakerPiece
-from .audio import AudioSource, rms_over_regions
-from .separator import TigerSeparator
+from .audio import AudioSource, rms_over_regions, slice_absolute
 from .sink import SegmentCallback, WavSegmentSink
 
 if TYPE_CHECKING:
-    from ..extract.models.embedding_infer import NativeERes2NetV2SegmentEmbedder
+    from common.models.embedding_infer import NativeERes2NetV2SegmentEmbedder
 
 
 logger = logging.getLogger(__name__)
@@ -66,7 +68,12 @@ class StreamingSegmentExporter:
         self.uri = uri
         on_segment = on_segment or WavSegmentSink(output_dir, uri, self.sample_rate)
         self.assembler = SegmentAssembler(config, self.sample_rate, uri, on_segment)
-        self.separator = TigerSeparator(config, self.sample_rate, embedder.device)
+        self.separator = TigerSeparator(
+            config.separation_model,
+            config.hf_cache_dir,
+            self.sample_rate,
+            embedder.device,
+        )
 
     # ------------------------------------------------------------------
     # 帧级活跃与区间工具
@@ -259,9 +266,10 @@ class StreamingSegmentExporter:
 
         # ---- 有重叠：TIGER 分离整个 commit 区 ----
         overlap_frames = [frames[i] for i in sorted(overlap_frame_ids)]
-        separated = self.separator.separate(
-            self.waveform, chunk.commit_start, chunk.commit_end
+        mix = slice_absolute(
+            self.waveform, 0.0, chunk.commit_start, chunk.commit_end, self.sample_rate
         )
+        separated = self.separator.separate(mix) if mix is not None else None
         if separated is None:
             log_structured(
                 logger,

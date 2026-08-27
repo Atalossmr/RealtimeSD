@@ -54,9 +54,9 @@ from analyze_embeddings import best_threshold_err, dprime, pair_sims  # noqa: E4
 from compute_der import compute_der_batch  # noqa: E402
 from rttm_utils import load_rttm  # noqa: E402
 
+from common.pipeline_config import ChunkPipelineConfig  # noqa: E402
+from common.schema import ChunkObservation  # noqa: E402
 from diarization.cluster.post_process import write_refined_rttm  # noqa: E402
-from diarization.config import ChunkPipelineConfig  # noqa: E402
-from diarization.schema import ChunkObservation  # noqa: E402
 
 
 logger = logging.getLogger("oracle_segments")
@@ -89,7 +89,7 @@ def iter_ref_turns(ref_dir: Path) -> list[tuple[str, Path, dict]]:
 def cmd_extract(args: argparse.Namespace) -> None:
     import torch
 
-    from diarization.extract.models.embedding_infer import (
+    from common.models.embedding_infer import (
         NativeERes2NetV2SegmentEmbedder,
         load_embedding_model,
     )

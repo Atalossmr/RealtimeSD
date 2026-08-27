@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from ...config import ChunkPipelineConfig
+from common.pipeline_config import ChunkPipelineConfig
+
 from ..base import BaseChunkClusterer
 from .ahc import AHCChunkClusterer
 from .streaming import StreamingChunkClusterer

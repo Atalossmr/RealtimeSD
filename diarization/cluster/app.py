@@ -14,9 +14,14 @@ import os
 import sys
 from pathlib import Path
 
+from common.log import setup_logger
+from common.pipeline_config import (
+    build_arg_parser,
+    config_from_args,
+    merge_args_with_config,
+)
+
 from ..utils import load_chunks
-from ..config import build_arg_parser, config_from_args, merge_args_with_config
-from ..utils import setup_logger
 from .backends import build_clusterer
 from .rttm_writer import AppendOnlyRTTMWriter
 from .runner import run_clustering

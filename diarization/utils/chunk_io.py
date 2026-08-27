@@ -22,7 +22,8 @@ from pathlib import Path
 
 import numpy as np
 
-from ..schema import ChunkArtifacts, ChunkObservation
+from common.schema import ChunkArtifacts, ChunkObservation
+
 from .paths import ensure_parent_dir
 
 

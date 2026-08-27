@@ -5,7 +5,8 @@
 
 1. ASR 跟随进程（python -m asr.app --follow）先启动，轮询等待其就绪哨兵
    （--ready_file，模型加载完成后 touch）；ASR 进程提前退出或超时则整体失败；
-2. ASR 就绪后启动 diarization 管线（python -m diarization.app）和 viewer 服务器；
+2. ASR 就绪后启动 viewer 服务器，并在本进程内跑 diarization 管线
+   （`run_diarization` = extract + cluster + 分段音频导出）；
 3. 管线结束（无论成败）→ touch done 哨兵 → 等 ASR 收尾落盘 transcript →
    打印"音频已处理完成"并挂起等待（viewer 保持可访问）；用户 Ctrl+C
    （或 server 因其他原因退出，如 POST /api/shutdown）后脚本才退出并
@@ -22,12 +23,13 @@
 
 用法：
 
-    python3 run.py [audio_input] [--config config/config.yaml] [--run_name default]
+    python3 run.py <音频文件> [--config config/config.yaml] [--run_name default]
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import shlex
 import shutil
@@ -35,15 +37,24 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
+import numpy as np
 import yaml
+from speakerlab.utils.fileio import load_audio
 
-from common.run_helpers import (
-    add_common_args,
-    append_run_header,
-    build_pipeline_cmd,
-    env_flag,
+from common.log import log_structured, setup_logger
+from common.pipeline_config import (
+    ChunkPipelineConfig,
+    config_from_args,
+    merge_args_with_config,
 )
+from common.run_helpers import add_common_args, append_run_header, env_flag
+from common.schema import ChunkArtifacts, ChunkDebugInfo, ChunkObservation
+from diarization.cluster.backends import build_clusterer
+from diarization.cluster.rttm_writer import AppendOnlyRTTMWriter
+from diarization.cluster.runner import run_clustering
+from diarization.extract.extractor import ChunkExtractor
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -52,6 +63,8 @@ _DEFAULT_READY_TIMEOUT = 3600.0
 
 _TEST_NAME = "common"  # 输出固定在 {output_root}/common/{run_name}
 
+logger = logging.getLogger(__name__)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -59,11 +72,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "audio",
-        nargs="?",
-        default="./datasets",
-        help="输入音频（wav）",
+        help="输入音频文件（wav/flac/mp3；仅单个文件，不接受目录）",
     )
     add_common_args(parser)
+    parser.add_argument(
+        "--device", default="auto", help="运行设备，如 auto/cpu/cuda:0"
+    )
+    parser.add_argument(
+        "--model_type",
+        default="eres2netv2",
+        choices=["eres2netv2"],
+        help="speaker encoder 类型，当前仅支持 eres2netv2",
+    )
+    parser.add_argument(
+        "--segmentation_model",
+        default="pyannote/segmentation-3.0",
+        help="pyannote segmentation 模型名",
+    )
+    parser.add_argument("--verbose", action="store_true", help="启用 DEBUG 级日志")
     parser.add_argument(
         "--asr_config",
         default=os.environ.get("ASR_CONFIG_PATH", "./config/asr.yaml"),
@@ -108,6 +134,192 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _log_debug_chunk(
+    *,
+    chunk_index: int,
+    chunk_start: float,
+    commit_start: float,
+    commit_end: float,
+    seg_scores: np.ndarray,
+    observations: list[ChunkObservation],
+    local_to_global: dict[int, int],
+    debug_info: ChunkDebugInfo,
+    emitted_frames: int,
+) -> None:
+    """输出 chunk 级调试信息"""
+
+    debug_summary = {
+        "chunk_index": int(chunk_index),
+        "chunk": {
+            "start": round(float(chunk_start), 3),
+            "commit_start": round(float(commit_start), 3),
+            "end": round(float(commit_end), 3),
+        },
+        "segmentation_summary": {
+            "shape": [int(dim) for dim in seg_scores.shape],
+            "min": round(float(np.min(seg_scores)), 6),
+            "max": round(float(np.max(seg_scores)), 6),
+            "mean": round(float(np.mean(seg_scores)), 6),
+        },
+        "window_state": {
+            "observations": int(len(observations)),
+            "embedded": int(len(observations)),
+            "emitted": int(emitted_frames),
+        },
+        "assignment": {
+            "local_to_global": {
+                str(local_idx): int(global_id)
+                for local_idx, global_id in sorted(local_to_global.items())
+            },
+            "local_assignments": debug_info["local_assignments"],
+        },
+        "centroids": {
+            "before": int(debug_info["num_centroids_before"]),
+            "after": int(debug_info["num_centroids_after"]),
+        },
+    }
+    log_structured(logger, logging.DEBUG, "[debug]", "window_summary", debug_summary)
+
+    for key in ("new_speakers", "updated_speakers", "skipped_updates"):
+        if debug_info[key]:
+            log_structured(logger, logging.DEBUG, "[debug]", key, debug_info[key])
+    if debug_info["global_speakers"]:
+        log_structured(
+            logger,
+            logging.INFO,
+            "[runtime]",
+            "current_global_speakers",
+            debug_info["global_speakers"],
+        )
+
+
+def run_diarization(
+    config: ChunkPipelineConfig,
+    audio_path: str,
+    exp_dir: Path,
+    model_path: Optional[str] = None,
+) -> str:
+    """单条音频的 diarization 管线：extract + cluster + RTTM/segments 输出。
+
+    供 run.py main 与 test_der.py 复用；返回 raw RTTM 路径。
+    """
+
+    config.output_dir = str(exp_dir)
+
+    extractor = ChunkExtractor(config, model_path)
+    clusterer = build_clusterer(config)
+
+    waveform = load_audio(audio_path, obj_fs=config.sample_rate)
+    waveform = extractor.prepare_waveform(waveform, config.sample_rate)
+
+    uri = Path(audio_path).stem
+    raw_rttm_path = str(exp_dir / "rttm" / f"{uri}.{clusterer.output_tag}.rttm")
+    writer = AppendOnlyRTTMWriter(
+        raw_rttm_path,
+        uri,
+        config.min_segment_duration,
+        config.segment_merge_gap,
+        config.show_rttm,
+    )
+
+    # 音频片段导出：仅 streaming 后端下逐 commit 区生效。
+    # 默认 WavSegmentSink 落盘 wav + manifest，转写由 ASR 跟随进程
+    # 读取输出目录独立完成；TIGER 仍是按需惰性加载。
+    exporter = None
+    if config.separation_enabled:
+        if clusterer.deferred:
+            logger.warning(
+                "[separation] separation 仅支持 streaming 后端，当前后端 %s 已跳过",
+                type(clusterer).__name__,
+            )
+        else:
+            from separation import StreamingSegmentExporter
+
+            exporter = StreamingSegmentExporter(
+                config,
+                waveform,
+                extractor.embedder,
+                uri=uri,
+                output_dir=str(exp_dir / "segments"),
+            )
+
+    def chunk_log_hook(
+        chunk: ChunkArtifacts,
+        local_to_global: Optional[dict[int, int]],
+        debug_info: ChunkDebugInfo,
+        emitted_frames: int,
+    ) -> None:
+        """# 每 chunk 分配完成后的回调，负责日志与分段导出"""
+
+        # 输出本身由 runner/writer 完成。deferred 后端下 local_to_global
+        # 为 None、emitted_frames 为 0（重放阶段不再回调）。
+        # 分段音频导出：commit 区音频段输出（重叠区经 TIGER 分离）。
+        if exporter is not None and local_to_global:
+            exporter.handle_chunk(chunk, local_to_global)
+        log_structured(
+            logger,
+            logging.INFO,
+            "[runtime]",
+            "frame_decision",
+            {
+                "chunk_index": int(chunk.chunk_index),
+                "chunk_start": round(float(chunk.chunk_start), 3),
+                "commit": [
+                    round(float(chunk.commit_start), 3),
+                    round(float(chunk.commit_end), 3),
+                ],
+                "local_to_global": {
+                    str(local_idx): int(global_id)
+                    for local_idx, global_id in sorted(
+                        (local_to_global or {}).items()
+                    )
+                },
+            },
+        )
+        if config.debug:
+            _log_debug_chunk(
+                chunk_index=chunk.chunk_index,
+                chunk_start=chunk.chunk_start,
+                commit_start=chunk.commit_start,
+                commit_end=chunk.commit_end,
+                seg_scores=chunk.seg_scores,
+                observations=chunk.observations,
+                local_to_global=local_to_global or {},
+                debug_info=debug_info,
+                emitted_frames=emitted_frames,
+            )
+
+    # refined 级（两后端通用）：streaming 逐 chunk + merge 事件动态重生成，
+    # ahc（deferred）在 EOF 重放完成后最终刷新；均在 EOF 叠加小样本合并。
+    from diarization.cluster.post_process import RefinedRTTMWriter
+
+    base = raw_rttm_path[: -len(f".{clusterer.output_tag}.rttm")]
+    refiner = RefinedRTTMWriter(
+        raw_rttm_path,
+        f"{base}.refined.rttm",
+        clusterer,
+        min_count=config.post_merge_min_count,
+        min_similarity=config.post_merge_min_similarity,
+    )
+
+    # 生成器惰性生产 chunk：streaming 后端下输出延迟 ≈ 一个 hop，
+    # 不会因为组合成统一循环而引入额外的缓冲。
+    try:
+        run_clustering(
+            extractor.iter_chunk_artifacts(waveform),
+            clusterer,
+            writer,
+            chunk_hook=chunk_log_hook,
+            refiner=refiner,
+        )
+    finally:
+        # 闭合 exporter 残余的 open segment（音频结束，与 writer.finalize 同步）；
+        # 中途异常也要收尾，否则已累积的段音频不落盘。
+        if exporter is not None:
+            exporter.finalize()
+    return raw_rttm_path
+
+
 def _check_asr_config(config_path: Path) -> None:
     """WITH_ASR 需要 config 里开启分段导出且使用 streaming 后端。
 
@@ -133,6 +345,8 @@ def _check_input_paths(audio: Path, config_path: Path) -> None:
 
     if not audio.exists():
         raise SystemExit(f"ERROR: 音频输入不存在: {audio}")
+    if audio.is_dir():
+        raise SystemExit(f"ERROR: 音频输入只接受单个文件，不支持目录: {audio}")
     if not config_path.exists():
         raise SystemExit(f"ERROR: 配置文件不存在: {config_path}")
 
@@ -170,7 +384,8 @@ def _finish_asr(asr_proc: subprocess.Popen, done_file: Path) -> None:
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
 
     audio = Path(args.audio)
     config_path = Path(args.config)
@@ -183,6 +398,16 @@ def main() -> int:
 
     if args.asr:
         _check_asr_config(config_path)
+
+    # 合并 CLI 与 YAML（argparse 默认值 < YAML < 显式 CLI），构建管线配置。
+    merged_args = merge_args_with_config(parser, args, sys.argv[1:])
+    # 沿用原 build_pipeline_cmd 的传参语义：--debug/--show_rttm 为 true
+    # （含环境变量缺省）时作为显式 CLI 覆盖 YAML；为 false 时落回 YAML。
+    if args.debug:
+        merged_args.debug = True
+    if args.show_rttm:
+        merged_args.show_rttm = True
+    config = config_from_args(merged_args)
 
     # 只清理本次 run 自己的输出目录，同 output_root 下的其他历史 run 保留。
     shutil.rmtree(exp_dir, ignore_errors=True)
@@ -215,9 +440,7 @@ def main() -> int:
         },
     )
 
-    # ---- 组装子进程命令 ----
-    pipeline_cmd = build_pipeline_cmd(args, audio, exp_dir, config_path)
-
+    # ---- 组装子进程命令（ASR / viewer；diarization 已改为本进程内调用） ----
     asr_cmd = [
         sys.executable,
         "-m",
@@ -256,7 +479,14 @@ def main() -> int:
     logs_dir = exp_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     with open(logs_dir / "command.log", "w", encoding="utf-8") as log:
-        log.write(f"Command: {shlex.join(pipeline_cmd)}\n")
+        log.write(f"Audio: {audio}\n")
+        log.write(f"Config: {config_path}\n")
+        log.write(
+            "Pipeline: in-process run_diarization"
+            f" (device={config.device}, model_type={config.model_type},"
+            f" segmentation_model={config.segmentation_model},"
+            f" backend={config.clustering_backend})\n"
+        )
         if args.asr:
             log.write(f"ASR Command: {shlex.join(asr_cmd)}\n")
         if args.viewer:
@@ -274,7 +504,7 @@ def main() -> int:
             _wait_asr_ready(asr_proc, ready_file, args.asr_ready_timeout)
             print("ASR model ready.")
 
-        # 2. ASR 就绪后启动 viewer 与 diarization 管线。
+        # 2. ASR 就绪后启动 viewer 与 diarization 管线（本进程内）。
         if args.viewer:
             viewer_log = open(logs_dir / "viewer.log", "w", encoding="utf-8")
             try:
@@ -296,8 +526,19 @@ def main() -> int:
             else:
                 print(f"Viewer: http://127.0.0.1:{args.viewer_port}")
 
-        print(f"Starting pipeline: {shlex.join(pipeline_cmd)}")
-        pipeline_rc = subprocess.run(pipeline_cmd).returncode
+        # 管线日志写入 logs/run.log（控制台只保留脚本自身输出）；
+        # --debug 时同步提升日志级别（沿用原 build_pipeline_cmd 的约定）。
+        setup_logger(
+            bool(merged_args.verbose or args.debug), str(logs_dir / "run.log")
+        )
+        print(f"Starting diarization pipeline (in-process): {audio}")
+        try:
+            run_diarization(config, str(audio), exp_dir, model_path=merged_args.model_path)
+        except Exception:
+            # 管线失败不跳过收尾：记录后继续走 ASR/viewer 的 finally 清理。
+            logger.exception("Diarization pipeline failed")
+            print(f"ERROR: 管线执行失败，见 {logs_dir}/run.log", file=sys.stderr)
+            pipeline_rc = 1
 
         # 管线结束：先落哨兵放行 ASR 收尾并等其落盘，再进入交互等待，
         # 保证打印"音频已处理完成"时 transcript 已是最终版。

@@ -12,8 +12,9 @@ from typing import Optional
 
 import numpy as np
 
-from ...config import ChunkPipelineConfig
-from ...schema import ChunkDebugInfo, ChunkObservation
+from common.pipeline_config import ChunkPipelineConfig
+from common.schema import ChunkDebugInfo, ChunkObservation
+
 from ..base import BaseChunkClusterer
 from ..post_process import cluster_stats
 

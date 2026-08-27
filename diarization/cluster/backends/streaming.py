@@ -21,9 +21,10 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from ...config import ChunkPipelineConfig
+from common.pipeline_config import ChunkPipelineConfig
+from common.schema import ChunkDebugInfo, ChunkObservation
+
 from ..base import BaseChunkClusterer
-from ...schema import ChunkDebugInfo, ChunkObservation
 from ...utils import l2_normalize
 
 

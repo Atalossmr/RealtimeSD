@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 
 import torch
 
-from ..config import ChunkPipelineConfig
+from common.pipeline_config import ChunkPipelineConfig
+
 from .audio import AudioSource, slice_absolute
 from .sink import SegmentCallback
 

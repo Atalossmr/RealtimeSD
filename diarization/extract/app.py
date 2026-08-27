@@ -10,13 +10,15 @@ import logging
 import os
 import sys
 
-from ..config import (
+from common.log import setup_logger
+from common.pipeline_config import (
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
     validate_runtime_args,
 )
-from ..utils import collect_audio_paths, setup_logger
+
+from ..utils import collect_audio_paths
 from .extractor import ChunkExtractor
 
 

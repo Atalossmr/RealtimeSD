@@ -1,6 +1,6 @@
 """聚类消费循环：ChunkArtifacts 序列 -> clusterer 分配 -> writer 输出 raw RTTM。
 
-端到端流程（diarization/pipeline.py）与聚类 CLI（cluster/app.py）共用的唯一消费实现，
+端到端流程（run.py 的 `run_diarization`）与聚类 CLI（cluster/app.py）共用的唯一消费实现，
 保证流式与离线（deferred）后端在两条路径上行为一致。
 
 - 流式后端：逐 chunk 分配后即时写出帧级结果并闭合沉默 turn，零缓冲直通；
@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Callable, Iterable, Optional
 
-from ..schema import ChunkArtifacts, ChunkDebugInfo
+from common.schema import ChunkArtifacts, ChunkDebugInfo
 from .base import BaseChunkClusterer
 from .rttm_writer import AppendOnlyRTTMWriter
 
