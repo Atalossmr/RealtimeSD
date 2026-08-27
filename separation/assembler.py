@@ -12,9 +12,9 @@ from dataclasses import dataclass, field
 
 import torch
 
-from common.pipeline_config import ChunkPipelineConfig
+from common.config import ChunkPipelineConfig
 
-from .audio import AudioSource, slice_absolute
+from .utils import AudioSource, slice_absolute
 from .sink import SegmentCallback
 
 # 段内一片音频：(frame_start, frame_end, source)。

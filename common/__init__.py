@@ -1,9 +1,11 @@
 """asr / diarization / separation 共用的公共实现。
 
-各子模块保持独立的公共 API（如 `asr.config.merge_args_with_config`），
-跨模块重复的实现统一收敛到本包，原位置保留薄封装或 re-export。
+不做包级 re-export（避免隐式依赖），按子包取用：
 
-内容：配置合并（config）、管线配置（pipeline_config）、日志（log）、
-chunk 契约（schema / frames）、模型封装（models/）、ModelScope 缓存解析
-（modelscope）、编排辅助（run_helpers）、路径常量（constants）。
+- `common.config/`：配置体系（base 通用 YAML/CLI 合并机制；pipeline 管线配置）
+- `common.contracts/`：跨包数据契约（schema：ChunkArtifacts 等；frames：commit 区帧裁剪）
+- `common.utils/`：通用工具（log / run_helpers）
+- `common.models/`：模型封装（embedding / segmentation / tiger，hf_resolver /
+  modelscope 为模型缓存解析）
+- `common.constants`：路径常量（BASE_DIR）
 """

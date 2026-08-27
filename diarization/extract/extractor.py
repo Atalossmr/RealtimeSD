@@ -22,8 +22,8 @@ from common.models.embedding_infer import (
     load_embedding_model,
 )
 from common.models.segmentation_infer import PyannoteStreamingSegmentation
-from common.pipeline_config import ChunkPipelineConfig
-from common.schema import ChunkArtifacts, ChunkObservation
+from common.config import ChunkPipelineConfig
+from common.contracts import ChunkArtifacts, ChunkObservation
 
 from ..utils import resample_waveform_if_needed, resolve_device, save_chunks
 from .track_builder import ChunkTrackBuilder, LocalTrack

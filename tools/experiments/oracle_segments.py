@@ -54,8 +54,8 @@ from analyze_embeddings import best_threshold_err, dprime, pair_sims  # noqa: E4
 from compute_der import compute_der_batch  # noqa: E402
 from rttm_utils import load_rttm  # noqa: E402
 
-from common.pipeline_config import ChunkPipelineConfig  # noqa: E402
-from common.schema import ChunkObservation  # noqa: E402
+from common.config import ChunkPipelineConfig  # noqa: E402
+from common.contracts import ChunkObservation  # noqa: E402
 from diarization.cluster.post_process import write_refined_rttm  # noqa: E402
 
 

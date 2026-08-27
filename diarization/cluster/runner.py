@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Callable, Iterable, Optional
 
-from common.schema import ChunkArtifacts, ChunkDebugInfo
+from common.contracts import ChunkArtifacts, ChunkDebugInfo
 from .base import BaseChunkClusterer
 from .rttm_writer import AppendOnlyRTTMWriter
 

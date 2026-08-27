@@ -18,7 +18,7 @@ from pathlib import Path
 
 import torch
 
-from common.modelscope import resolve_modelscope_snapshot
+from common.models import resolve_modelscope_snapshot
 
 from .constants import MODELSCOPE_CACHE_DIR
 

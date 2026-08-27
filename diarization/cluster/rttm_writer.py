@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from common.frames import iter_commit_frames
+from common.contracts import iter_commit_frames
 
 from ..utils import ensure_parent_dir
 

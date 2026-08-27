@@ -9,7 +9,7 @@
 
 ## 一、config.yaml（diarization 管线）
 
-参数按模块分组，与 `common/pipeline_config.py` 的 `ChunkPipelineConfig` 字段一一对应。
+参数按模块分组，与 `common/config/pipeline.py` 的 `ChunkPipelineConfig` 字段一一对应。
 下表"默认"列为仓库自带 `config.yaml` 的生效值；YAML 缺省时落回dataclass中定义的默认值。
 
 ### 运行环境

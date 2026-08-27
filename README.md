@@ -161,8 +161,8 @@ python3 test_der.py <wav 文件>
 ## 仓库结构
 
 - `diarization/`：说话人识别（extract + cluster 两级，chunk 管线）
-- `separation/`：分段音频导出（commit 区重叠检测 + TIGER 分离，接流式 ASR）
-- `common/`：公共实现（配置合并、日志、chunk 契约 schema/frames、模型封装 `common/models/`、ModelScope 缓存解析）
+- `separation/`：分段音频导出（commit 区重叠检测 + TIGER 分离 + 身份确认，接流式 ASR）
+- `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志与编排辅助、`models/` 模型封装、路径常量）
 - `speakerlab/`：3D-Speaker相关依赖与 `md-eval.pl`
 - `look2hear`：TIGER相关依赖
 - `tools`：常用工具，包括参数扫描，log分析等

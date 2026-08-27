@@ -14,12 +14,12 @@ import os
 import sys
 from pathlib import Path
 
-from common.log import setup_logger
-from common.pipeline_config import (
+from common.config import (
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
 )
+from common.utils import setup_logger
 
 from ..utils import load_chunks
 from .backends import build_clusterer

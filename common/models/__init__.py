@@ -5,6 +5,7 @@ from .embedding_infer import (
     load_embedding_model,
 )
 from .hf_resolver import resolve_hf_checkpoint_file, resolve_hf_snapshot_path
+from .modelscope import resolve_modelscope_snapshot
 from .segmentation_infer import PyannoteStreamingSegmentation
 from .tiger import TigerSeparator
 
@@ -14,5 +15,6 @@ __all__ = [
     "NativeERes2NetV2SegmentEmbedder",
     "resolve_hf_checkpoint_file",
     "resolve_hf_snapshot_path",
+    "resolve_modelscope_snapshot",
     "TigerSeparator",
 ]

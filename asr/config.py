@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 
-from common import config as common_config
+from common.config import base as common_config
 
 from .constants import BASE_DIR
 

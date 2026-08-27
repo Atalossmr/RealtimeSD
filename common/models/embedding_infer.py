@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from common.modelscope import resolve_modelscope_snapshot
+from .modelscope import resolve_modelscope_snapshot
 
 from ..constants import BASE_DIR
 from speakerlab.models.eres2net.ERes2NetV2 import ERes2NetV2

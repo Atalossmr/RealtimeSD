@@ -30,9 +30,8 @@ from pathlib import Path
 
 import yaml
 
-from common.log import setup_logger
-from common.pipeline_config import config_from_args, merge_args_with_config
-from common.run_helpers import add_common_args, append_run_header, env_flag
+from common.config import config_from_args, merge_args_with_config
+from common.utils import add_common_args, append_run_header, env_flag, setup_logger
 from run import run_diarization
 
 _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}

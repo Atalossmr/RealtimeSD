@@ -40,17 +40,25 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import yaml
 from speakerlab.utils.fileio import load_audio
 
-from common.log import log_structured, setup_logger
-from common.pipeline_config import (
+from common.config import (
     ChunkPipelineConfig,
     config_from_args,
     merge_args_with_config,
+    validate_follow_requirements,
 )
-from common.run_helpers import add_common_args, append_run_header, env_flag
-from common.schema import ChunkArtifacts, ChunkDebugInfo, ChunkObservation
+from common.contracts import ChunkArtifacts, ChunkDebugInfo, ChunkObservation
+from common.utils import (
+    add_common_args,
+    append_run_header,
+    check_input_paths,
+    env_flag,
+    finish_follow_process,
+    log_structured,
+    setup_logger,
+    wait_process_ready,
+)
 from diarization.cluster.backends import build_clusterer
 from diarization.cluster.rttm_writer import AppendOnlyRTTMWriter
 from diarization.cluster.runner import run_clustering
@@ -320,76 +328,13 @@ def run_diarization(
     return raw_rttm_path
 
 
-def _check_asr_config(config_path: Path) -> None:
-    """WITH_ASR 需要 config 里开启分段导出且使用 streaming 后端。
-
-    ahc 后端不产出 segments manifest，ASR follow 进程会空转到超时。
-    """
-
-    with open(config_path, encoding="utf-8") as file_obj:
-        data = yaml.safe_load(file_obj) or {}
-    if not data.get("separation_enabled"):
-        raise SystemExit(
-            f"ERROR: ASR 跟随需要 {config_path} 中 separation_enabled 为 true"
-        )
-    backend = data.get("clustering_backend", "streaming")
-    if backend != "streaming":
-        raise SystemExit(
-            f"ERROR: ASR 跟随需要 {config_path} 中 clustering_backend 为 streaming"
-            f"（当前为 {backend!r}，该后端不产出分段 manifest）"
-        )
-
-
-def _check_input_paths(audio: Path, config_path: Path) -> None:
-    """启动前 fail-fast：音频/配置不存在时尽早报错，避免模型加载完才发现。"""
-
-    if not audio.exists():
-        raise SystemExit(f"ERROR: 音频输入不存在: {audio}")
-    if audio.is_dir():
-        raise SystemExit(f"ERROR: 音频输入只接受单个文件，不支持目录: {audio}")
-    if not config_path.exists():
-        raise SystemExit(f"ERROR: 配置文件不存在: {config_path}")
-
-
-def _wait_asr_ready(
-    asr_proc: subprocess.Popen, ready_file: Path, timeout: float
-) -> None:
-    """轮询等 ASR 模型就绪；进程早退或超时则报错退出。"""
-
-    deadline = time.monotonic() + timeout
-    while not ready_file.exists():
-        if asr_proc.poll() is not None:
-            raise RuntimeError(
-                f"ASR 进程在就绪前退出（rc={asr_proc.returncode}），见 transcribe.log"
-            )
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"等待 ASR 就绪超时（{timeout}s）")
-        time.sleep(1.0)
-
-
-def _finish_asr(asr_proc: subprocess.Popen, done_file: Path) -> None:
-    """落 done 哨兵放行 ASR 收尾，等其落盘；超时先 SIGTERM，仍不退出再 SIGKILL。"""
-
-    done_file.touch()
-    try:
-        asr_proc.wait(timeout=600)
-    except subprocess.TimeoutExpired:
-        # 收尾超时：先 SIGTERM，仍不退出再 SIGKILL，避免 run.py 永久挂起。
-        asr_proc.terminate()
-        try:
-            asr_proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            asr_proc.kill()
-            asr_proc.wait()
-
-
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
     audio = Path(args.audio)
     config_path = Path(args.config)
-    _check_input_paths(audio, config_path)
+    check_input_paths(audio, config_path)
     basic_dir = Path(args.output_root) / _TEST_NAME
     exp_dir = basic_dir / args.run_name
     results_file = basic_dir / "results.txt"
@@ -397,7 +342,7 @@ def main() -> int:
     ready_file = exp_dir / ".asr_ready"
 
     if args.asr:
-        _check_asr_config(config_path)
+        validate_follow_requirements(config_path)
 
     # 合并 CLI 与 YAML（argparse 默认值 < YAML < 显式 CLI），构建管线配置。
     merged_args = merge_args_with_config(parser, args, sys.argv[1:])
@@ -501,7 +446,7 @@ def main() -> int:
             print(f"Starting ASR follow process: {shlex.join(asr_cmd)}")
             asr_proc = subprocess.Popen(asr_cmd)
             print("Waiting for ASR model ready ...")
-            _wait_asr_ready(asr_proc, ready_file, args.asr_ready_timeout)
+            wait_process_ready(asr_proc, ready_file, args.asr_ready_timeout)
             print("ASR model ready.")
 
         # 2. ASR 就绪后启动 viewer 与 diarization 管线（本进程内）。
@@ -543,7 +488,7 @@ def main() -> int:
         # 管线结束：先落哨兵放行 ASR 收尾并等其落盘，再进入交互等待，
         # 保证打印"音频已处理完成"时 transcript 已是最终版。
         if asr_proc is not None:
-            _finish_asr(asr_proc, done_file)
+            finish_follow_process(asr_proc, done_file)
             asr_proc = None
 
         # 管线跑完后默认不立即退出：viewer 保持可访问，等用户 Ctrl+C
@@ -571,7 +516,7 @@ def main() -> int:
         # 中断/异常路径的统一收尾：ASR 正常路径已在交互等待前完成（asr_proc
         # 已置 None），这里只兜住管线运行中被 Ctrl+C 或出错的情况。
         if asr_proc is not None:
-            _finish_asr(asr_proc, done_file)
+            finish_follow_process(asr_proc, done_file)
         # viewer 在脚本退出前关闭（正常路径下它在交互等待结束时才走到这里）。
         if viewer_proc is not None:
             viewer_proc.terminate()

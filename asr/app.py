@@ -43,8 +43,9 @@ from .config import (
     config_from_args,
     merge_args_with_config,
 )
+from common.utils import setup_logger
+
 from .transcriber import SegmentTranscriber
-from .utils import setup_logger
 
 
 logger = logging.getLogger(__name__)

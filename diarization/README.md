@@ -97,23 +97,25 @@ diarization/           # stage1：嵌入提取 + 聚类 + RTTM 输出
     app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
 
 separation/            # stage2：分段音频导出（接流式 ASR；仅 streaming 后端生效）
-  exporter.py          #   StreamingSegmentExporter：commit 区重叠检测、能量门控、归属匹配与回退决策
+  exporter.py          #   StreamingSegmentExporter：编排（commit 区重叠检测、dispatch、回退策略、段闭合调度）
+  attribution.py       #   身份确认纯函数：overlap_regions / cosine / reference_embeddings /
+                       #     energy_gate / match_pair / best_match
   assembler.py         #   SegmentAssembler：open-segment 跨 commit 区拼接与闭合推出（与 rttm_writer 的 open-turn 同构）
   sink.py              #   SegmentCallback / WavSegmentSink：wav 落盘 + manifest.jsonl
-  audio.py             #   切片/能量纯函数：slice_absolute / rms / rms_over_regions
+  utils.py             #   切片/能量纯函数：AudioSource / slice_absolute / rms / rms_over_regions
 
 common/
   constants.py         # 路径常量（BASE_DIR）
-  schema.py            # 共享数据结构：ChunkObservation / ChunkArtifacts / 调试 TypedDict
-  frames.py            # commit 区帧裁剪（RTTM writer 与 separation 共用单份实现）
-  pipeline_config.py   # ChunkPipelineConfig + YAML 加载/键名校验 + CLI 定义 + 合并
-  log.py               # setup_logger / log_structured
+  config/              # 配置体系：base（通用 YAML/CLI 合并机制）+ pipeline（ChunkPipelineConfig + 管线 CLI helper）
+  contracts/           # 跨包数据契约：schema（ChunkObservation / ChunkArtifacts / 调试 TypedDict）+
+                       #   frames（commit 区帧裁剪，RTTM writer 与 separation 共用单份实现）
+  utils/               # 通用工具：log（setup_logger / log_structured）/ modelscope / run_helpers
   models/              # 模型封装：embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/
                        #   hf_resolver / tiger（TigerSeparator：TIGER 2 路分离的惰性封装）
 ```
 
-- diarization 与 separation 两包互不 import，共享契约（schema / frames /
-  pipeline_config / models）统一从 `common` 取，由 `run.py` 做组合接线。
+- diarization 与 separation 两包互不 import，共享契约（contracts / config /
+  models）统一从 `common` 取，由 `run.py` 做组合接线。
 - 若要新增聚类方法，则需在 `cluster/backends/` 下新建模块实现 `BaseChunkClusterer`（具体接口见 `cluster/base.py`）并在 `build_clusterer` 注册。
 
 ## 输入输出与调试
@@ -136,7 +138,7 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 ### CLI 参数
 
 两个分阶段入口（`diarization.extract.app` 提取 / `diarization.cluster.app` 聚类）
-共用 `common/pipeline_config.py` 的同一个参数解析器（端到端入口为仓库根目录的
+共用 `common/config/pipeline.py` 的同一个参数解析器（端到端入口为仓库根目录的
 `run.py`）。全部调参项以 `config/config.yaml` 为唯一来源（逐项说明见
 `config/README.md`），CLI 仅保留运行时输入、模型/环境覆盖与开关；合并优先级：
 argparse 默认值 < YAML 配置 < 显式 CLI 参数。
