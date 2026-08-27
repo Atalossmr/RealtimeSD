@@ -136,6 +136,13 @@ RUN_NAME=baseline \
 python3 test_der.py <wav 文件>
 ```
 
+`test_der.py` 也接受音频目录或每行一个路径的文本清单做批量评估：全部音频的
+RTTM 写入同一输出目录（模型只加载一次），最后输出逐文件 DER 与拼接全局 DER：
+
+```bash
+python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name task16
+```
+
 脚本常用环境变量（在 `run.py` 中作为对应命令行参数的缺省值）：
 
 - `CONFIG_PATH`
