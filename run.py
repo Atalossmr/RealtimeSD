@@ -20,7 +20,8 @@
 
 用法：
 
-    python3 run.py <音频文件> [--config config/config.yaml] [--run_name default]
+    python3 run.py <音频文件|目录|清单文本> [--config config/config.yaml] [--run_name default]
+    # 目录/清单为批量模式：模型只加载一次，逐文件处理，viewer 展示全部 uri
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from pathlib import Path
 
 import pipeline
 from common.config import config_from_args, merge_args_with_config
+from common.utils import collect_audio_paths
 from pipeline.cli import add_common_args, check_input_paths, env_flag
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -48,12 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "audio",
-        help="输入音频文件（wav/flac/mp3；仅单个文件，不接受目录）",
+        help="输入音频：单个文件（wav/flac/mp3）、目录，或每行一个路径的清单文本",
     )
     add_common_args(parser)
-    parser.add_argument(
-        "--device", default="auto", help="运行设备，如 auto/cpu/cuda:0"
-    )
+    parser.add_argument("--device", default="auto", help="运行设备，如 auto/cpu/cuda:0")
     parser.add_argument(
         "--model_type",
         default="eres2netv2",
@@ -97,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="wait",
         action="store_false",
         default=env_flag("WAIT_VIEWER", True),
-        help="管线结束后不挂起等待 Ctrl+C，直接收尾退出（无人值守/批处理场景）",
+        help="管线结束后不挂起等待 Ctrl+C，直接收尾退出",
     )
     parser.add_argument(
         "--viewer_port", type=int, default=int(os.environ.get("VIEWER_PORT", "8000"))
@@ -118,6 +118,9 @@ def main() -> int:
     audio = Path(args.audio)
     config_path = Path(args.config)
     check_input_paths(audio, config_path)
+    audio_paths = collect_audio_paths(str(audio))
+    if not audio_paths:
+        raise SystemExit(f"ERROR: 未收集到音频文件: {audio}")
     dirs = pipeline.resolve_run_dirs(args.output_root, _TEST_NAME, args.run_name)
 
     # 合并 CLI 与 YAML（argparse 默认值 < YAML < 显式 CLI），构建管线配置。
@@ -132,7 +135,7 @@ def main() -> int:
 
     print("==========================================")
     print("Running with YAML config")
-    print(f"audio_input={audio}")
+    print(f"audio_input={audio} ({len(audio_paths)} file(s))")
     print(f"config_path={config_path}")
     print(f"output_dir={dirs.exp_dir}")
     for name in ("model_path", "hf_cache_dir"):
@@ -143,7 +146,7 @@ def main() -> int:
     print(f"stage={args.stage} with_viewer={args.viewer}")
     print("==========================================")
 
-    uri = audio.stem
+    # viewer 支持多条 --audio uri=path 映射；批量时逐条传入。
     viewer_cmd = [
         sys.executable,
         "viewer/server.py",
@@ -151,11 +154,10 @@ def main() -> int:
         str(dirs.basic_dir),
         "--audio_root",
         "datasets",
-        "--audio",
-        f"{uri}={audio}",
-        "--port",
-        str(args.viewer_port),
     ]
+    for path in audio_paths:
+        viewer_cmd += ["--audio", f"{Path(path).stem}={path}"]
+    viewer_cmd += ["--port", str(args.viewer_port)]
 
     viewer_proc: subprocess.Popen | None = None
 
@@ -199,7 +201,7 @@ def main() -> int:
 
     try:
         result = pipeline.process(
-            audio=audio,
+            audio=audio_paths,
             stage=args.stage,
             config=config,
             config_path=config_path,
@@ -213,6 +215,7 @@ def main() -> int:
             on_asr_ready=start_viewer if args.viewer else None,
             header_fields={
                 "audio_input": audio,
+                "num_audio_files": len(audio_paths),
                 "config_path": config_path,
                 "model_path_override": args.model_path,
                 "hf_cache_dir_override": args.hf_cache_dir,

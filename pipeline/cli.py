@@ -34,12 +34,14 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def check_input_paths(audio: Path, config_path: Path) -> None:
-    """启动前 fail-fast：音频/配置不存在时尽早报错，避免模型加载完才发现。"""
+    """启动前 fail-fast：音频/配置不存在时尽早报错，避免模型加载完才发现。
+
+    audio 接受单个音频文件、目录或路径清单文本（与 collect_audio_paths
+    的三种输入形式一致）。
+    """
 
     if not audio.exists():
         raise SystemExit(f"ERROR: 音频输入不存在: {audio}")
-    if audio.is_dir():
-        raise SystemExit(f"ERROR: 音频输入只接受单个文件，不支持目录: {audio}")
     if not config_path.exists():
         raise SystemExit(f"ERROR: 配置文件不存在: {config_path}")
 
