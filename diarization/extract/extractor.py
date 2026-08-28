@@ -14,8 +14,8 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
-from speakerlab.process.processor import FBank
-from speakerlab.utils.fileio import load_audio
+from common.speakerlab.process.processor import FBank
+from common.speakerlab.utils.fileio import load_audio
 
 from common.models.embedding_infer import (
     NativeERes2NetV2SegmentEmbedder,

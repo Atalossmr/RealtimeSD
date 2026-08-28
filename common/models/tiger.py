@@ -23,10 +23,10 @@ class TigerSeparator:
         self._tiger = None
 
     def _load(self) -> None:
-        import look2hear.models
+        from common.look2hear.models import TIGER
 
         logger.info("[separation] loading TIGER model %s", self.model_name)
-        model = look2hear.models.TIGER.from_pretrained(
+        model = TIGER.from_pretrained(
             self.model_name, cache_dir=self.hf_cache_dir
         )
         model.to(self.device)

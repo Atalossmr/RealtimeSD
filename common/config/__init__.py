@@ -5,22 +5,29 @@
 取用（asr 侧即如此）。
 """
 
-from .base import dataclass_from_args
+from .base import config_from_yaml, dataclass_from_args
 from .pipeline import (
     DEFAULT_CONFIG_PATH,
+    RUNTIME_KEYS,
     ChunkPipelineConfig,
     build_arg_parser,
     config_from_args,
+    load_config,
+    load_config_and_runtime,
     merge_args_with_config,
     validate_runtime_args,
 )
 
 __all__ = [
     "dataclass_from_args",
+    "config_from_yaml",
     "ChunkPipelineConfig",
     "DEFAULT_CONFIG_PATH",
+    "RUNTIME_KEYS",
     "build_arg_parser",
     "merge_args_with_config",
     "config_from_args",
+    "load_config",
+    "load_config_and_runtime",
     "validate_runtime_args",
 ]

@@ -2,7 +2,8 @@
 """DER 评估脚本（替代原 test_der.sh）：跑实时管线 + 对 refined RTTM（流式后端的最终输出）计算 DER。
 
 运行参数以 `config.yaml` 为准，脚本只补充运行时必须信息和少量覆盖项。
-管线在本进程内运行（复用 pipeline 包的 `DiarizationRunner`，批量时模型只加载一次）。
+管线批量执行由 `pipeline.process_batch` 完成（模型只加载一次，单文件失败
+不中断整批），本脚本只负责 CLI、DER 计算与退出码。
 环境变量仍作为缺省值生效：
 
     CONFIG_PATH → --config        MODEL_PATH   → --model_path
@@ -24,20 +25,17 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
-import shutil
 import sys
 from pathlib import Path
 
+import pipeline
 from common.config import config_from_args, merge_args_with_config
-from common.utils import add_common_args, append_run_header, env_flag, setup_logger
 from diarization.utils import collect_audio_paths
-from pipeline import DiarizationRunner, run_der_evaluation
+from pipeline import run_der_evaluation
+from pipeline.run_helpers import add_common_args, env_flag
 
 _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
-
-logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,20 +86,13 @@ def main() -> int:
     if not audio_paths:
         raise SystemExit(f"ERROR: 未收集到音频文件: {audio}")
 
-    basic_dir = Path(args.output_root) / _TEST_NAME
-    exp_dir = basic_dir / args.run_name
-    results_file = basic_dir / "results.txt"
-
-    # 与 run.py 一致：只清理本次 run 自己的输出目录，同 output_root 下的
-    # 其他历史 run 目录与 results.txt 汇总记录保留。
-    shutil.rmtree(exp_dir, ignore_errors=True)
-    exp_dir.mkdir(parents=True, exist_ok=True)
+    dirs = pipeline.resolve_run_dirs(args.output_root, _TEST_NAME, args.run_name)
 
     print("==========================================")
     print("Testing with YAML config")
     print(f"audio_input={audio} ({len(audio_paths)} file(s))")
     print(f"config_path={args.config}")
-    print(f"output_dir={exp_dir}")
+    print(f"output_dir={dirs.exp_dir}")
     if args.model_path:
         print("model_path override enabled")
     if args.hf_cache_dir:
@@ -120,12 +111,17 @@ def main() -> int:
         merged_args.show_rttm = True
     config = config_from_args(merged_args)
 
-    # results.txt 按 run 追加：历史 run 的 DER 汇总记录保留。
-    append_run_header(
-        results_file,
-        args.run_name,
-        "DER test",
-        {
+    # 批量执行：模型只加载一次，逐文件处理；单文件失败不中断整批。
+    batch = pipeline.process_batch(
+        audio_paths,
+        config=config,
+        config_path=args.config,
+        output_root=args.output_root,
+        run_name=args.run_name,
+        test_name=_TEST_NAME,
+        model_path=merged_args.model_path,
+        verbose=args.debug,
+        header_fields={
             "audio_input": audio,
             "num_audio_files": len(audio_paths),
             "config_path": args.config,
@@ -138,63 +134,27 @@ def main() -> int:
         },
     )
 
-    logs_dir = exp_dir / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    with open(logs_dir / "command.log", "w", encoding="utf-8") as log:
-        log.write(f"Audio: {audio} ({len(audio_paths)} file(s))\n")
-        for path in audio_paths:
-            log.write(f"  - {path}\n")
-        log.write(f"Config: {args.config} (with_separation=False)\n")
-        log.write(
-            "Pipeline: in-process pipeline.DiarizationRunner"
-            f" (device={config.device}, model_type={config.model_type},"
-            f" segmentation_model={config.segmentation_model},"
-            f" backend={config.clustering_backend})\n"
-        )
-
-    # 沿用原 build_pipeline_cmd 的约定：--debug 时同时提升日志级别。
-    setup_logger(bool(args.debug), str(logs_dir / "run.log"))
-
-    # 批量：模型只加载一次，逐文件处理；单文件失败不中断整批。
-    runner = DiarizationRunner(config, merged_args.model_path, with_separation=False)
-    failed: list[str] = []
-    for audio_path in audio_paths:
-        logger.info("Processing %s", audio_path)
-        print(f"Processing {audio_path} ...")
-        try:
-            runner.process_file(audio_path, exp_dir)
-        except Exception:
-            failed.append(audio_path)
-            logger.exception("Diarization pipeline failed for %s", audio_path)
-            print(f"ERROR: 管线执行失败: {audio_path}，见 {logs_dir}/run.log",
-                  file=sys.stderr)
-            continue
-
-    rttm_count = len(list((exp_dir / "rttm").glob("*.refined.rttm")))
-    with open(results_file, "a", encoding="utf-8") as file_obj:
-        file_obj.write(
-            f"{args.run_name} -> refined_rttm_files={rttm_count} | config={args.config}\n"
-        )
-    print(
-        f"Result: {args.run_name} -> refined_rttm_files={rttm_count}"
-        f" (failed={len(failed)}/{len(audio_paths)})"
-    )
-    print(f"Pipeline log: {exp_dir}/logs/run.log")
-
     print("\n========== DER Results ==========")
     if not args.ref_rttm:
         print("DER skipped: --ref_rttm not set")
     else:
         der_rc = run_der_evaluation(
-            exp_dir, args.ref_rttm, args.run_name, args.der_verbose, results_file
+            batch.exp_dir,
+            args.ref_rttm,
+            args.run_name,
+            args.der_verbose,
+            batch.results_file,
         )
         if der_rc != 0:
             return der_rc
 
-    print(f"\nResults saved to {results_file}")
-    print(f"Outputs written to: {basic_dir}")
-    if failed:
-        print(f"WARNING: {len(failed)} file(s) failed: {failed}", file=sys.stderr)
+    print(f"\nResults saved to {batch.results_file}")
+    print(f"Outputs written to: {dirs.basic_dir}")
+    if batch.failed:
+        print(
+            f"WARNING: {len(batch.failed)} file(s) failed: {batch.failed}",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

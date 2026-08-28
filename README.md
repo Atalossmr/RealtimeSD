@@ -6,6 +6,7 @@
 ## 项目内容
 
 - 入口：`python3 run.py <音频文件>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer；`--stage {1,2,3}` 控制推进阶段）、`python3 -m diarization.app`（仅 diarization 阶段）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）、`python3 -m separation.app`（骨架：separation 暂不可独立运行，由 run.py `--stage >= 2` 驱动）
+- 库式调用：`pipeline.process(audio="x.wav", stage=1, run_name="demo")`（完整管线封装为公开 API，run.py / test_der.py 均为其薄 CLI 封装；批量用 `pipeline.process_batch`）
 - 配置文件：`config/config.yaml`（diarization）、`config/asr.yaml`（ASR 转写）
 - 管线实现：`diarization/`（extract + cluster）+ `separation/`（分段音频导出）+ `pipeline/`（组合层），模型代码统一在 `common/models/`
 - 运行脚本：`run.py`（一键编排）、`test_der.py`（DER 评估）
@@ -179,10 +180,10 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 
 - `diarization/`：说话人识别（extract + cluster 两级，chunk 管线）
 - `separation/`：分段音频导出（commit 区重叠检测 + TIGER 分离 + 身份确认，接流式 ASR）
-- `pipeline/`：组合层（runner：stage1+2 组合执行；follow：ASR 跟随编排；eval：DER 评估）
-- `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志与编排辅助、`models/` 模型封装、路径常量）
-- `speakerlab/`：3D-Speaker相关依赖与 `md-eval.pl`
-- `look2hear`：TIGER相关依赖
+- `pipeline/`：组合层（api：一次完整运行的公开入口 process/process_batch；runner：stage1+2 组合执行；follow：ASR 跟随编排；eval：DER 评估）
+- `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志、`models/` 模型封装、路径常量、`speakerlab/` 与 `look2hear/` 两个 vendored 模型依赖）
+- `common/speakerlab/`：3D-Speaker相关依赖（vendored）与 `md-eval.pl`
+- `common/look2hear/`：TIGER相关依赖（vendored）
 - `tools`：常用工具，包括参数扫描，log分析等
 - `run.py`：运行编排脚本（ASR + diarization + viewer）
 - `asr/`：ASR模块

@@ -186,16 +186,10 @@ def merge_args_with_config(
     )
 
 
-def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
-    """把合并后的参数转换为 `ChunkPipelineConfig`。
+def _validate_and_normalize(config: ChunkPipelineConfig) -> ChunkPipelineConfig:
+    """数值校验 + hf_cache_dir 相对路径按仓库根解析（config_from_args 与
+    load_config 共用，规则只维护这一份）。"""
 
-    字段值取自合并后的 args，缺失时落回 dataclass 字段默认值（唯一兜底来源）。
-    """
-
-    config = common_config.dataclass_from_args(
-        args,
-        ChunkPipelineConfig,
-    )
     if config.chunk_duration <= 0.0:
         raise ValueError("chunk_duration must be > 0")
     if config.post_merge_min_count < 0:
@@ -205,22 +199,69 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
     if config.hop_duration <= 0.0 or config.hop_duration > config.chunk_duration:
         raise ValueError("hop_duration must be in (0, chunk_duration]")
 
-    hf_cache_dir = getattr(args, "hf_cache_dir", None)
-    if hf_cache_dir:
+    if config.hf_cache_dir:
         # YAML 中的相对路径（如 ./pretrained/huggingface）按仓库根目录解析，
         # 避免从其他工作目录运行时缓存失效或重复下载。
-        hf_path = Path(str(hf_cache_dir)).expanduser()
+        hf_path = Path(config.hf_cache_dir).expanduser()
         if not hf_path.is_absolute():
             hf_path = BASE_DIR / hf_path
         config.hf_cache_dir = str(hf_path)
     return config
 
 
+def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
+    """把合并后的参数转换为 `ChunkPipelineConfig`。
+
+    字段值取自合并后的 args，缺失时落回 dataclass 字段默认值（唯一兜底来源）。
+    """
+
+    return _validate_and_normalize(
+        common_config.dataclass_from_args(args, ChunkPipelineConfig)
+    )
+
+
+# YAML 允许的运行时键：不属于 ChunkPipelineConfig 字段（CLI 下是 argparse
+# 参数），库式加载时单独捕获返回，由调用方消费。
+RUNTIME_KEYS = ("model_path",)
+
+
+def load_config(
+    config_path: str | Path | None = None,
+    overrides: Optional[dict[str, object]] = None,
+) -> ChunkPipelineConfig:
+    """库式调用的配置构建入口（不经过 argparse）。
+
+    config_path 缺省为仓库自带 `config/config.yaml`；合并语义为
+    YAML < overrides 中非 None 值 < 字段默认值兜底（与 CLI 的
+    "YAML < 显式 CLI"对应）。YAML 中的运行时键（RUNTIME_KEYS）被忽略，
+    需要时请改用 `load_config_and_runtime`。
+    """
+
+    config, _ = load_config_and_runtime(config_path, overrides)
+    return config
+
+
+def load_config_and_runtime(
+    config_path: str | Path | None = None,
+    overrides: Optional[dict[str, object]] = None,
+) -> tuple[ChunkPipelineConfig, dict[str, object]]:
+    """`load_config` + 捕获 YAML 中实际生效的运行时键（当前仅 model_path）。"""
+
+    path = str(config_path) if config_path is not None else str(DEFAULT_CONFIG_PATH)
+    config, extras = common_config.config_from_yaml(
+        path, ChunkPipelineConfig, overrides, extra_keys=RUNTIME_KEYS
+    )
+    return _validate_and_normalize(config), extras
+
+
 __all__ = [
     "ChunkPipelineConfig",
     "DEFAULT_CONFIG_PATH",
+    "RUNTIME_KEYS",
     "build_arg_parser",
     "merge_args_with_config",
     "config_from_args",
+    "load_config",
+    "load_config_and_runtime",
     "validate_runtime_args",
 ]

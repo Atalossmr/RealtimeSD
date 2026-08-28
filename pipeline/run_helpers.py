@@ -1,4 +1,4 @@
-"""run.py / test_der.py 共用的编排辅助。
+"""pipeline 层编排辅助：run.py / test_der.py 与本包 api 共用。
 
 两脚本共有的部分统一收敛到这里：环境变量布尔缺省、公共 CLI 参数、
 results.txt 按 run 追加的记录头、启动前输入检查、跟随子进程的就绪等待

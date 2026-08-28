@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
-"""实时管线一键运行编排脚本。
+"""实时管线一键运行 CLI（薄封装：编排本体在 `pipeline.process`）。
 
 `--stage N` 为累积式：1=只 diarization（RTTM）；2=+separation（分段音频）；
-3=+ASR 转写（默认，保持现有行为）。
+3=+ASR 转写（默认，ASR 先就绪再开跑）。
 
-启动顺序（stage 3 时 ASR 模型加载慢，先就绪再开跑，避免管线空跑或段积压）：
-
-1. ASR 跟随进程（python -m asr.app --follow）先启动，轮询等待其就绪哨兵
-   （--ready_file，模型加载完成后 touch）；ASR 进程提前退出或超时则整体失败；
-   仅 stage >= 3 时启动；
-2. ASR 就绪后启动 viewer 服务器，并在本进程内跑 diarization 管线
-   （组合层 `pipeline.run_diarization` = extract + cluster + 分段音频导出；
-   stage 1 不启用 separation）；
-3. 管线结束（无论成败）→ touch done 哨兵 → 等 ASR 收尾落盘 transcript →
-   打印"音频已处理完成"并挂起等待（viewer 保持可访问）；用户 Ctrl+C
-   （或 server 因其他原因退出，如 POST /api/shutdown）后脚本才退出并
-   关闭 viewer。
+本脚本只负责：argparse 与环境变量缺省、CLI/YAML 配置合并、viewer 子进程的
+启动（经 process 的 on_asr_ready 钩子，在 ASR 就绪后启动）/挂起等待/收尾。
+管线本体（输出目录、ASR follow 进程、哨兵协调、结果汇总）见 pipeline.api。
 
 环境变量作为对应命令行参数的缺省值：
 
@@ -25,6 +16,7 @@
     SHOW_RTTM=1     → --show_rttm     OUTPUT_ROOT  → --output_root
     RUN_NAME        → --run_name      VIEWER_PORT  → --viewer_port
     ASR_CONFIG_PATH → --asr_config    WAIT_VIEWER=0 → --no-wait
+    WITH_VIEWER=0   → --no-viewer
 
 用法：
 
@@ -34,39 +26,20 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import pipeline
 from common.config import config_from_args, merge_args_with_config
-from common.utils import (
-    add_common_args,
-    append_run_header,
-    check_input_paths,
-    env_flag,
-    finish_follow_process,
-    setup_logger,
-    wait_process_ready,
-)
-from pipeline import (
-    build_asr_follow_cmd,
-    run_diarization,
-    validate_follow_requirements,
-)
+from pipeline.run_helpers import add_common_args, check_input_paths, env_flag
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# ASR 模型加载（含可能的下载）等待上限。
-_DEFAULT_READY_TIMEOUT = 3600.0
-
 _TEST_NAME = "common"  # 输出固定在 {output_root}/common/{run_name}
-
-logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--asr_ready_timeout",
         type=float,
-        default=_DEFAULT_READY_TIMEOUT,
+        default=3600.0,
         help="等待 ASR 模型就绪的超时时间（秒）",
     )
     return parser
@@ -145,14 +118,7 @@ def main() -> int:
     audio = Path(args.audio)
     config_path = Path(args.config)
     check_input_paths(audio, config_path)
-    basic_dir = Path(args.output_root) / _TEST_NAME
-    exp_dir = basic_dir / args.run_name
-    results_file = basic_dir / "results.txt"
-    done_file = exp_dir / ".diarization_done"
-    ready_file = exp_dir / ".asr_ready"
-
-    if args.stage >= 3:
-        validate_follow_requirements(config_path)
+    dirs = pipeline.resolve_run_dirs(args.output_root, _TEST_NAME, args.run_name)
 
     # 合并 CLI 与 YAML（argparse 默认值 < YAML < 显式 CLI），构建管线配置。
     merged_args = merge_args_with_config(parser, args, sys.argv[1:])
@@ -164,15 +130,11 @@ def main() -> int:
         merged_args.show_rttm = True
     config = config_from_args(merged_args)
 
-    # 只清理本次 run 自己的输出目录，同 output_root 下的其他历史 run 保留。
-    shutil.rmtree(exp_dir, ignore_errors=True)
-    exp_dir.mkdir(parents=True, exist_ok=True)
-
     print("==========================================")
     print("Running with YAML config")
     print(f"audio_input={audio}")
     print(f"config_path={config_path}")
-    print(f"output_dir={exp_dir}")
+    print(f"output_dir={dirs.exp_dir}")
     for name in ("model_path", "hf_cache_dir"):
         if getattr(args, name):
             print(f"{name} override enabled")
@@ -181,32 +143,12 @@ def main() -> int:
     print(f"stage={args.stage} with_viewer={args.viewer}")
     print("==========================================")
 
-    # results.txt 按 run 追加：同一 output_root 下历史 run 的汇总记录保留。
-    append_run_header(
-        results_file,
-        args.run_name,
-        "Online Speaker Diarization pipeline",
-        {
-            "audio_input": audio,
-            "config_path": config_path,
-            "model_path_override": args.model_path,
-            "hf_cache_dir_override": args.hf_cache_dir,
-            "with_asr": args.stage >= 3,
-            "stage": args.stage,
-        },
-    )
-
-    # ---- 组装子进程命令（ASR / viewer；diarization 已改为本进程内调用） ----
-    asr_cmd = build_asr_follow_cmd(
-        exp_dir, str(args.asr_config), done_file, ready_file, verbose=args.debug
-    )
-
     uri = audio.stem
     viewer_cmd = [
         sys.executable,
         "viewer/server.py",
         "--exp_root",
-        str(basic_dir),
+        str(dirs.basic_dir),
         "--audio_root",
         "datasets",
         "--audio",
@@ -215,137 +157,95 @@ def main() -> int:
         str(args.viewer_port),
     ]
 
-    logs_dir = exp_dir / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    with open(logs_dir / "command.log", "w", encoding="utf-8") as log:
-        log.write(f"Audio: {audio}\n")
-        log.write(f"Config: {config_path}\n")
-        log.write(
-            "Pipeline: in-process pipeline.run_diarization"
-            f" (device={config.device}, model_type={config.model_type},"
-            f" segmentation_model={config.segmentation_model},"
-            f" backend={config.clustering_backend})\n"
-        )
-        if args.stage >= 3:
-            log.write(f"ASR Command: {shlex.join(asr_cmd)}\n")
-        if args.viewer:
+    viewer_proc: subprocess.Popen | None = None
+
+    def start_viewer() -> None:
+        """on_asr_ready 钩子：ASR 就绪后启动 viewer（此刻 exp_dir/logs 已建好）。"""
+
+        nonlocal viewer_proc
+        viewer_log = open(dirs.logs_dir / "viewer.log", "w", encoding="utf-8")
+        try:
+            viewer_proc = subprocess.Popen(
+                viewer_cmd,
+                stdout=viewer_log,
+                stderr=subprocess.STDOUT,
+            )
+        finally:
+            # Popen 已复制 fd，父进程持有的句柄可以立即关闭。
+            viewer_log.close()
+        time.sleep(0.5)
+        if viewer_proc.poll() is not None:
+            print(
+                f"WARNING: viewer 启动失败，见 {dirs.logs_dir}/viewer.log",
+                file=sys.stderr,
+            )
+            viewer_proc = None
+            return
+        print(f"Viewer: http://127.0.0.1:{args.viewer_port}")
+        with open(dirs.logs_dir / "command.log", "a", encoding="utf-8") as log:
             log.write(f"Viewer Command: {shlex.join(viewer_cmd)}\n")
 
-    asr_proc: subprocess.Popen | None = None
-    viewer_proc: subprocess.Popen | None = None
-    pipeline_rc = 0
-    try:
-        # 1. ASR 先启动并等模型就绪（仅 stage >= 3）。
-        if args.stage >= 3:
-            print(f"Starting ASR follow process: {shlex.join(asr_cmd)}")
-            asr_proc = subprocess.Popen(asr_cmd)
-            print("Waiting for ASR model ready ...")
-            wait_process_ready(asr_proc, ready_file, args.asr_ready_timeout)
-            print("ASR model ready.")
-
-        # 2. ASR 就绪后启动 viewer 与 diarization 管线（本进程内）。
-        if args.viewer:
-            viewer_log = open(logs_dir / "viewer.log", "w", encoding="utf-8")
-            try:
-                viewer_proc = subprocess.Popen(
-                    viewer_cmd,
-                    stdout=viewer_log,
-                    stderr=subprocess.STDOUT,
-                )
-            finally:
-                # Popen 已复制 fd，父进程持有的句柄可以立即关闭。
-                viewer_log.close()
-            time.sleep(0.5)
-            if viewer_proc.poll() is not None:
-                print(
-                    f"WARNING: viewer 启动失败，见 {logs_dir}/viewer.log",
-                    file=sys.stderr,
-                )
-                viewer_proc = None
-            else:
-                print(f"Viewer: http://127.0.0.1:{args.viewer_port}")
-
-        # 管线日志写入 logs/run.log（控制台只保留脚本自身输出）；
-        # --debug 时同步提升日志级别（沿用原 build_pipeline_cmd 的约定）。
-        setup_logger(
-            bool(merged_args.verbose or args.debug), str(logs_dir / "run.log")
-        )
-        print(f"Starting diarization pipeline (in-process): {audio}")
+    def stop_viewer() -> None:
+        nonlocal viewer_proc
+        if viewer_proc is None:
+            return
+        viewer_proc.terminate()
         try:
-            run_diarization(
-                config,
-                str(audio),
-                exp_dir,
-                model_path=merged_args.model_path,
-                with_separation=args.stage >= 2,
-            )
-        except Exception:
-            # 管线失败不跳过收尾：记录后继续走 ASR/viewer 的 finally 清理。
-            logger.exception("Diarization pipeline failed")
-            print(f"ERROR: 管线执行失败，见 {logs_dir}/run.log", file=sys.stderr)
-            pipeline_rc = 1
+            viewer_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            viewer_proc.kill()
+            viewer_proc.wait()
+        viewer_proc = None
 
-        # 管线结束：先落哨兵放行 ASR 收尾并等其落盘，再进入交互等待，
-        # 保证打印"音频已处理完成"时 transcript 已是最终版。
-        if asr_proc is not None:
-            finish_follow_process(asr_proc, done_file)
-            asr_proc = None
-
-        # 管线跑完后默认不立即退出：viewer 保持可访问，等用户 Ctrl+C
-        # （或 server 因其他原因退出，poll 检测到后同样放行）；
-        # --no-wait / WAIT_VIEWER=0 时跳过等待，直接收尾（无人值守场景）。
-        if viewer_proc is not None and args.wait:
-            if pipeline_rc == 0:
-                print("音频已处理完成。")
-            else:
-                print(f"管线已退出（rc={pipeline_rc}）。")
-            print(
-                f"Viewer 仍在运行: http://127.0.0.1:{args.viewer_port}"
-                "（按 Ctrl+C 结束并关闭 viewer）"
-            )
-            try:
-                while viewer_proc.poll() is None:
-                    time.sleep(1.0)
-            except KeyboardInterrupt:
-                # 管线已正常结束，这次 Ctrl+C 只用于关闭 viewer，不向外套层抛。
-                print("\nShutting down viewer ...", file=sys.stderr)
-    except KeyboardInterrupt:
-        print("\nInterrupted, shutting down ...", file=sys.stderr)
-        pipeline_rc = 130
-    finally:
-        # 中断/异常路径的统一收尾：ASR 正常路径已在交互等待前完成（asr_proc
-        # 已置 None），这里只兜住管线运行中被 Ctrl+C 或出错的情况。
-        if asr_proc is not None:
-            finish_follow_process(asr_proc, done_file)
-        # viewer 在脚本退出前关闭（正常路径下它在交互等待结束时才走到这里）。
-        if viewer_proc is not None:
-            viewer_proc.terminate()
-            try:
-                viewer_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                viewer_proc.kill()
-                viewer_proc.wait()
-            viewer_proc = None
-
-    # ---- 汇总 ----
-    rttm_count = len(list((exp_dir / "rttm").glob("*.refined.rttm")))
-    with open(results_file, "a", encoding="utf-8") as file_obj:
-        file_obj.write(
-            f"{args.run_name} -> refined_rttm_files={rttm_count} | config={config_path}\n"
+    try:
+        result = pipeline.process(
+            audio=audio,
+            stage=args.stage,
+            config=config,
+            config_path=config_path,
+            output_root=args.output_root,
+            run_name=args.run_name,
+            test_name=_TEST_NAME,
+            model_path=merged_args.model_path,
+            asr_config=args.asr_config,
+            asr_ready_timeout=args.asr_ready_timeout,
+            verbose=bool(merged_args.verbose or args.debug),
+            on_asr_ready=start_viewer if args.viewer else None,
+            header_fields={
+                "audio_input": audio,
+                "config_path": config_path,
+                "model_path_override": args.model_path,
+                "hf_cache_dir_override": args.hf_cache_dir,
+                "with_asr": args.stage >= 3,
+                "stage": args.stage,
+            },
         )
-        if args.stage >= 3:
-            transcript_count = len(
-                list((exp_dir / "transcripts").glob("*.transcript.jsonl"))
-            )
-            file_obj.write(
-                f"{args.run_name} -> transcript_files={transcript_count} | config={config_path}\n"
-            )
-    print(f"Result: {args.run_name} -> refined_rttm_files={rttm_count}")
-    print(f"Pipeline log: {exp_dir}/logs/run.log")
-    if args.stage >= 3:
-        print(f"ASR log: {exp_dir}/logs/transcribe.log")
+    except BaseException:
+        # ASR 就绪失败等异常路径同样关闭 viewer。
+        stop_viewer()
+        raise
 
-    return pipeline_rc
+    # 管线跑完后默认不立即退出：viewer 保持可访问，等用户 Ctrl+C
+    # （或 server 因其他原因退出，poll 检测到后同样放行）；
+    # --no-wait / WAIT_VIEWER=0 跳过等待（无人值守场景）；
+    # 管线被中断（rc=130）时不二次等待，直接收尾。
+    if viewer_proc is not None and args.wait and result.returncode != 130:
+        if result.returncode == 0:
+            print("音频已处理完成。")
+        else:
+            print(f"管线已退出（rc={result.returncode}）。")
+        print(
+            f"Viewer 仍在运行: http://127.0.0.1:{args.viewer_port}"
+            "（按 Ctrl+C 结束并关闭 viewer）"
+        )
+        try:
+            while viewer_proc.poll() is None:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            # 管线已正常结束，这次 Ctrl+C 只用于关闭 viewer，不向外套层抛。
+            print("\nShutting down viewer ...", file=sys.stderr)
+    stop_viewer()
+    return result.returncode
 
 
 if __name__ == "__main__":

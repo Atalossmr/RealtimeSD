@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from speakerlab.utils.fileio import load_audio
+from common.speakerlab.utils.fileio import load_audio
 
 from common.config import ChunkPipelineConfig
 from common.contracts import ChunkArtifacts, ChunkDebugInfo, ChunkObservation

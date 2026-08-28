@@ -156,4 +156,43 @@ def dataclass_from_args(
     return config_type(**kwargs)
 
 
-__all__ = ["merge_args_with_config", "dataclass_from_args"]
+def config_from_yaml(
+    config_path: str,
+    config_type: type[T],
+    overrides: Optional[dict[str, object]] = None,
+    *,
+    extra_keys: tuple[str, ...] = (),
+) -> tuple[T, dict[str, object]]:
+    """无 argparse 的配置构建（库式调用入口）。
+
+    合并优先级：YAML 配置 < overrides 中非 None 的值（即调用方显式给定）；
+    字段默认值是唯一兜底来源。YAML 中值为 null 的键视为"未配置"，不参与合并；
+    YAML 键与 overrides 键必须是 config_type 的合法字段名（或 extra_keys）。
+
+    返回 (config, extras)：extras 为 extra_keys 中实际生效的键值——这些键
+    不属于 config 字段（如 model_path 等运行时参数），由调用方自行消费。
+    """
+
+    yaml_config = _load_yaml_config(config_path, explicit=True)
+    field_keys = {field.name for field in dataclass_fields(config_type)}
+    valid_keys = field_keys | set(extra_keys)
+    unknown_keys = sorted(set(yaml_config.keys()) - valid_keys)
+    if unknown_keys:
+        raise ValueError(f"Unknown keys in YAML config: {', '.join(unknown_keys)}")
+
+    overrides = overrides or {}
+    unknown_overrides = sorted(set(overrides.keys()) - valid_keys)
+    if unknown_overrides:
+        raise ValueError(f"Unknown config overrides: {', '.join(unknown_overrides)}")
+
+    merged: dict[str, object] = {
+        key: value for key, value in yaml_config.items() if value is not None
+    }
+    for key, value in overrides.items():
+        if value is not None:
+            merged[key] = value
+    extras = {key: merged.pop(key) for key in extra_keys if key in merged}
+    return dataclass_from_args(argparse.Namespace(**merged), config_type), extras
+
+
+__all__ = ["merge_args_with_config", "dataclass_from_args", "config_from_yaml"]

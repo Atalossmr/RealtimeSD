@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DER 计算工具，依赖 speakerlab/md-eval.pl。
+"""DER 计算工具，依赖 common/speakerlab/md-eval.pl。
 
 使用方法：
 1) 单文件评估：
@@ -79,6 +79,7 @@ def _resolve_md_eval_path() -> str:
     possible_paths = [
         os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
+            "common",
             "speakerlab",
             "md-eval.pl",
         ),

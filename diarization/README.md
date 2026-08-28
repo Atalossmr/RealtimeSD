@@ -111,9 +111,11 @@ common/
   config/              # 配置体系：base（通用 YAML/CLI 合并机制）+ pipeline（ChunkPipelineConfig + 管线 CLI helper）
   contracts/           # 跨包数据契约：schema（ChunkObservation / ChunkArtifacts / 调试 TypedDict）+
                        #   frames（commit 区帧裁剪，RTTM writer 与 separation 共用单份实现）
-  utils/               # 通用工具：log（setup_logger / log_structured）/ modelscope / run_helpers
+  utils/               # 通用工具：log（setup_logger / log_structured）/ modelscope
   models/              # 模型封装：embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/
                        #   hf_resolver / tiger（TigerSeparator：TIGER 2 路分离的惰性封装）
+  speakerlab/          # vendored：3D-Speaker 依赖（ERes2NetV2 / FBank / fileio）+ md-eval.pl
+  look2hear/           # vendored：TIGER 分离模型
 ```
 
 - diarization 与 separation 两包互不 import，共享契约（contracts / config /

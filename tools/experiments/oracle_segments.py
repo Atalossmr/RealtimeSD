@@ -93,8 +93,8 @@ def cmd_extract(args: argparse.Namespace) -> None:
         NativeERes2NetV2SegmentEmbedder,
         load_embedding_model,
     )
-    from speakerlab.process.processor import FBank
-    from speakerlab.utils.fileio import load_audio
+    from common.speakerlab.process.processor import FBank
+    from common.speakerlab.utils.fileio import load_audio
 
     config = load_base_config(args.config)
     device = torch.device(args.device)
