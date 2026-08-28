@@ -21,8 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from common.contracts import iter_commit_frames
-
-from ..utils import ensure_parent_dir
+from common.utils import ensure_parent_dir
 
 
 logger = logging.getLogger(__name__)

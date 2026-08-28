@@ -1,13 +1,15 @@
-"""ASR 跟随进程的协作编排：前置契约校验 + 子进程命令组装。
+"""ASR 跟随进程的协作编排：前置契约校验 + 子进程命令组装 + 哨兵协调。
 
 stage3（ASR 转写）以独立 follow 进程消费 stage2 产出的 segments manifest，
-这里集中放这对跨进程协作关系本身的逻辑；进程哨兵等待/收尾等通用机制在
-本包 run_helpers。
+这里集中放这对跨进程协作关系本身的逻辑：启动前的配置契约校验、follow
+子进程命令组装、就绪哨兵等待与 done 哨兵收尾。
 """
 
 from __future__ import annotations
 
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from common.config import ChunkPipelineConfig
@@ -61,4 +63,39 @@ def build_asr_follow_cmd(
     return cmd
 
 
-__all__ = ["validate_follow_requirements", "build_asr_follow_cmd"]
+def wait_process_ready(
+    proc: subprocess.Popen, ready_file: Path, timeout: float
+) -> None:
+    """轮询等子进程的就绪哨兵；进程早退或超时则报错退出。"""
+
+    deadline = time.monotonic() + timeout
+    while not ready_file.exists():
+        if proc.poll() is not None:
+            raise RuntimeError(f"子进程在就绪前退出（rc={proc.returncode}）")
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"等待子进程就绪超时（{timeout}s）")
+        time.sleep(1.0)
+
+
+def finish_follow_process(proc: subprocess.Popen, done_file: Path) -> None:
+    """落 done 哨兵放行跟随进程收尾，等其落盘；超时先 SIGTERM，仍不退出再 SIGKILL。"""
+
+    done_file.touch()
+    try:
+        proc.wait(timeout=600)
+    except subprocess.TimeoutExpired:
+        # 收尾超时：先 SIGTERM，仍不退出再 SIGKILL，避免主进程永久挂起。
+        proc.terminate()
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+__all__ = [
+    "validate_follow_requirements",
+    "build_asr_follow_cmd",
+    "wait_process_ready",
+    "finish_follow_process",
+]

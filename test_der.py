@@ -36,9 +36,9 @@ from pathlib import Path
 
 import pipeline
 from common.config import config_from_args, merge_args_with_config
-from diarization.utils import collect_audio_paths
+from common.utils import collect_audio_paths
 from pipeline import run_der_evaluation
-from pipeline.run_helpers import add_common_args, env_flag
+from pipeline.cli import add_common_args, env_flag
 
 _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
 

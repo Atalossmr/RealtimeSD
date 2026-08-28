@@ -24,8 +24,10 @@ from common.models.embedding_infer import (
 from common.models.segmentation_infer import PyannoteStreamingSegmentation
 from common.config import ChunkPipelineConfig
 from common.contracts import ChunkArtifacts, ChunkObservation
+from common.utils.audio import resample_waveform_if_needed
+from common.utils.device import resolve_device
 
-from ..utils import resample_waveform_if_needed, resolve_device, save_chunks
+from ..utils import save_chunks
 from .track_builder import ChunkTrackBuilder, LocalTrack
 
 

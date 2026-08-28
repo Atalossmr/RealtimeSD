@@ -12,7 +12,6 @@ from .pipeline import (
     ChunkPipelineConfig,
     build_arg_parser,
     config_from_args,
-    load_config,
     load_config_and_runtime,
     merge_args_with_config,
     validate_runtime_args,
@@ -27,7 +26,6 @@ __all__ = [
     "build_arg_parser",
     "merge_args_with_config",
     "config_from_args",
-    "load_config",
     "load_config_and_runtime",
     "validate_runtime_args",
 ]

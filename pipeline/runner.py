@@ -19,6 +19,7 @@ from common.config import ChunkPipelineConfig
 from common.contracts import ChunkArtifacts, ChunkDebugInfo, ChunkObservation
 from common.utils import log_structured
 from diarization.cluster.backends import build_clusterer
+from diarization.cluster.post_process import RefinedRTTMWriter
 from diarization.cluster.rttm_writer import AppendOnlyRTTMWriter
 from diarization.cluster.runner import run_clustering
 from diarization.extract.extractor import ChunkExtractor
@@ -135,6 +136,7 @@ class DiarizationRunner:
                     type(clusterer).__name__,
                 )
             else:
+                # 刻意惰性 import：separation 依赖 TIGER 等重库，仅 stage>=2 需要。
                 from separation import StreamingSegmentExporter
 
                 exporter = StreamingSegmentExporter(
@@ -193,8 +195,6 @@ class DiarizationRunner:
 
         # refined 级（两后端通用）：streaming 逐 chunk + merge 事件动态重生成，
         # ahc（deferred）在 EOF 重放完成后最终刷新；均在 EOF 叠加小样本合并。
-        from diarization.cluster.post_process import RefinedRTTMWriter
-
         base = raw_rttm_path[: -len(f".{clusterer.output_tag}.rttm")]
         refiner = RefinedRTTMWriter(
             raw_rttm_path,
@@ -231,7 +231,7 @@ def run_diarization(
 ) -> str:
     """单条音频的 diarization 管线：extract + cluster + RTTM/segments 输出。
 
-    供 run.py main 与 diarization.app 复用；返回 raw RTTM 路径。
+    供 diarization.app（stage1 独立 CLI）复用；返回 raw RTTM 路径。
     批量场景请直接用 DiarizationRunner 以复用已加载的模型。
     """
 

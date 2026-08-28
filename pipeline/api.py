@@ -26,10 +26,10 @@ from typing import Callable, Mapping, Optional, Union
 from common.config import ChunkPipelineConfig, load_config_and_runtime
 from common.utils import setup_logger
 
-from .follow import build_asr_follow_cmd, validate_follow_requirements
-from .run_helpers import (
-    append_run_header,
+from .follow import (
+    build_asr_follow_cmd,
     finish_follow_process,
+    validate_follow_requirements,
     wait_process_ready,
 )
 from .runner import DiarizationRunner
@@ -74,6 +74,26 @@ def _prepare_run_dirs(dirs: RunDirs) -> None:
 
     shutil.rmtree(dirs.exp_dir, ignore_errors=True)
     dirs.logs_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _append_run_header(
+    results_file: Path,
+    run_name: str,
+    title: str,
+    fields: dict[str, object],
+) -> None:
+    """向 results.txt 追加一个 run 的记录头（按 run 追加，历史汇总保留）。
+
+    fields 中值为 None 的键不写出。
+    """
+
+    with open(results_file, "a", encoding="utf-8") as file_obj:
+        file_obj.write(f"run: {run_name} | {title}\n")
+        file_obj.write("-" * 40 + "\n")
+        for key, value in fields.items():
+            if value is not None:
+                file_obj.write(f"{key}: {value}\n")
+        file_obj.write("\n")
 
 
 @dataclass
@@ -149,7 +169,7 @@ def process(
     _prepare_run_dirs(dirs)
 
     # results.txt 按 run 追加：同一 output_root 下历史 run 的汇总记录保留。
-    append_run_header(
+    _append_run_header(
         dirs.results_file,
         run_name,
         header_title,

@@ -27,7 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
-from ..utils import l2_normalize
+from common.utils import l2_normalize
+
 from .base import BaseChunkClusterer, resolve_merged
 
 

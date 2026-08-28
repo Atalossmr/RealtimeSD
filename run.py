@@ -35,7 +35,7 @@ from pathlib import Path
 
 import pipeline
 from common.config import config_from_args, merge_args_with_config
-from pipeline.run_helpers import add_common_args, check_input_paths, env_flag
+from pipeline.cli import add_common_args, check_input_paths, env_flag
 
 BASE_DIR = Path(__file__).resolve().parent
 

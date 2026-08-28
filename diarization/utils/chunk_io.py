@@ -24,7 +24,7 @@ import numpy as np
 
 from common.contracts import ChunkArtifacts, ChunkObservation
 
-from .paths import ensure_parent_dir
+from common.utils.paths import ensure_parent_dir
 
 
 def save_chunks(path: str, uri: str, artifacts: list[ChunkArtifacts]) -> None:

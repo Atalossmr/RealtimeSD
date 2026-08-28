@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from common.constants import BASE_DIR
+
 
 def _read_summary_values(path: Path) -> dict[str, str]:
     values = {}
@@ -49,7 +51,8 @@ def run_der_evaluation(
         log.write(header + "\n")
         der_cmd = [
             sys.executable,
-            "tools/compute_der.py",
+            # 锚定仓库根：库式调用时 cwd 不一定是仓库根。
+            str(BASE_DIR / "tools" / "compute_der.py"),
             "--sys",
             str(exp_dir / "rttm"),
             "--ref",

@@ -23,9 +23,9 @@ from scipy.optimize import linear_sum_assignment
 
 from common.config import ChunkPipelineConfig
 from common.contracts import ChunkDebugInfo, ChunkObservation
+from common.utils import l2_normalize
 
 from ..base import BaseChunkClusterer, resolve_merged
-from ...utils import l2_normalize
 
 
 logger = logging.getLogger(__name__)

@@ -16,9 +16,8 @@ from common.config import (
     merge_args_with_config,
     validate_runtime_args,
 )
-from common.utils import setup_logger
+from common.utils import collect_audio_paths, setup_logger
 
-from ..utils import collect_audio_paths
 from .extractor import ChunkExtractor
 
 

@@ -76,14 +76,14 @@
 ## 模块分工
 
 包按两个阶段拆成两个顶层包，共享契约与模型代码上提 `common/`；端到端组合层
-（原 `diarization/pipeline.py` + 原 `diarization/app.py` 的组合逻辑）已并入
-仓库根目录的 `run.py`（`run_diarization`），现 `diarization/app.py` 只是
-委托它的 stage1 薄 CLI：
+为仓库根目录的 `pipeline/` 包（`run_diarization` 在 `pipeline/runner.py`），
+`diarization/app.py` 只是委托它的 stage1 薄 CLI（入口脚本级复用，属分层例外，
+见 `pipeline/README.md`）：
 
 ```
 diarization/           # stage1：嵌入提取 + 聚类 + RTTM 输出
-  app.py               # stage1 端到端 CLI（python3 -m diarization.app，委托 run.py 的 run_diarization，with_separation=False）
-  utils/               # 通用工具子包：device / numeric / audio / paths / chunk_io（两阶段中间文件 <stem>.chunks.npz 存取）
+  app.py               # stage1 端到端 CLI（python3 -m diarization.app，委托 pipeline.run_diarization，with_separation=False）
+  utils/               # chunk_io：两阶段中间文件 <stem>.chunks.npz 存取（通用工具已上提 common/utils）
   extract/             # 子模块 1：嵌入提取
     extractor.py       #   ChunkExtractor：模型加载、波形预处理、chunk 生成器（chunk 生产唯一来源）
     track_builder.py   #   chunk 内 local track 构造：纯净区优先、overlap_fallback 回退、时长门控
@@ -95,7 +95,7 @@ diarization/           # stage1：嵌入提取 + 聚类 + RTTM 输出
       ahc.py           #     AHCChunkClusterer：离线层次聚类后端
     rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加；SpeakerTurn 定义于此）
     post_process.py    #   refined 级输出（RefinedRTTMWriter，merge 事件动态重生成）+ 小样本簇强制合并（ahc finalize 内重映射）
-    runner.py          #   run_clustering：聚类消费循环（run.py 与 cluster/app 共用）
+    runner.py          #   run_clustering：聚类消费循环（pipeline 与 cluster/app 共用）
     app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
 
 separation/            # stage2：分段音频导出（接流式 ASR；仅 streaming 后端生效）
@@ -111,7 +111,7 @@ common/
   config/              # 配置体系：base（通用 YAML/CLI 合并机制）+ pipeline（ChunkPipelineConfig + 管线 CLI helper）
   contracts/           # 跨包数据契约：schema（ChunkObservation / ChunkArtifacts / 调试 TypedDict）+
                        #   frames（commit 区帧裁剪，RTTM writer 与 separation 共用单份实现）
-  utils/               # 通用工具：log（setup_logger / log_structured）/ modelscope
+  utils/               # 通用工具：log（setup_logger / log_structured）/ paths / numeric / device / audio（重采样）
   models/              # 模型封装：embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/
                        #   hf_resolver / tiger（TigerSeparator：TIGER 2 路分离的惰性封装）
   speakerlab/          # vendored：3D-Speaker 依赖（ERes2NetV2 / FBank / fileio）+ md-eval.pl
@@ -119,7 +119,7 @@ common/
 ```
 
 - diarization 与 separation 两包互不 import，共享契约（contracts / config /
-  models）统一从 `common` 取，由 `run.py` 做组合接线。
+  models / utils）统一从 `common` 取，由 `pipeline/` 组合层做接线。
 - 若要新增聚类方法，则需在 `cluster/backends/` 下新建模块实现 `BaseChunkClusterer`（具体接口见 `cluster/base.py`）并在 `build_clusterer` 注册。
 
 ## 输入输出与调试
@@ -244,9 +244,9 @@ diarization 与 ASR / viewer 之间全部经共享输出目录的文件交互。
 字段布局见 `utils/chunk_io.py` 的模块 docstring。`diarization.cluster.app`
 消费它重放聚类（换后端/调参秒级完成）；离线分析需要的 embedding 也从这里取。
 
-#### 协调哨兵（由 run.py 管理，diarization 本身不写）
+#### 协调哨兵（由 pipeline.process 管理，diarization 本身不写）
 
-- `.diarization_done`：run.py 在管线退出后 touch；ASR 据此收尾退出，viewer 据此熄灭 LIVE。
+- `.diarization_done`：pipeline 在管线退出后 touch；ASR 据此收尾退出，viewer 据此熄灭 LIVE。
 
 ### 调试建议
 

@@ -188,7 +188,7 @@ def merge_args_with_config(
 
 def _validate_and_normalize(config: ChunkPipelineConfig) -> ChunkPipelineConfig:
     """数值校验 + hf_cache_dir 相对路径按仓库根解析（config_from_args 与
-    load_config 共用，规则只维护这一份）。"""
+    load_config_and_runtime 共用，规则只维护这一份）。"""
 
     if config.chunk_duration <= 0.0:
         raise ValueError("chunk_duration must be > 0")
@@ -225,27 +225,17 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
 RUNTIME_KEYS = ("model_path",)
 
 
-def load_config(
-    config_path: str | Path | None = None,
-    overrides: Optional[dict[str, object]] = None,
-) -> ChunkPipelineConfig:
-    """库式调用的配置构建入口（不经过 argparse）。
-
-    config_path 缺省为仓库自带 `config/config.yaml`；合并语义为
-    YAML < overrides 中非 None 值 < 字段默认值兜底（与 CLI 的
-    "YAML < 显式 CLI"对应）。YAML 中的运行时键（RUNTIME_KEYS）被忽略，
-    需要时请改用 `load_config_and_runtime`。
-    """
-
-    config, _ = load_config_and_runtime(config_path, overrides)
-    return config
-
-
 def load_config_and_runtime(
     config_path: str | Path | None = None,
     overrides: Optional[dict[str, object]] = None,
 ) -> tuple[ChunkPipelineConfig, dict[str, object]]:
-    """`load_config` + 捕获 YAML 中实际生效的运行时键（当前仅 model_path）。"""
+    """库式调用的配置构建入口（不经过 argparse）+ 捕获 YAML 运行时键。
+
+    config_path 缺省为仓库自带 `config/config.yaml`；合并语义为
+    YAML < overrides 中非 None 值 < 字段默认值兜底（与 CLI 的
+    "YAML < 显式 CLI"对应）。YAML 中的运行时键（RUNTIME_KEYS，当前仅
+    model_path）不作为 config 字段，单独捕获返回，由调用方消费。
+    """
 
     path = str(config_path) if config_path is not None else str(DEFAULT_CONFIG_PATH)
     config, extras = common_config.config_from_yaml(
@@ -261,7 +251,6 @@ __all__ = [
     "build_arg_parser",
     "merge_args_with_config",
     "config_from_args",
-    "load_config",
     "load_config_and_runtime",
     "validate_runtime_args",
 ]

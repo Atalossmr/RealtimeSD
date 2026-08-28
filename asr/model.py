@@ -19,6 +19,7 @@ from pathlib import Path
 import torch
 
 from common.models import resolve_modelscope_snapshot
+from common.utils.device import resolve_device_name
 
 from .constants import MODELSCOPE_CACHE_DIR
 
@@ -56,10 +57,9 @@ class FunASRNanoASR:
         self._tokenizer = None
 
     def _resolve_device(self) -> str:
-        device = str(self.config.device)
-        if device == "auto":
-            return "cuda:0" if torch.cuda.is_available() else "cpu"
-        return device
+        # 设备解析单一来源在 common.utils.device（"auto" → "cuda:0"）；
+        # FunASR from_pretrained 要字符串，这里取规范设备名。
+        return resolve_device_name(str(self.config.device))
 
     def _load(self) -> None:
         from funasr.models.fun_asr_nano.model import FunASRNano

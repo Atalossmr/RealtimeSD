@@ -180,10 +180,14 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 
 ## 仓库结构
 
+分层规则：`common ← diarization / separation / asr ← pipeline ← run.py / test_der.py`。
+common 不 import 业务包；三个业务包互不 import；pipeline 是唯一同时依赖多个
+业务包的组合层（详见 `pipeline/README.md`）。
+
 - `diarization/`：说话人识别（extract + cluster 两级，chunk 管线）
 - `separation/`：分段音频导出（commit 区重叠检测 + TIGER 分离 + 身份确认，接流式 ASR）
-- `pipeline/`：组合层（api：一次完整运行的公开入口 process（单/批量统一）；runner：stage1+2 组合执行；follow：ASR 跟随编排；eval：DER 评估）
-- `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志、`models/` 模型封装、路径常量、`speakerlab/` 与 `look2hear/` 两个 vendored 模型依赖）
+- `pipeline/`：组合层（api：一次完整运行的公开入口 process（单/批量统一）；runner：stage1+2 组合执行；follow：ASR 跟随编排与哨兵协调；eval：DER 评估；cli：入口脚本公共 CLI 辅助）
+- `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志与设备/音频/路径/数值工具、`models/` 模型封装、路径常量、`speakerlab/` 与 `look2hear/` 两个 vendored 模型依赖）
 - `common/speakerlab/`：3D-Speaker相关依赖（vendored）与 `md-eval.pl`
 - `common/look2hear/`：TIGER相关依赖（vendored）
 - `tools`：常用工具，包括参数扫描，log分析等

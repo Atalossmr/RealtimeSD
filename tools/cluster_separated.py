@@ -53,7 +53,7 @@ from common.models.embedding_infer import (  # noqa: E402
     NativeERes2NetV2SegmentEmbedder,
     load_embedding_model,
 )
-from diarization.utils.device import resolve_device  # noqa: E402
+from common.utils.device import resolve_device  # noqa: E402
 from common.speakerlab.process.processor import FBank  # noqa: E402
 
 logger = logging.getLogger("cluster_separated")
