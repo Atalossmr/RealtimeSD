@@ -13,10 +13,12 @@
 
 ## 模块
 
-- `api.py`：一次完整运行的公开入口——`process`（单文件 stage1-3：输出目录、
+- `api.py`：一次完整运行的公开入口——`process(audio=...)` 统一支持单文件
+  与批量（`audio` 传单个路径或路径列表；批量时模型只加载一次、单文件失败
+  不中断整批，stage 3 批量共享一个常驻 ASR follow 进程）。覆盖输出目录、
   ASR follow 子进程与哨兵协调、diarization 执行、结果汇总；viewer 由调用方
-  经 `on_asr_ready` 钩子自行编排）与 `process_batch`（批量复用已加载模型，
-  单文件失败不中断整批）；`resolve_run_dirs` 提供输出路径约定的单一口径。
+  经 `on_asr_ready` 钩子自行编排。`resolve_run_dirs` 提供输出路径约定的
+  单一口径。
 - `runner.py`：`DiarizationRunner` / `run_diarization`——stage1（extract + cluster
   + RTTM）与 stage2（separation exporter 挂 chunk hook）的组合执行；
   模型只加载一次，可连续处理多条音频。
@@ -33,7 +35,7 @@
 
 - `run.py`：主入口 CLI（薄封装：argparse/env 缺省 + viewer 编排，管线本体
   走 `pipeline.process`）；
-- `test_der.py`：DER 评估 CLI（批量走 `pipeline.process_batch` +
+- `test_der.py`：DER 评估 CLI（批量走 `pipeline.process` +
   `run_der_evaluation`）；
 - `diarization/app.py`：stage1 独立 CLI（`run_diarization(with_separation=False)`）；
 - 库式调用：`pipeline.process(audio="x.wav", stage=1)` 直接嵌入他处代码

@@ -6,13 +6,13 @@
 ## 项目内容
 
 - 入口：`python3 run.py <音频文件>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer；`--stage {1,2,3}` 控制推进阶段）、`python3 -m diarization.app`（仅 diarization 阶段）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）、`python3 -m separation.app`（骨架：separation 暂不可独立运行，由 run.py `--stage >= 2` 驱动）
-- 库式调用：`pipeline.process(audio="x.wav", stage=1, run_name="demo")`（完整管线封装为公开 API，run.py / test_der.py 均为其薄 CLI 封装；批量用 `pipeline.process_batch`）
+- 库式调用：`pipeline.process(audio="x.wav", stage=1, run_name="demo")`（完整管线封装为公开 API，run.py / test_der.py 均为其薄 CLI 封装；`audio` 传路径列表即批量，模型只加载一次）
 - 配置文件：`config/config.yaml`（diarization）、`config/asr.yaml`（ASR 转写）
 - 管线实现：`diarization/`（extract + cluster）+ `separation/`（分段音频导出）+ `pipeline/`（组合层），模型代码统一在 `common/models/`
 - 运行脚本：`run.py`（一键编排）、`test_der.py`（DER 评估）
 - DER 评估：`tools/compute_der.py`
 - 运行日志分析：`tools/analyze_log.py`
-- 结果可视化：`viewer/`（波形 + ASR 时间线）
+- 结果可视化：`viewer/`（波形 + 按 stage 分层的产物时间线：stage1 diarization / stage2 +分离段回放 / stage3 +ASR 转写）
 
 ## 环境要求
 
@@ -138,7 +138,9 @@ python3 test_der.py <wav 文件>
 ```
 
 `test_der.py` 也接受音频目录或每行一个路径的文本清单做批量评估：全部音频的
-RTTM 写入同一输出目录（模型只加载一次），最后输出逐文件 DER 与拼接全局 DER：
+RTTM 写入同一输出目录（模型只加载一次），最后输出逐文件 DER 与拼接全局 DER。
+`--stage` 控制批量推进阶段（默认 1）：2=+separation 分段音频，3=+ASR 转写
+（批量共享一个常驻 ASR follow 进程，transcript 为额外产物，DER 输入不变）：
 
 ```bash
 python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name task16
@@ -180,14 +182,14 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 
 - `diarization/`：说话人识别（extract + cluster 两级，chunk 管线）
 - `separation/`：分段音频导出（commit 区重叠检测 + TIGER 分离 + 身份确认，接流式 ASR）
-- `pipeline/`：组合层（api：一次完整运行的公开入口 process/process_batch；runner：stage1+2 组合执行；follow：ASR 跟随编排；eval：DER 评估）
+- `pipeline/`：组合层（api：一次完整运行的公开入口 process（单/批量统一）；runner：stage1+2 组合执行；follow：ASR 跟随编排；eval：DER 评估）
 - `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志、`models/` 模型封装、路径常量、`speakerlab/` 与 `look2hear/` 两个 vendored 模型依赖）
 - `common/speakerlab/`：3D-Speaker相关依赖（vendored）与 `md-eval.pl`
 - `common/look2hear/`：TIGER相关依赖（vendored）
 - `tools`：常用工具，包括参数扫描，log分析等
 - `run.py`：运行编排脚本（ASR + diarization + viewer）
 - `asr/`：ASR模块
-- `viewer/`：ASR 结果可视化
+- `viewer/`：管线产物可视化（stage 分层：diarization 时间线 / 分离段回放 / ASR 转写）
 - `test_der.py`：DER 评估脚本
 
 各模块（diarization / separation / asr / viewer）之间全部经共享输出目录的

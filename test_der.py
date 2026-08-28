@@ -2,17 +2,22 @@
 """DER 评估脚本（替代原 test_der.sh）：跑实时管线 + 对 refined RTTM（流式后端的最终输出）计算 DER。
 
 运行参数以 `config.yaml` 为准，脚本只补充运行时必须信息和少量覆盖项。
-管线批量执行由 `pipeline.process_batch` 完成（模型只加载一次，单文件失败
+管线批量执行由 `pipeline.process` 完成（模型只加载一次，单文件失败
 不中断整批），本脚本只负责 CLI、DER 计算与退出码。
 环境变量仍作为缺省值生效：
 
     CONFIG_PATH → --config        MODEL_PATH   → --model_path
     HF_TOKEN    → --hf_token      HF_CACHE_DIR → --hf_cache_dir
-    DEVICE      → --device
+    DEVICE      → --device        STAGE        → --stage
     REF_RTTM / REF_RTTM_DIR → --ref_rttm
     DEBUG=0     → --no-debug      SHOW_RTTM=1  → --show_rttm
     DER_VERBOSE=0 → --no-der_verbose
     OUTPUT_ROOT → --output_root   RUN_NAME     → --run_name
+    ASR_CONFIG_PATH → --asr_config（仅 --stage 3 生效）
+
+`--stage` 为累积式（默认 1，DER 评估不需要 separation/ASR）：
+1=只 diarization；2=+separation 分段音频；3=+ASR 转写（批量共享一个
+ASR follow 进程；transcript 是额外产物，DER 输入仍是 refined RTTM）。
 
 用法：
 
@@ -58,6 +63,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="参考 RTTM 目录；置空则跳过 DER 计算",
     )
     parser.add_argument(
+        "--stage",
+        type=int,
+        choices=[1, 2, 3],
+        default=int(os.environ.get("STAGE", "1")),
+        help="累积式运行阶段：1=只 diarization（默认，DER 评估足够）；"
+        "2=+separation 分段音频；3=+ASR 转写（transcript 为额外产物）",
+    )
+    parser.add_argument(
+        "--asr_config",
+        default=os.environ.get("ASR_CONFIG_PATH", "./config/asr.yaml"),
+        help="ASR 转写的 YAML 配置（仅 --stage 3 生效）",
+    )
+    parser.add_argument(
         "--debug",
         action=argparse.BooleanOptionalAction,
         default=env_flag("DEBUG", True),
@@ -99,6 +117,7 @@ def main() -> int:
         print("hf_cache_dir override enabled")
     if args.device:
         print(f"device override: {args.device}")
+    print(f"stage={args.stage}")
     print("==========================================")
 
     # 合并 CLI 与 YAML（argparse 默认值 < YAML < 显式 CLI），构建管线配置。
@@ -112,20 +131,23 @@ def main() -> int:
     config = config_from_args(merged_args)
 
     # 批量执行：模型只加载一次，逐文件处理；单文件失败不中断整批。
-    batch = pipeline.process_batch(
+    result = pipeline.process(
         audio_paths,
         config=config,
+        stage=args.stage,
         config_path=args.config,
         output_root=args.output_root,
         run_name=args.run_name,
         test_name=_TEST_NAME,
         model_path=merged_args.model_path,
+        asr_config=args.asr_config,
         verbose=args.debug,
+        header_title="DER test",
         header_fields={
             "audio_input": audio,
             "num_audio_files": len(audio_paths),
             "config_path": args.config,
-            "with_separation": False,
+            "stage": args.stage,
             "model_path_override": args.model_path,
             "hf_cache_dir_override": args.hf_cache_dir,
             "device_override": args.device,
@@ -133,26 +155,29 @@ def main() -> int:
             "ref_path": args.ref_rttm or None,
         },
     )
+    # 管线被 Ctrl+C 中断（rc=130）时不继续跑 DER，直接收尾。
+    if result.returncode == 130:
+        return 130
 
     print("\n========== DER Results ==========")
     if not args.ref_rttm:
         print("DER skipped: --ref_rttm not set")
     else:
         der_rc = run_der_evaluation(
-            batch.exp_dir,
+            result.exp_dir,
             args.ref_rttm,
             args.run_name,
             args.der_verbose,
-            batch.results_file,
+            result.results_file,
         )
         if der_rc != 0:
             return der_rc
 
-    print(f"\nResults saved to {batch.results_file}")
+    print(f"\nResults saved to {result.results_file}")
     print(f"Outputs written to: {dirs.basic_dir}")
-    if batch.failed:
+    if result.failed:
         print(
-            f"WARNING: {len(batch.failed)} file(s) failed: {batch.failed}",
+            f"WARNING: {len(result.failed)} file(s) failed: {result.failed}",
             file=sys.stderr,
         )
         return 1

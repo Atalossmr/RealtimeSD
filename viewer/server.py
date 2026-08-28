@@ -1,8 +1,15 @@
-"""ASR 转写结果可视化服务器（纯标准库，无第三方依赖）。
+"""管线产物可视化服务器（纯标准库，无第三方依赖）。
 
-扫描 exp_root 下的 `{uri}.transcript.jsonl`，并在 audio_root 下按 `{uri}.wav`
-（递归）匹配原始整段音频，为前端页面提供会话列表、转写 JSON 和音频流
-（支持 HTTP Range，长音频可 seek）。
+按产物分层支持管线的三个 stage（stage 越多，可看到的信息越多）：
+
+- stage 1：`{uri}.refined.rttm` + `{uri}.speakers.json` → diarization 时间线
+  + speaker 状态（uncertain/合并标记）；
+- stage 2：+ `segments/{uri}.segments.jsonl` 与分段 wav → 每段分离音频回放；
+- stage 3：+ `transcripts/{uri}.transcript.jsonl` → ASR 转写文本。
+
+扫描 exp_root 下三类产物（并集）建立会话索引，并在 audio_root 下按
+`{uri}.wav`（递归）匹配原始整段音频；为前端页面提供会话列表、RTTM/转写/
+分段清单 JSON 和音频流（支持 HTTP Range，长音频可 seek）。
 
 用法：
 
@@ -25,34 +32,65 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
 _TRANSCRIPT_SUFFIX = ".transcript.jsonl"
+_RTTM_SUFFIX = ".refined.rttm"
+_MANIFEST_SUFFIX = ".segments.jsonl"
+_SPEAKERS_SUFFIX = ".speakers.json"
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+# 新布局中产物的直接父目录名（其上一级才是 run 根目录）
+_LAYOUT_SUBDIRS = {"rttm", "transcripts", "segments"}
+
+
+def _exp_dir_of(artifact: Path) -> Path:
+    """由产物路径推 run 根目录：新布局在 rttm/ transcripts/ segments/ 子目录
+    （parent.parent），旧平铺布局同目录（parent）。"""
+
+    if artifact.parent.name in _LAYOUT_SUBDIRS:
+        return artifact.parent.parent
+    return artifact.parent
 
 
 class SessionIndex:
-    """uri -> (transcript_path, audio_path|None) 的索引（可重扫，发现新产物）。"""
+    """uri -> 各类产物路径的索引（可重扫，发现新产物）。
+
+    三类产物任一存在即成会话：refined RTTM（stage1）/ segments manifest
+    （stage2）/ transcript（stage3）；speakers.json sidecar 与原始音频
+    独立索引后挂到会话上。scan/读路径经 lock 串行化（ThreadingHTTPServer
+    并发 handler 共享本索引）。
+    """
 
     def __init__(self, exp_roots: list[Path], audio_roots: list[Path],
                  overrides: dict[str, Path]):
         self.exp_roots = exp_roots
         self.audio_roots = audio_roots
         self.overrides = overrides
+        self.lock = threading.Lock()
         self.sessions: dict[str, dict] = {}
         self.scan()
 
     def scan(self) -> None:
+        with self.lock:
+            self._scan_locked()
+
+    def _scan_locked(self) -> None:
         for exp_root in self.exp_roots:
+            for path in sorted(exp_root.rglob(f"*{_RTTM_SUFFIX}")):
+                uri = path.name[: -len(_RTTM_SUFFIX)]
+                session = self.sessions.setdefault(uri, self._new_session(path))
+                session["rttm"] = path
+            for path in sorted(exp_root.rglob(f"*{_MANIFEST_SUFFIX}")):
+                uri = path.name[: -len(_MANIFEST_SUFFIX)]
+                session = self.sessions.setdefault(uri, self._new_session(path))
+                session["manifest"] = path
             for path in sorted(exp_root.rglob(f"*{_TRANSCRIPT_SUFFIX}")):
                 uri = path.name[: -len(_TRANSCRIPT_SUFFIX)]
-                if uri not in self.sessions:
-                    self.sessions[uri] = {"transcript": path, "audio": None, "speakers": None}
-                else:
-                    self.sessions[uri]["transcript"] = path
-        # speakers.json sidecar 独立索引：新布局在 rttm/ 子目录、旧布局与
-        # transcript 同目录，rglob 两种都兼容。
+                session = self.sessions.setdefault(uri, self._new_session(path))
+                session["transcript"] = path
+        # speakers.json sidecar 独立索引：新布局在 rttm/ 子目录、旧布局平铺，
+        # rglob 两种都兼容。
         speakers_index: dict[str, Path] = {}
         for exp_root in self.exp_roots:
-            for path in exp_root.rglob("*.speakers.json"):
-                speakers_index.setdefault(path.name[: -len(".speakers.json")], path)
+            for path in exp_root.rglob(f"*{_SPEAKERS_SUFFIX}"):
+                speakers_index.setdefault(path.name[: -len(_SPEAKERS_SUFFIX)], path)
         audio_index: dict[str, Path] = {}
         for audio_root in self.audio_roots:
             for path in audio_root.rglob("*.wav"):
@@ -64,28 +102,131 @@ class SessionIndex:
             elif session["audio"] is None:
                 session["audio"] = audio_index.get(uri)
 
-    def transcript_json(self, uri: str) -> list[dict] | None:
-        session = self.sessions.get(uri)
-        if not session:
-            return None
-        segments = []
-        with open(session["transcript"], encoding="utf-8") as file_obj:
+    @staticmethod
+    def _new_session(artifact: Path) -> dict:
+        return {
+            "rttm": None,
+            "manifest": None,
+            "transcript": None,
+            "audio": None,
+            "speakers": None,
+            "exp_dir": _exp_dir_of(artifact),
+        }
+
+    def is_live(self, session: dict) -> bool:
+        """done 哨兵未出现 = 管线仍在运行，产物还会增量增长（前端据此轮询）。"""
+
+        return not (session["exp_dir"] / ".diarization_done").exists()
+
+    def list_sessions(self) -> list[dict]:
+        with self.lock:
+            return [
+                {"uri": uri, **session} for uri, session in sorted(self.sessions.items())
+            ]
+
+    def _get(self, uri: str) -> dict | None:
+        with self.lock:
+            session = self.sessions.get(uri)
+            return dict(session) if session else None
+
+    def get(self, uri: str) -> dict | None:
+        """取会话（未命中时先重扫一次——产物可能刚落盘）。"""
+
+        session = self._get(uri)
+        if session is None:
+            self.scan()
+            session = self._get(uri)
+        return session
+
+    @staticmethod
+    def _read_jsonl(path: Path) -> list[dict]:
+        """逐行解析 jsonl；坏行（如读到写入中途的产物）跳过，下轮轮询再读。"""
+
+        entries = []
+        with open(path, encoding="utf-8") as file_obj:
             for line in file_obj:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    entry = json.loads(line)
-                    segments.append({
-                        "speaker_id": int(entry["speaker_id"]),
-                        "start": float(entry["start"]),
-                        "end": float(entry["end"]),
-                        "text": entry["text"],
-                    })
-                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-                    continue  # 坏行（如读到写入中途的旧产物）：跳过，下轮轮询再读
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return entries
+
+    def transcript_json(self, uri: str) -> list[dict] | None:
+        session = self.get(uri)
+        if not session or not session["transcript"]:
+            return None
+        segments = []
+        for entry in self._read_jsonl(session["transcript"]):
+            try:
+                segments.append({
+                    "speaker_id": int(entry["speaker_id"]),
+                    "start": float(entry["start"]),
+                    "end": float(entry["end"]),
+                    "text": entry["text"],
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
         segments.sort(key=lambda s: (s["start"], s["end"]))
         return segments
+
+    def rttm_json(self, uri: str) -> list[dict] | None:
+        """解析 refined RTTM → 段数组（speaker_id/start/end，无文本）。"""
+
+        session = self.get(uri)
+        if not session or not session["rttm"]:
+            return None
+        segments = []
+        with open(session["rttm"], encoding="utf-8") as file_obj:
+            for raw in file_obj:
+                line = raw.strip()
+                if not line.startswith("SPEAKER"):
+                    continue  # 跳过注释头与空行
+                parts = line.split()
+                try:
+                    start = float(parts[3])
+                    segments.append({
+                        "speaker_id": int(parts[7]),
+                        "start": start,
+                        "end": start + float(parts[4]),
+                    })
+                except (IndexError, ValueError):
+                    continue  # 坏行：跳过，下轮轮询再读
+        segments.sort(key=lambda s: (s["start"], s["end"]))
+        return segments
+
+    def segments_json(self, uri: str) -> list[dict] | None:
+        """解析 segments manifest → 段数组（file 只返回 basename，不泄露路径）。"""
+
+        session = self.get(uri)
+        if not session or not session["manifest"]:
+            return None
+        segments = []
+        for entry in self._read_jsonl(session["manifest"]):
+            try:
+                segments.append({
+                    "speaker_id": int(entry["speaker_id"]),
+                    "start": float(entry["start"]),
+                    "end": float(entry["end"]),
+                    "file": Path(entry["path"]).name,
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+        segments.sort(key=lambda s: (s["start"], s["end"]))
+        return segments
+
+    def segment_audio_path(self, uri: str, filename: str) -> Path | None:
+        """分段 wav 的实际路径；拒绝路径穿越（只接受 basename）。"""
+
+        if not filename or Path(filename).name != filename:
+            return None
+        session = self.get(uri)
+        if not session or not session["manifest"]:
+            return None
+        path = session["manifest"].parent / uri / filename
+        return path if path.is_file() else None
 
     def speakers_json(self, uri: str) -> dict | None:
         """读取 refined 级的 speaker 状态 sidecar（{uri}.speakers.json）。
@@ -93,10 +234,9 @@ class SessionIndex:
         sidecar 由管线的 refined 级（RefinedRTTMWriter）与 refined RTTM
         同步原子更新，包含各 speaker 的总时长、uncertain 标记与合并事件；
         不存在（旧产物）时返回 None，前端按无标记展示。
-        路径来自 scan() 建立的索引（兼容 rttm/ 子目录与旧平铺布局）。
         """
 
-        session = self.sessions.get(uri)
+        session = self.get(uri)
         if not session:
             return None
         status_path = session.get("speakers")
@@ -110,7 +250,7 @@ class SessionIndex:
 
 
 class ViewerHandler(BaseHTTPRequestHandler):
-    server_version = "RealtimeSDViewer/1.0"
+    server_version = "RealtimeSDViewer/1.1"
     index: SessionIndex  # 由 main() 注入
 
     def log_message(self, fmt, *args):  # 保持安静，按需自行恢复
@@ -185,45 +325,70 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.index.scan()  # 管线运行中产物会后出现，每次请求重扫
             self._send_json([
                 {
-                    "uri": uri,
-                    "transcript_url": f"/api/transcript/{uri}",
-                    "audio_url": f"/api/audio/{uri}" if s["audio"] else None,
-                    # 跟随模式下 done 哨兵未出现 = 管线/ASR 仍在运行，
-                    # transcript 还会增量增长，前端据此持续轮询。
-                    # 哨兵在 run 输出目录顶层：新布局 transcript 位于
-                    # transcripts/ 子目录（parent.parent），旧布局同目录（parent）。
-                    "live": not (
-                        (s["transcript"].parent / ".diarization_done").exists()
-                        or (s["transcript"].parent.parent / ".diarization_done").exists()
+                    "uri": s["uri"],
+                    "audio_url": f"/api/audio/{s['uri']}" if s["audio"] else None,
+                    "live": self.index.is_live(s),
+                    "has_rttm": bool(s["rttm"]),
+                    "has_segments": bool(s["manifest"]),
+                    "has_transcript": bool(s["transcript"]),
+                    "rttm_url": f"/api/rttm/{s['uri']}" if s["rttm"] else None,
+                    "segments_url": (
+                        f"/api/segments/{s['uri']}" if s["manifest"] else None
+                    ),
+                    "transcript_url": (
+                        f"/api/transcript/{s['uri']}" if s["transcript"] else None
                     ),
                 }
-                for uri, s in sorted(self.index.sessions.items())
+                for s in self.index.list_sessions()
             ])
             return
         if route.startswith("/api/transcript/"):
-            uri = unquote(route[len("/api/transcript/"):])
-            if uri not in self.index.sessions:
-                self.index.scan()
-            segments = self.index.transcript_json(uri)
+            segments = self.index.transcript_json(
+                unquote(route[len("/api/transcript/"):])
+            )
             if segments is None:
-                self._send_json({"error": f"unknown uri: {uri}"}, status=404)
+                self._send_json({"error": f"no transcript for uri: {route}"},
+                                status=404)
             else:
                 self._send_json(segments)
             return
+        if route.startswith("/api/rttm/"):
+            segments = self.index.rttm_json(unquote(route[len("/api/rttm/"):]))
+            if segments is None:
+                self._send_json({"error": f"no refined RTTM for uri: {route}"},
+                                status=404)
+            else:
+                self._send_json(segments)
+            return
+        if route.startswith("/api/segments/"):
+            segments = self.index.segments_json(
+                unquote(route[len("/api/segments/"):])
+            )
+            if segments is None:
+                self._send_json({"error": f"no segments for uri: {route}"},
+                                status=404)
+            else:
+                self._send_json(segments)
+            return
+        if route.startswith("/api/segment_audio/"):
+            rest = unquote(route[len("/api/segment_audio/"):])
+            uri, _, filename = rest.partition("/")
+            path = self.index.segment_audio_path(uri, filename)
+            if path is None:
+                self._send_json({"error": f"no segment audio: {rest}"}, status=404)
+            else:
+                self._send_audio(path)
+            return
         if route.startswith("/api/speakers/"):
-            uri = unquote(route[len("/api/speakers/"):])
-            if uri not in self.index.sessions:
-                self.index.scan()
             # 无 sidecar 时返回 null（200），前端按无标记展示
-            self._send_json(self.index.speakers_json(uri))
+            self._send_json(
+                self.index.speakers_json(unquote(route[len("/api/speakers/"):]))
+            )
             return
         if route.startswith("/api/audio/"):
-            uri = unquote(route[len("/api/audio/"):])
-            if uri not in self.index.sessions:
-                self.index.scan()
-            session = self.index.sessions.get(uri)
+            session = self.index.get(unquote(route[len("/api/audio/"):]))
             if not session or not session["audio"]:
-                self._send_json({"error": f"no audio for uri: {uri}"}, status=404)
+                self._send_json({"error": f"no audio for uri: {route}"}, status=404)
             else:
                 self._send_audio(session["audio"])
             return
@@ -242,9 +407,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ASR 转写结果可视化服务器")
+    parser = argparse.ArgumentParser(description="管线产物可视化服务器")
     parser.add_argument("--exp_root", action="append", default=None,
-                        help="transcript 扫描根目录（可重复，默认 exp）")
+                        help="产物扫描根目录（可重复，默认 exp）")
     parser.add_argument("--audio_root", action="append", default=None,
                         help="原始音频扫描根目录（可重复，默认 datasets）")
     parser.add_argument("--audio", action="append", default=[],
@@ -262,11 +427,17 @@ def main() -> None:
         overrides[uri] = Path(path)
 
     index = SessionIndex(exp_roots, audio_roots, overrides)
-    matched = sum(1 for s in index.sessions.values() if s["audio"])
-    print(f"found {len(index.sessions)} session(s), {matched} with audio")
+    print(f"found {len(index.sessions)} session(s)")
     for uri, session in sorted(index.sessions.items()):
+        caps = []
+        if session["rttm"]:
+            caps.append("rttm")
+        if session["manifest"]:
+            caps.append("segments")
+        if session["transcript"]:
+            caps.append("transcript")
         audio = session["audio"] or "(no audio matched)"
-        print(f"  {uri}: {session['transcript']} | audio: {audio}")
+        print(f"  {uri}: [{', '.join(caps)}] | audio: {audio}")
 
     ViewerHandler.index = index
     server = ThreadingHTTPServer(("127.0.0.1", args.port), ViewerHandler)

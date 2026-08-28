@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>RealtimeSD · ASR 结果时间线</title>
+<title>RealtimeSD · 管线产物时间线</title>
 <style>
   :root {
     --bg: #1e1f24; --panel: #26272e; --border: #3a3b44;
@@ -60,6 +60,13 @@
     color: #f97583; border: 1px solid #f97583; border-radius: 8px;
     font-size: 11px; padding: 0 6px; white-space: nowrap; align-self: center;
   }
+  .segplay {
+    background: var(--bg); color: var(--dim); border: 1px solid var(--border);
+    border-radius: 4px; cursor: pointer; font-size: 11px; padding: 0 6px;
+    white-space: nowrap; align-self: center;
+  }
+  .segplay:hover { border-color: var(--accent); color: var(--text); }
+  .segplay.playing { color: #56d4a0; border-color: #56d4a0; }
   .file-label {
     border: 1px dashed var(--border); border-radius: 4px; padding: 4px 8px;
     cursor: pointer; color: var(--dim);
@@ -76,9 +83,10 @@
   <select id="sessionSelect" hidden></select>
   <span id="fileMode">
     <label class="file-label">选择音频…<input type="file" id="audioFile" accept="audio/*" hidden></label>
-    <label class="file-label">选择 transcript.jsonl…<input type="file" id="transcriptFile" accept=".jsonl" hidden></label>
+    <label class="file-label">选择 transcript.jsonl / refined.rttm…<input type="file" id="transcriptFile" accept=".jsonl,.rttm" hidden></label>
   </span>
   <audio id="player" controls></audio>
+  <audio id="segPlayer" hidden></audio>
   <button id="fitBtn" title="重置缩放">适配全段</button>
   <span id="liveBadge" hidden>● LIVE</span>
   <label id="uncertainToggleWrap" hidden
@@ -100,7 +108,7 @@
 // ---------- 全局状态 ----------
 const state = {
   uri: null,
-  segments: [],            // [{speaker_id, start, end, text}]
+  segments: [],            // [{speaker_id, start, end, text|null}]
   duration: 0,             // 音频总时长（秒）
   viewStart: 0, viewEnd: 0, // 当前可视时间窗（秒）
   peaks: null,             // 波形 min/max 桶
@@ -108,12 +116,19 @@ const state = {
   activeIdx: -1,
   overlapFlags: [],          // 每段是否与其他说话人存在时间重叠
   speakersInfo: null,        // refined 级 sidecar（{uri}.speakers.json）：时长/uncertain/合并事件
+  // ---- 分层数据源（stage 越多信息越多）----
+  source: null,              // transcript（stage3）/ segments（stage2）/ rttm（stage1）
+  hasTranscript: false,
+  hasSegments: false,
+  segFiles: new Map(),       // "spk{id}_{start}" -> 分段 wav 文件名（manifest 建立）
+  lastRaw: "",               // 上一轮的源数据 JSON 串（rttm/segments 源比对用）
 };
 
 const PALETTE = ["#4f9cf9","#f97583","#56d4a0","#e3b341","#b083f0","#ff9f43",
                  "#39c5cf","#f778ba","#7ee787","#ffa657","#76a8ff","#d2a8ff"];
 
 const player = document.getElementById("player");
+const segPlayer = document.getElementById("segPlayer");
 const canvas = document.getElementById("timeline");
 const ctx = canvas.getContext("2d");
 const tooltip = document.getElementById("tooltip");
@@ -203,13 +218,42 @@ function computeOverlapFlags(segments) {
   return flags;
 }
 
+// ---------- 分离段音频（stage>=2：manifest 建立的 start+speaker -> 文件名 映射） ----------
+function buildSegFiles(entries) {
+  state.segFiles = new Map(
+    entries.map(e => [`spk${e.speaker_id}_${e.start.toFixed(3)}`, e.file])
+  );
+}
+
+function segFileOf(s) {
+  return state.segFiles.get(`spk${s.speaker_id}_${s.start.toFixed(3)}`) || null;
+}
+
+function playSegFile(file, btn) {
+  segPlayer.src =
+    `/api/segment_audio/${encodeURIComponent(state.uri)}/${encodeURIComponent(file)}`;
+  segPlayer.play().catch(() => {});
+  document.querySelectorAll(".segplay.playing")
+    .forEach(el => el.classList.remove("playing"));
+  if (btn) btn.classList.add("playing");
+}
+segPlayer.onended = () =>
+  document.querySelectorAll(".segplay.playing")
+    .forEach(el => el.classList.remove("playing"));
+
 // ---------- 数据加载（服务器模式：轮询增量刷新，跟随管线实时更新） ----------
 const POLL_INTERVAL = 2000;
 const liveBadge = document.getElementById("liveBadge");
 
 function setLiveBadge(live) { liveBadge.hidden = !live; }
 
-// 用最新的会话列表刷新下拉框（新增会话、audio/live 状态变化），保留当前选择
+async function fetchJSON(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+// 用最新的会话列表刷新下拉框（新增会话、audio/live/能力位变化），保留当前选择
 function updateSessionSelect(sessions) {
   const select = document.getElementById("sessionSelect");
   for (const s of sessions) {
@@ -219,9 +263,18 @@ function updateSessionSelect(sessions) {
       opt.value = s.uri;
       select.appendChild(opt);
     }
-    opt.textContent = s.uri + (s.audio_url ? "" : "（无匹配音频）");
+    // 能力标签：随产物出现逐档升级（rttm → +分离段 → +转写）
+    const caps = [];
+    if (s.has_rttm) caps.push("rttm");
+    if (s.has_segments) caps.push("分离段");
+    if (s.has_transcript) caps.push("转写");
+    opt.textContent = s.uri + (caps.length ? `（${caps.join(" + ")}）` : "") +
+      (s.audio_url ? "" : "（无匹配音频）");
     opt.dataset.audioUrl = s.audio_url || "";
     opt.dataset.live = s.live ? "1" : "";
+    opt.dataset.transcript = s.has_transcript ? "1" : "";
+    opt.dataset.segments = s.has_segments ? "1" : "";
+    opt.dataset.rttm = s.has_rttm ? "1" : "";
   }
   select.hidden = select.options.length === 0;
   if (!select.value && select.options.length) {
@@ -255,6 +308,34 @@ function currentOption() {
     : null;
 }
 
+// 按能力位选择数据源：transcript（带文本）> segments manifest（带分离音频）
+// > refined RTTM（仅 diarization 时间线）
+function wantedSource(opt) {
+  if (opt?.dataset.transcript === "1") return "transcript";
+  if (opt?.dataset.segments === "1") return "segments";
+  return "rttm";
+}
+
+async function fetchSourceSegments(uri, source) {
+  if (source === "transcript") {
+    const list = await fetchJSON(`/api/transcript/${encodeURIComponent(uri)}`);
+    return list ? { raw: JSON.stringify(list), segments: list } : null;
+  }
+  if (source === "segments") {
+    const list = await fetchJSON(`/api/segments/${encodeURIComponent(uri)}`);
+    if (!list) return null;
+    buildSegFiles(list);
+    return {
+      raw: JSON.stringify(list),
+      segments: list.map(e => ({
+        speaker_id: e.speaker_id, start: e.start, end: e.end, text: null,
+      })),
+    };
+  }
+  const list = await fetchJSON(`/api/rttm/${encodeURIComponent(uri)}`);
+  return list ? { raw: JSON.stringify(list), segments: list } : null;
+}
+
 async function pollUpdate() {
   try {
     const resp = await fetch("/api/sessions");
@@ -263,15 +344,35 @@ async function pollUpdate() {
       updateSessionSelect(sessions);
       const opt = currentOption();
       if (opt) {
-        // 音频可能晚于 transcript 被匹配到，出现后补挂
+        // 音频可能晚于产物被匹配到，出现后补挂
         if (opt.dataset.audioUrl && !player.getAttribute("src")) {
           player.src = opt.dataset.audioUrl;
         }
-        const tResp = await fetch(
-          `/api/transcript/${encodeURIComponent(opt.value)}`);
-        if (tResp.ok) {
-          const segments = await tResp.json();
-          if (segments.length !== state.segments.length) mergeSegments(segments);
+        // 能力位升档（rttm → segments → transcript）时整体重载会话
+        if (wantedSource(opt) !== state.source) {
+          await loadServerSession(opt.value);
+        } else {
+          const data = await fetchSourceSegments(opt.value, state.source);
+          if (data && data.raw !== state.lastRaw) {
+            state.lastRaw = data.raw;
+            // transcript 源沿用前缀增量追加；rttm/segments 源会被 merge
+            // 事件或新段重写/追加，统一整体重渲染（量级低，开销可忽略）
+            if (state.source === "transcript" &&
+                data.segments.length !== state.segments.length) {
+              mergeSegments(data.segments);
+            } else if (state.source !== "transcript") {
+              replaceSegments(data.segments);
+            }
+          }
+          if (state.hasSegments) {
+            // manifest append-only：段数变了才重建映射并重渲染（补 ▶ 按钮）
+            const list = state.source === "segments" ? null :
+              await fetchJSON(`/api/segments/${encodeURIComponent(opt.value)}`);
+            if (list && list.length !== state.segFiles.size) {
+              buildSegFiles(list);
+              renderTranscript();
+            }
+          }
         }
         // 合并事件/uncertain 变化不改变段数，sidecar 每轮独立轮询
         await fetchSpeakersInfo(opt.value);
@@ -307,17 +408,33 @@ function mergeSegments(segments) {
   statusEl.textContent = `${state.uri}: ${segments.length} 段`;
 }
 
+// 非 transcript 源（rttm / segments）的整体替换：merge 事件会重写历史行，
+// 前缀假设不成立，统一重渲染
+function replaceSegments(segments) {
+  const knownSpeakers = new Set(state.speakerVisible.keys());
+  const hasNewSpeaker = segments.some(s => !knownSpeakers.has(effId(s.speaker_id)));
+  state.segments = segments;
+  state.overlapFlags = computeOverlapFlags(segments);
+  if (hasNewSpeaker) buildSpeakerChips();
+  renderTranscript();
+  statusEl.textContent = `${state.uri}: ${segments.length} 段`;
+}
+
 async function loadServerSession(uri) {
   const select = document.getElementById("sessionSelect");
   const opt = select.querySelector(`option[value="${CSS.escape(uri)}"]`);
   statusEl.textContent = `加载 ${uri} …`;
   state.speakersInfo = null; // 切换会话时清空旧 sidecar，防止串台
   await fetchSpeakersInfo(uri, /* apply= */ false);
-  const resp = await fetch(`/api/transcript/${encodeURIComponent(uri)}`);
-  const segments = await resp.json();
+  const source = wantedSource(opt);
+  const data = await fetchSourceSegments(uri, source);
   const audioUrl = opt && opt.dataset.audioUrl;
   setLiveBadge(opt && opt.dataset.live === "1");
-  setSession(uri, segments, audioUrl || null);
+  state.source = source;
+  state.hasTranscript = source === "transcript";
+  state.hasSegments = opt?.dataset.segments === "1";
+  state.lastRaw = data ? data.raw : "";
+  setSession(uri, data ? data.segments : [], audioUrl || null);
 }
 
 function setSession(uri, segments, audioUrl) {
@@ -330,6 +447,8 @@ function setSession(uri, segments, audioUrl) {
   buildSpeakerChips();
   renderTranscript();
   scrollTranscriptToBottom(); // 加载/切换会话后定位到最新段
+  segPlayer.pause();
+  segPlayer.removeAttribute("src");
   if (audioUrl) {
     player.src = audioUrl;
   } else {
@@ -344,7 +463,7 @@ function setSession(uri, segments, audioUrl) {
   fitView();
 }
 
-// 静态模式：本地文件
+// ---------- 静态模式：本地文件 ----------
 document.getElementById("audioFile").onchange = e => {
   const file = e.target.files[0];
   if (file) player.src = URL.createObjectURL(file);
@@ -353,11 +472,32 @@ document.getElementById("transcriptFile").onchange = async e => {
   const file = e.target.files[0];
   if (!file) return;
   const text = await file.text();
-  const segments = text.split("\n").filter(l => l.trim()).map(l => {
-    const o = JSON.parse(l);
-    return { speaker_id: o.speaker_id, start: o.start, end: o.end, text: o.text };
-  }).sort((a, b) => a.start - b.start || a.end - b.end);
-  setSession(file.name.replace(/\.transcript\.jsonl$/, ""), segments, null);
+  let segments, uri;
+  if (/\.rttm$/i.test(file.name)) {
+    // refined RTTM：SPEAKER uri 1 start dur <NA> <NA> spk <NA> <NA>
+    segments = text.split("\n")
+      .filter(l => l.startsWith("SPEAKER"))
+      .map(l => {
+        const p = l.trim().split(/\s+/);
+        const start = parseFloat(p[3]);
+        return { speaker_id: parseInt(p[7], 10), start,
+                 end: start + parseFloat(p[4]), text: null };
+      })
+      .sort((a, b) => a.start - b.start || a.end - b.end);
+    uri = file.name.replace(/\.refined\.rttm$/i, "").replace(/\.rttm$/i, "");
+    state.source = "rttm";
+  } else {
+    segments = text.split("\n").filter(l => l.trim()).map(l => {
+      const o = JSON.parse(l);
+      return { speaker_id: o.speaker_id, start: o.start, end: o.end, text: o.text };
+    }).sort((a, b) => a.start - b.start || a.end - b.end);
+    uri = file.name.replace(/\.transcript\.jsonl$/, "");
+    state.source = "transcript";
+  }
+  state.segFiles = new Map(); // 静态模式不支持分离段播放
+  state.hasTranscript = state.source === "transcript";
+  state.hasSegments = false;
+  setSession(uri, segments, null);
 };
 
 player.addEventListener("loadedmetadata", () => {
@@ -450,7 +590,8 @@ canvas.addEventListener("mousemove", e => {
     tooltip.style.left = (e.clientX + 12) + "px";
     tooltip.style.top = (e.clientY + 12) + "px";
     tooltip.textContent = `[${fmtTime(seg.start)} - ${fmtTime(seg.end)}] ${spkLabel(seg.speaker_id)}` +
-      (state.overlapFlags[idx] ? "（与其他说话人重叠）" : "") + `: ${seg.text}`;
+      (state.overlapFlags[idx] ? "（与其他说话人重叠）" : "") +
+      (seg.text ? `: ${seg.text}` : "");
   } else {
     tooltip.style.display = "none";
   }
@@ -598,7 +739,7 @@ function buildSpeakerChips() {
   }
 }
 
-// ---------- 转写列表 ----------
+// ---------- 段列表 ----------
 // 滚动条贴底时新段落自动下翻；用户上翻阅读历史时保持位置不动
 function isTranscriptAtBottom() {
   return transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 40;
@@ -617,8 +758,18 @@ function appendTranscriptRow(s, i) {
     // uncertain 说话人标签用灰色（--dim），不再按调色板着色
     `<span class="spk" style="color:${showUncertain(eff) ? "var(--dim)" : spkColor(eff)}">${spkLabel(s.speaker_id)}</span>` +
     (state.overlapFlags[i] ? `<span class="overlap-badge">重叠</span>` : "") +
-    `<span></span>`;
-  row.lastChild.textContent = s.text;
+    `<span class="text"></span>`;
+  row.querySelector(".text").textContent = s.text || "";
+  // stage>=2：有对应分离段音频时提供独立播放（不打断主播放器）
+  const file = segFileOf(s);
+  if (file) {
+    const btn = document.createElement("button");
+    btn.className = "segplay";
+    btn.textContent = "▶ 分离";
+    btn.title = "播放该段的分离音频（单说话人音轨）";
+    btn.onclick = ev => { ev.stopPropagation(); playSegFile(file, btn); };
+    row.insertBefore(btn, row.querySelector(".text"));
+  }
   row.onclick = () => { player.currentTime = s.start + 1e-3; player.play().catch(() => {}); };
   transcriptEl.appendChild(row);
 }
@@ -673,7 +824,7 @@ function tick() {
 (async function init() {
   const ok = await loadServerSessions();
   if (!ok) {
-    statusEl.textContent = "静态模式：请手动选择音频与 transcript.jsonl 文件";
+    statusEl.textContent = "静态模式：请手动选择音频与 transcript.jsonl / refined.rttm 文件";
   }
   tick();
 })();
