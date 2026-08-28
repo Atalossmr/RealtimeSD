@@ -4,6 +4,7 @@
 
 - YAML 是全部调参项的唯一来源；
 - 合并优先级：argparse 默认值 < YAML 配置 < 显式 CLI 参数；
+  YAML 中值为 null 的键视为"未配置"，不参与覆盖（保留环境变量缺省）。
 - dataclass 字段默认值是配置项的唯一兜底来源，不再手写第二份字面量。
 """
 
@@ -98,7 +99,9 @@ def merge_args_with_config(
         raise ValueError(f"Unknown keys in YAML config: {', '.join(unknown_keys)}")
 
     merged = dict(args_dict)
-    merged.update(yaml_config)
+    # YAML 中值为 null 的键视为"未配置"，不参与覆盖——否则 config.yaml 里的
+    # `model_path:`（空值）会把 MODEL_PATH 等环境变量缺省静默吞掉。
+    merged.update({key: value for key, value in yaml_config.items() if value is not None})
 
     for dest in provided_dests:
         if dest == "config":

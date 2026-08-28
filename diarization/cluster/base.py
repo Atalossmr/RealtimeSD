@@ -25,6 +25,16 @@ if TYPE_CHECKING:
     import numpy as np
 
 
+def resolve_merged(global_id: int, merged_into: dict[int, int]) -> int:
+    """沿 merged_into 链解析到最终幸存 id（幸存 id 之后也可能再被并）。"""
+
+    seen: set[int] = set()
+    while global_id in merged_into and global_id not in seen:
+        seen.add(global_id)
+        global_id = merged_into[global_id]
+    return global_id
+
+
 class BaseChunkClusterer(ABC):
     """chunk 级 local->global 分配后端接口。"""
 
@@ -64,4 +74,4 @@ class BaseChunkClusterer(ABC):
         )
 
 
-__all__ = ["BaseChunkClusterer"]
+__all__ = ["BaseChunkClusterer", "resolve_merged"]

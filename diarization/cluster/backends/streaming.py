@@ -24,7 +24,7 @@ from scipy.optimize import linear_sum_assignment
 from common.config import ChunkPipelineConfig
 from common.contracts import ChunkDebugInfo, ChunkObservation
 
-from ..base import BaseChunkClusterer
+from ..base import BaseChunkClusterer, resolve_merged
 from ...utils import l2_normalize
 
 
@@ -297,11 +297,13 @@ class StreamingChunkClusterer(BaseChunkClusterer):
         local_idx = observation.local_idx
         matched_speaker, similarity = assignment.get(local_idx, (None, -1.0))
         # assignment 基于本 chunk 开头的 centroid 集计算；若匹配对象在本 chunk
-        # 内已被 merge 掉，改挂到幸存 id，并用幸存者的当前 centroid 重算
-        # 相似度——旧相似度是相对被并 centroid 的，merge 后 centroid 已变，
-        # 直接参与阈值判定会失真（可能误把 fallback 判成 matched 或反之）。
+        # 内已被 merge 掉，沿 merge 链解析到最终幸存 id（同 chunk 内可能连续
+        # 多次 merge，单跳解析会拿到已删除的中间 id 导致 KeyError），并用幸存
+        # 者的当前 centroid 重算相似度——旧相似度是相对被并 centroid 的，
+        # merge 后 centroid 已变，直接参与阈值判定会失真（可能误把 fallback
+        # 判成 matched 或反之）。
         if matched_speaker is not None:
-            survivor = self.merged_into.get(matched_speaker, matched_speaker)
+            survivor = resolve_merged(matched_speaker, self.merged_into)
             if survivor != matched_speaker:
                 matched_speaker = survivor
                 if observation.embedding is not None:

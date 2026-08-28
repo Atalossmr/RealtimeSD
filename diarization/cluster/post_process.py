@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from ..utils import l2_normalize
-from .base import BaseChunkClusterer
+from .base import BaseChunkClusterer, resolve_merged
 
 
 logger = logging.getLogger(__name__)
@@ -110,16 +110,6 @@ def cluster_stats(
 # ----------------------------------------------------------------------
 
 
-def _resolve_merged(global_id: int, merged_into: dict[int, int]) -> int:
-    """沿 merged_into 链解析到最终幸存 id（幸存 id 之后也可能再被并）。"""
-
-    seen: set[int] = set()
-    while global_id in merged_into and global_id not in seen:
-        seen.add(global_id)
-        global_id = merged_into[global_id]
-    return global_id
-
-
 def _atomic_replace(tmp_path: str, dst_path: str) -> None:
     """os.replace 的 Windows 容错封装：目标文件被杀毒软件/索引器等短暂占用时
     会抛 PermissionError [WinError 5]，退避重试若干次再放弃。"""
@@ -164,13 +154,13 @@ def write_refined_rttm(
 
     def final_survivor(global_id: int) -> int:
         # 先解流式期间的 merge 链，再叠小样本合并映射。
-        resolved = _resolve_merged(global_id, merged_into)
+        resolved = resolve_merged(global_id, merged_into)
         return merge_map.get(resolved, resolved)
 
     # 时长按"最终幸存 global id"累计（流式期间被 merge 的先归并到幸存者）。
     durations: dict[int, float] = {}
     for parts in speaker_lines:
-        survivor = _resolve_merged(int(parts[7]), merged_into)
+        survivor = resolve_merged(int(parts[7]), merged_into)
         durations[survivor] = durations.get(survivor, 0.0) + float(parts[4])
 
     alive_centroids = {
@@ -225,7 +215,7 @@ def write_speaker_status(
 
     speakers = []
     for global_id in sorted(set(durations) | set(merged_into)):
-        resolved = _resolve_merged(global_id, merged_into)
+        resolved = resolve_merged(global_id, merged_into)
         survivor = merge_map.get(resolved, resolved)
         merged = survivor != global_id
         # durations/counts 按幸存者累计；被并 speaker 自身的数值已并入幸存者，
