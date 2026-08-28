@@ -14,8 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import yaml
-
 from ..constants import BASE_DIR
 from . import base as common_config
 
@@ -218,27 +216,6 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
     return config
 
 
-def validate_follow_requirements(config_path: Path) -> None:
-    """校验 ASR 跟随（python -m asr.app --follow）对管线配置的前置要求。
-
-    需要 config 里开启分段导出且使用 streaming 后端；
-    ahc 后端不产出 segments manifest，ASR follow 进程会空转到超时。
-    """
-
-    with open(config_path, encoding="utf-8") as file_obj:
-        data = yaml.safe_load(file_obj) or {}
-    if not data.get("separation_enabled"):
-        raise SystemExit(
-            f"ERROR: ASR 跟随需要 {config_path} 中 separation_enabled 为 true"
-        )
-    backend = data.get("clustering_backend", "streaming")
-    if backend != "streaming":
-        raise SystemExit(
-            f"ERROR: ASR 跟随需要 {config_path} 中 clustering_backend 为 streaming"
-            f"（当前为 {backend!r}，该后端不产出分段 manifest）"
-        )
-
-
 __all__ = [
     "ChunkPipelineConfig",
     "DEFAULT_CONFIG_PATH",
@@ -246,5 +223,4 @@ __all__ = [
     "merge_args_with_config",
     "config_from_args",
     "validate_runtime_args",
-    "validate_follow_requirements",
 ]

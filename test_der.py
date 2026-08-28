@@ -2,7 +2,7 @@
 """DER 评估脚本（替代原 test_der.sh）：跑实时管线 + 对 refined RTTM（流式后端的最终输出）计算 DER。
 
 运行参数以 `config.yaml` 为准，脚本只补充运行时必须信息和少量覆盖项。
-管线在本进程内运行（复用 run.py 的 `DiarizationRunner`，批量时模型只加载一次）。
+管线在本进程内运行（复用 pipeline 包的 `DiarizationRunner`，批量时模型只加载一次）。
 环境变量仍作为缺省值生效：
 
     CONFIG_PATH → --config        MODEL_PATH   → --model_path
@@ -27,14 +27,13 @@ import argparse
 import logging
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 from common.config import config_from_args, merge_args_with_config
 from common.utils import add_common_args, append_run_header, env_flag, setup_logger
 from diarization.utils import collect_audio_paths
-from run import DiarizationRunner
+from pipeline import DiarizationRunner, run_der_evaluation
 
 _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
 
@@ -76,16 +75,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=env_flag("DER_VERBOSE", True),
     )
     return parser
-
-
-def _read_summary_values(path: Path) -> dict[str, str]:
-    values = {}
-    with open(path, encoding="utf-8") as file_obj:
-        for line in file_obj:
-            if "=" in line:
-                key, value = line.strip().split("=", 1)
-                values[key] = value
-    return values
 
 
 def main() -> int:
@@ -157,7 +146,7 @@ def main() -> int:
             log.write(f"  - {path}\n")
         log.write(f"Config: {args.config} (with_separation=False)\n")
         log.write(
-            "Pipeline: in-process run.DiarizationRunner"
+            "Pipeline: in-process pipeline.DiarizationRunner"
             f" (device={config.device}, model_type={config.model_type},"
             f" segmentation_model={config.segmentation_model},"
             f" backend={config.clustering_backend})\n"
@@ -196,56 +185,11 @@ def main() -> int:
     if not args.ref_rttm:
         print("DER skipped: --ref_rttm not set")
     else:
-        der_log = logs_dir / "der.log"
-        der_summary = exp_dir / "der_summary.txt"
-        with open(der_log, "w", encoding="utf-8") as log:
-            if rttm_count == 0:
-                message = (
-                    f"{args.run_name} -> DER: SKIPPED | reason: no refined RTTM found"
-                )
-                print(message)
-                log.write(message + "\n")
-                with open(results_file, "a", encoding="utf-8") as file_obj:
-                    file_obj.write(message + "\n")
-            else:
-                header = f"========== Computing DER for {args.run_name} =========="
-                print(header)
-                log.write(header + "\n")
-                der_cmd = [
-                    sys.executable,
-                    "tools/compute_der.py",
-                    "--sys",
-                    str(exp_dir / "rttm"),
-                    "--ref",
-                    args.ref_rttm,
-                    "--summary-file",
-                    str(der_summary),
-                    "--collar",
-                    "0.0",
-                    "--sys-suffix",
-                    ".refined.rttm",
-                    "--ref-suffix",
-                    ".rttm",
-                ]
-                if args.der_verbose:
-                    der_cmd.append("--verbose")
-                proc = subprocess.run(der_cmd, capture_output=True, text=True)
-                sys.stdout.write(proc.stdout)
-                log.write(proc.stdout)
-                if proc.returncode != 0:
-                    sys.stderr.write(proc.stderr)
-                    return proc.returncode
-                if der_summary.is_file():
-                    values = _read_summary_values(der_summary)
-                    der = values.get("global_der", "NA")
-                    files = values.get("global_files", "0")
-                    print(
-                        f"{args.run_name} -> DER(global): {der}% over {files} file(s)"
-                    )
-                    with open(results_file, "a", encoding="utf-8") as file_obj:
-                        file_obj.write(
-                            f"{args.run_name} -> DER(global): {der}% | files={files}\n"
-                        )
+        der_rc = run_der_evaluation(
+            exp_dir, args.ref_rttm, args.run_name, args.der_verbose, results_file
+        )
+        if der_rc != 0:
+            return der_rc
 
     print(f"\nResults saved to {results_file}")
     print(f"Outputs written to: {basic_dir}")

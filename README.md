@@ -5,9 +5,9 @@
 
 ## 项目内容
 
-- 入口：`python3 run.py <音频文件>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer；`--stage {1,2,3}` 控制推进阶段）、`python3 -m diarization.app`（仅 diarization 阶段）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）
+- 入口：`python3 run.py <音频文件>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer；`--stage {1,2,3}` 控制推进阶段）、`python3 -m diarization.app`（仅 diarization 阶段）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）、`python3 -m separation.app`（骨架：separation 暂不可独立运行，由 run.py `--stage >= 2` 驱动）
 - 配置文件：`config/config.yaml`（diarization）、`config/asr.yaml`（ASR 转写）
-- 管线实现：`diarization/`（extract + cluster）+ `separation/`（分段音频导出），模型代码统一在 `common/models/`
+- 管线实现：`diarization/`（extract + cluster）+ `separation/`（分段音频导出）+ `pipeline/`（组合层），模型代码统一在 `common/models/`
 - 运行脚本：`run.py`（一键编排）、`test_der.py`（DER 评估）
 - DER 评估：`tools/compute_der.py`
 - 运行日志分析：`tools/analyze_log.py`
@@ -143,7 +143,7 @@ RTTM 写入同一输出目录（模型只加载一次），最后输出逐文件
 python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name task16
 ```
 
-脚本常用环境变量（在 `run.py` 中作为对应命令行参数的缺省值）：
+脚本常用环境变量（作为对应命令行参数的缺省值）：
 
 - `CONFIG_PATH`
 - `MODEL_PATH`
@@ -158,14 +158,18 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 - `WITH_VIEWER`（=0 时不启动结果可视化服务器）
 - `VIEWER_PORT`（默认为 8000）
 - `WAIT_VIEWER`（=0 时管线跑完不挂起等待 Ctrl+C，直接收尾退出）
-- `REF_RTTM`
+
+以下环境变量仅 `test_der.py` 使用：
+
+- `DEVICE`（运行设备覆盖，如 cpu/cuda）
+- `REF_RTTM`（参考 RTTM 目录）
 - `DER_VERBOSE`
 
 脚本行为说明：
 
 - 管线跑完后 `run.py` 不立即退出：打印"音频已处理完成"并挂起等待，
   viewer 保持可访问；按 Ctrl+C 后脚本退出并关闭 viewer（无人值守场景
-  用 `--no-wait` / `WAIT_VIEWER=0` 跳过等待，跑完直接退出
+  用 `--no-wait` / `WAIT_VIEWER=0` 跳过等待，跑完直接退出）
 
 ## 配置
 
@@ -175,6 +179,7 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 
 - `diarization/`：说话人识别（extract + cluster 两级，chunk 管线）
 - `separation/`：分段音频导出（commit 区重叠检测 + TIGER 分离 + 身份确认，接流式 ASR）
+- `pipeline/`：组合层（runner：stage1+2 组合执行；follow：ASR 跟随编排；eval：DER 评估）
 - `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志与编排辅助、`models/` 模型封装、路径常量）
 - `speakerlab/`：3D-Speaker相关依赖与 `md-eval.pl`
 - `look2hear`：TIGER相关依赖
@@ -184,7 +189,7 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 - `viewer/`：ASR 结果可视化
 - `test_der.py`：DER 评估脚本
 
-三个模块（diarization / asr / viewer）之间全部经共享输出目录的
+各模块（diarization / separation / asr / viewer）之间全部经共享输出目录的
 文件交互（manifest / transcript / speakers.json sidecar / 哨兵），接口字段定义见各模块 README 的"文件交互接口"/"数据接口"章节。
 
 ## 备注

@@ -12,7 +12,6 @@ from .pipeline import (
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
-    validate_follow_requirements,
     validate_runtime_args,
 )
 
@@ -24,5 +23,4 @@ __all__ = [
     "merge_args_with_config",
     "config_from_args",
     "validate_runtime_args",
-    "validate_follow_requirements",
 ]

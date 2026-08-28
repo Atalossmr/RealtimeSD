@@ -4,8 +4,7 @@
 
     python -m diarization.app --wav <音频> --output_dir <目录> [--config ...]
 
-主体复用仓库根目录 run.py 的 `run_diarization`（`python -m diarization.app`
-从仓库根目录运行时 run.py 可导入），避免复制组合逻辑。仅接受单个音频文件
+主体复用组合层 `pipeline.run_diarization`，避免复制组合逻辑。仅接受单个音频文件
 （与 run.py 一致，不做目录批量）；separation 不启用 ⇒ 无 segments 输出，
 ahc 后端也可用（RTTM-only 本来就支持）。
 """
@@ -24,7 +23,7 @@ from common.config import (
     validate_runtime_args,
 )
 from common.utils import setup_logger
-from run import run_diarization
+from pipeline import run_diarization
 
 
 logger = logging.getLogger(__name__)

@@ -8,4 +8,7 @@
 - `common.models/`：模型封装（embedding / segmentation / tiger，hf_resolver /
   modelscope 为模型缓存解析）
 - `common.constants`：路径常量（BASE_DIR）
+
+边界：需要知道多个业务模块（diarization/separation/asr）协作语义的代码
+不归这里，见顶层 `pipeline/` 组合层。
 """
