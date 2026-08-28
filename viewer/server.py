@@ -321,6 +321,19 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if route in ("/", "/index.html"):
             self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
             return
+        # 静态资源（style.css / app.js 等）：仅 STATIC_DIR 平铺文件，防路径穿越
+        name = route.lstrip("/")
+        if (
+            not route.startswith("/api/")
+            and name
+            and Path(name).name == name
+            and (STATIC_DIR / name).is_file()
+        ):
+            self._send_file(
+                STATIC_DIR / name,
+                mimetypes.guess_type(name)[0] or "application/octet-stream",
+            )
+            return
         if route == "/api/sessions":
             self.index.scan()  # 管线运行中产物会后出现，每次请求重扫
             self._send_json([

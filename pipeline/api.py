@@ -36,9 +36,6 @@ from .runner import DiarizationRunner
 
 logger = logging.getLogger(__name__)
 
-# ASR 模型加载（含可能的下载）等待上限。
-_DEFAULT_READY_TIMEOUT = 3600.0
-
 
 @dataclass
 class RunDirs:
@@ -122,7 +119,6 @@ def process(
     test_name: str = "common",
     model_path: Optional[str] = None,
     asr_config: str = "./config/asr.yaml",
-    asr_ready_timeout: float = _DEFAULT_READY_TIMEOUT,
     verbose: bool = False,
     on_asr_ready: Optional[Callable[[], None]] = None,
     header_fields: Optional[Mapping[str, object]] = None,
@@ -144,6 +140,9 @@ def process(
     `on_asr_ready` 在 ASR 就绪后、管线启动前调用（stage<3 时同样在管线
     启动前调用一次），供调用方启动 viewer 等伴随服务；挂起等待与 viewer
     收尾由调用方负责。
+
+    ASR 协调无超时上限：就绪等待与收尾排空都等到 follow 进程自行终结
+    （早退会立即报错），卡住时由用户 Ctrl+C 中断。
 
     管线异常不跳过收尾：记录后照常放行 ASR 收尾落盘；Ctrl+C 置 rc=130。
     """
@@ -225,7 +224,7 @@ def process(
             print(f"Starting ASR follow process: {shlex.join(asr_cmd)}")
             asr_proc = subprocess.Popen(asr_cmd)
             print("Waiting for ASR model ready ...")
-            wait_process_ready(asr_proc, dirs.ready_file, asr_ready_timeout)
+            wait_process_ready(asr_proc, dirs.ready_file)
             print("ASR model ready.")
 
         # 2. ASR 就绪（或 stage<3 直接）后放行调用方的伴随服务（如 viewer）。

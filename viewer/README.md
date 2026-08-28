@@ -89,11 +89,14 @@ HTTP 端点（服务器模式）：
 - `POST /api/shutdown`：停止服务器（响应送达后延时触发 shutdown；run.py
   的等待循环检测到 server 退出后随之收尾）。
 
-前端每 2s 轮询 sessions + 当前数据源 + speakers：数据源按能力位选择
-（transcript > segments manifest > refined RTTM），能力位升档时整体重载；
-transcript 源按"旧段是新段前缀"增量合并，RTTM/manifest 源（会被 merge 重写
-历史行）用 JSON 串比对、变化即整体重算；speakers.json 同理整体重算（合并映射、
-uncertain、重叠标记）。
+前端每 2s 轮询 sessions + 当前数据源 + speakers：段结构数据源按能力位选择
+（segments manifest > refined RTTM，始终跟随 diarization 节奏），transcript
+不作为段结构源——它是文本叠加层，按键 `spk{id}_{start}` 贴到段上、独立轮询，
+转写出一段补一段（无 manifest 的会话才兜底用 transcript 当段结构源）；
+能力位升档（rttm → segments）时保留页面状态增量叠加，不整页重载；
+transcript 兜底源按"旧段是新段前缀"增量合并，RTTM/manifest 源（会被 merge
+重写历史行）用 JSON 串比对、变化即整体重算；speakers.json 同理整体重算
+（合并映射、uncertain、重叠标记）。
 
 ## 静态模式（无服务器）
 

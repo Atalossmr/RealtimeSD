@@ -102,12 +102,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--viewer_port", type=int, default=int(os.environ.get("VIEWER_PORT", "8000"))
     )
-    parser.add_argument(
-        "--asr_ready_timeout",
-        type=float,
-        default=3600.0,
-        help="等待 ASR 模型就绪的超时时间（秒）",
-    )
     return parser
 
 
@@ -210,7 +204,6 @@ def main() -> int:
             test_name=_TEST_NAME,
             model_path=merged_args.model_path,
             asr_config=args.asr_config,
-            asr_ready_timeout=args.asr_ready_timeout,
             verbose=bool(merged_args.verbose or args.debug),
             on_asr_ready=start_viewer if args.viewer else None,
             header_fields={

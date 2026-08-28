@@ -63,34 +63,27 @@ def build_asr_follow_cmd(
     return cmd
 
 
-def wait_process_ready(
-    proc: subprocess.Popen, ready_file: Path, timeout: float
-) -> None:
-    """轮询等子进程的就绪哨兵；进程早退或超时则报错退出。"""
+def wait_process_ready(proc: subprocess.Popen, ready_file: Path) -> None:
+    """轮询等子进程的就绪哨兵；进程早退则报错退出。
 
-    deadline = time.monotonic() + timeout
+    无超时上限：模型下载/加载耗时不可预估，卡住时由用户 Ctrl+C 中断。
+    """
+
     while not ready_file.exists():
         if proc.poll() is not None:
             raise RuntimeError(f"子进程在就绪前退出（rc={proc.returncode}）")
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"等待子进程就绪超时（{timeout}s）")
         time.sleep(1.0)
 
 
 def finish_follow_process(proc: subprocess.Popen, done_file: Path) -> None:
-    """落 done 哨兵放行跟随进程收尾，等其落盘；超时先 SIGTERM，仍不退出再 SIGKILL。"""
+    """落 done 哨兵放行跟随进程收尾，等其排空积压后自行退出。
+
+    无超时上限：follow 循环的清空判定（哨兵出现且本轮无新段）保证其
+    自行退出；批量场景排空耗时可能远超管线运行时长，设上限等于截断转写。
+    """
 
     done_file.touch()
-    try:
-        proc.wait(timeout=600)
-    except subprocess.TimeoutExpired:
-        # 收尾超时：先 SIGTERM，仍不退出再 SIGKILL，避免主进程永久挂起。
-        proc.terminate()
-        try:
-            proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+    proc.wait()
 
 
 __all__ = [
