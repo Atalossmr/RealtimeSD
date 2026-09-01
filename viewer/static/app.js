@@ -13,7 +13,6 @@ const state = {
   speakersInfo: null,        // refined 级 sidecar（{uri}.speakers.json）：时长/uncertain/合并事件
   // ---- 分层数据源（stage 越多信息越多）----
   source: null,              // 段结构数据源：segments（stage2）/ rttm（stage1）/ transcript（无 manifest 时的兜底）
-  hasTranscript: false,
   hasSegments: false,
   segFiles: new Map(),       // "spk{id}_{start}" -> 分段 wav 文件名（manifest 建立）
   textMap: new Map(),        // "spk{id}_{start}" -> 转写文本（transcript 叠加层，不改段结构）
@@ -353,7 +352,6 @@ async function upgradeSession(opt) {
   // 避免用空列表顶掉已有的段；下轮轮询再试
   if (!data || (data.segments.length === 0 && state.segments.length > 0)) return;
   state.source = source;
-  state.hasTranscript = source === "transcript";
   state.hasSegments = opt.dataset.segments === "1";
   state.lastRaw = data.raw;
   state.segments = data.segments;
@@ -385,7 +383,6 @@ async function loadServerSession(uri) {
   const audioUrl = opt && opt.dataset.audioUrl;
   setLiveBadge(opt && opt.dataset.live === "1");
   state.source = source;
-  state.hasTranscript = source === "transcript";
   state.hasSegments = opt?.dataset.segments === "1";
   state.lastRaw = data ? data.raw : "";
   setSession(uri, data ? data.segments : [], audioUrl || null);
@@ -455,7 +452,6 @@ document.getElementById("transcriptFile").onchange = async e => {
     state.source = "transcript";
   }
   state.segFiles = new Map(); // 静态模式不支持分离段播放
-  state.hasTranscript = state.source === "transcript";
   state.hasSegments = false;
   setSession(uri, segments, null);
 };
