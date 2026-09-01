@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""分离段重聚类实验：对分离导出的语音段重提嵌入、AHC 重聚类并评测 DER。
+"""E6 分离段重聚类实验：对分离导出的语音段重提嵌入、AHC 重聚类并评测 DER。
 
-验证假设："embedding 可分性差源于混合音频短段的串扰"——唯一变量是嵌入提取
-的音频来源（混合短段 vs TIGER 分离段）。逐文件：
+验证假设："embedding 可分性差源于混合音频短段的串扰"。逐文件：
 
 1. 读 `{segments_dir}/{uri}.segments.jsonl`（WavSegmentSink 产物），
    忽略 manifest 中管线聚类给出的 speaker_id，只取音频与时间段；
@@ -15,12 +14,21 @@
 产物（--output 目录）：`sweep.csv`（阈值 × 全局 DER 明细）、`summary.txt`
 （d-prime 对比表 + 逐阈值 DER 表 + 逐文件最优 DER）。
 
+解读注意（实验设计的固有混淆，勿过度解读绝对 DER）：
+- 段时间线由 stage-1/2 的导出决策固定（gap 合并、min_segment_duration、
+  归属失败回退混合音频等），因此阈值扫描中 MS/FA 为常数、只有 SER 随阈值
+  变化——这正是本实验想隔离的部分；但与管线 refined RTTM 的 DER 绝对值
+  不可直接相比（时间线不同）。
+- "唯一变量是音频来源"只是近似：分离段为整段 embedding（可能数十秒），
+  而对照的混合短段是 ≤4s 纯净区截断，时长与选段策略同时不同。
+- 归属失败回退混合音频的段（含串音）无法从 manifest 区分，一并参与统计。
+
 用法：
-  .venv/bin/python tools/cluster_separated.py \
-      --segments exp/sep_cluster/segments \
+  .venv/bin/python tools/experiments/separated_recluster.py \
+      --segments exp/der_test/<run>/segments \
       --ref datasets/task1-6/rttm \
-      --mixture-input exp/sweep_task1-6/embeddings \
-      --output exp/sep_cluster/analysis
+      --mixture-input exp/experiments/task1-6_extract/embeddings \
+      --output exp/experiments/e6_separated_recluster
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ import numpy as np
 import torchaudio
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from analyze_embeddings import (  # noqa: E402
     best_threshold_err,
@@ -56,7 +65,7 @@ from common.models.embedding_infer import (  # noqa: E402
 from common.utils.device import resolve_device  # noqa: E402
 from common.speakerlab.process.processor import FBank  # noqa: E402
 
-logger = logging.getLogger("cluster_separated")
+logger = logging.getLogger("separated_recluster")
 
 # AHC 相似度阈值网格（与 ahc_similarity_threshold 同语义）。
 AHC_GRID = [round(0.30 + 0.05 * i, 2) for i in range(9)]  # 0.30 .. 0.70
@@ -220,6 +229,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--device", default=None, help="设备覆盖（如 cuda/cpu）")
     parser.add_argument("--model_path", default=None, help="embedding checkpoint 覆盖")
+    parser.add_argument(
+        "--collar",
+        type=float,
+        default=0.0,
+        help="DER 评估的宽容边界（秒），默认 0.0（与 tools/experiments 统一口径）",
+    )
     return parser
 
 
@@ -317,6 +332,7 @@ def main() -> None:
 
     # ---------- pass 2：AHC 阈值扫描 + DER ----------
     ref_dir_str = str(ref_dir)
+    log(f"=== AHC threshold sweep (collar={args.collar}s, 计入重叠) ===")
     sweep_rows: list[dict[str, object]] = []
     best_per_file: dict[str, dict[str, float]] = {}
     for thr in AHC_GRID:
@@ -334,7 +350,7 @@ def main() -> None:
             per_file, _, global_result = compute_der_batch(
                 ref_path=ref_dir_str,
                 sys_path=tmp,
-                collar=0.0,
+                collar=args.collar,
                 ignore_overlap=False,
                 sys_suffix=".rttm",
                 ref_suffix=".rttm",

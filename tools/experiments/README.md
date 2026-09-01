@@ -13,6 +13,7 @@
 | E3 | `oracle_segments.py` | 真值分割 + 真实 embedding：extract / analyze / cluster 三个子命令 |
 | E4c | `ahc_oracle_k.py` | AHC 固定 n_clusters=真值人数 → 簇数选不准的损失 |
 | E4ab/E5 | （复用 `tools/sweep_params.py`） | streaming/ahc 阈值网格扫描 → 调参天花板 |
+| E6 | `separated_recluster.py` | 分离段重提嵌入 + AHC 重聚类 → 验证"嵌入噪声源于混合短段串扰" |
 
 ## 依赖与产物
 
@@ -55,6 +56,12 @@
 .venv/bin/python tools/sweep_params.py \
     --input exp/experiments/task1-6_extract/embeddings --ref datasets/task1-6/rttm \
     --set global_match_threshold=... --output exp/experiments/e5_sweep_streaming.csv
+
+# E6 分离段重聚类（需先以 --stage 2 跑出 segments/，提嵌入需 GPU）
+.venv/bin/python tools/experiments/separated_recluster.py \
+    --segments exp/der_test/<run>/segments --ref datasets/task1-6/rttm \
+    --mixture-input exp/experiments/task1-6_extract/embeddings \
+    --output exp/experiments/e6_separated_recluster --device cuda
 ```
 
 ## 实现要点
@@ -66,3 +73,6 @@
   完整 turn 区间供 cluster 步写 RTTM（截断区间会直接凭空贡献 MS，已踩过坑）。
 - sys RTTM 的 raw 文件须放子目录：`compute_der.py` 按 `endswith(".rttm")` 收集，
   `*.raw.rttm` 会被误匹配。
+- E6 的段时间线由 stage-1/2 导出决策固定，阈值扫描里只有 SER 变化（MS/FA 为
+  常数）；其 DER 绝对值与管线 refined RTTM 的 DER 时间线不同，不可直接对比。
+  另注意分离段是整段 embedding（无 4s 截断），与混合短段对照并非严格单变量。

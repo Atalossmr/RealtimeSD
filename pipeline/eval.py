@@ -29,9 +29,11 @@ def run_der_evaluation(
     run_name: str,
     der_verbose: bool,
     results_file: Path,
+    collar: float = 0.0,
 ) -> int:
     """对 exp_dir/rttm 下的 refined RTTM 计算 DER（逐文件 + 拼接全局）。
 
+    collar 为 md-eval 的宽容边界（秒），默认 0.0（最严格口径）。
     返回退出码：0 成功或无可评文件；非 0 为 compute_der 子进程失败。
     """
 
@@ -46,7 +48,7 @@ def run_der_evaluation(
             with open(results_file, "a", encoding="utf-8") as file_obj:
                 file_obj.write(message + "\n")
             return 0
-        header = f"========== Computing DER for {run_name} =========="
+        header = f"========== Computing DER for {run_name} (collar={collar}s) =========="
         print(header)
         log.write(header + "\n")
         der_cmd = [
@@ -60,7 +62,7 @@ def run_der_evaluation(
             "--summary-file",
             str(der_summary),
             "--collar",
-            "0.0",
+            str(collar),
             "--sys-suffix",
             ".refined.rttm",
             "--ref-suffix",
@@ -78,9 +80,11 @@ def run_der_evaluation(
             values = _read_summary_values(der_summary)
             der = values.get("global_der", "NA")
             files = values.get("global_files", "0")
-            print(f"{run_name} -> DER(global): {der}% over {files} file(s)")
+            print(f"{run_name} -> DER(global): {der}% over {files} file(s) (collar={collar}s)")
             with open(results_file, "a", encoding="utf-8") as file_obj:
-                file_obj.write(f"{run_name} -> DER(global): {der}% | files={files}\n")
+                file_obj.write(
+                    f"{run_name} -> DER(global): {der}% | files={files} | collar={collar}\n"
+                )
     return 0
 
 

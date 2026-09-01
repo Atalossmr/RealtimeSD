@@ -6,9 +6,9 @@
 ## 项目内容
 
 - 入口：`python3 run.py <音频文件|目录|清单文本>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer；`--stage {1,2,3}` 控制推进阶段；目录/清单为批量模式，模型只加载一次）、`python3 -m diarization.app`（仅 diarization 阶段）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）、`python3 -m separation.app`（骨架：separation 暂不可独立运行，由 run.py `--stage >= 2` 驱动）
-- 库式调用：`pipeline.process(audio="x.wav", stage=1, run_name="demo")`（完整管线封装为公开 API，run.py / test_der.py 均为其薄 CLI 封装；`audio` 传路径列表即批量，模型只加载一次）
-- 配置文件：`config/config.yaml`（diarization）、`config/asr.yaml`（ASR 转写）
-- 管线实现：`diarization/`（extract + cluster）+ `separation/`（分段音频导出）+ `pipeline/`（组合层），模型代码统一在 `common/models/`
+- 库式调用：`pipeline.process(audio="x.wav", stage=1, run_name="demo")`
+- 配置文件：`config/config.yaml`（diarization及separation）、`config/asr.yaml`（ASR 转写）
+- 管线实现：`diarization/`（extract + cluster）+ `separation/`（语音分离）+ `pipeline/`（组合层），模型代码统一在 `common/models/`
 - 运行脚本：`run.py`（一键编排）、`test_der.py`（DER 评估）
 - DER 评估：`tools/compute_der.py`
 - 运行日志分析：`tools/analyze_log.py`

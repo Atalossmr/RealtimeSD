@@ -12,6 +12,7 @@
     REF_RTTM / REF_RTTM_DIR → --ref_rttm
     DEBUG=0     → --no-debug      SHOW_RTTM=1  → --show_rttm
     DER_VERBOSE=0 → --no-der_verbose
+    COLLAR=0.25   → --collar 0.25
     OUTPUT_ROOT → --output_root   RUN_NAME     → --run_name
     ASR_CONFIG_PATH → --asr_config（仅 --stage 3 生效）
 
@@ -90,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=env_flag("DER_VERBOSE", True),
     )
+    parser.add_argument(
+        "--collar",
+        type=float,
+        default=float(os.environ.get("COLLAR", "0.0")),
+        help="DER 评估的宽容边界（秒），默认 0.0（最严格口径）",
+    )
     return parser
 
 
@@ -152,6 +159,7 @@ def main() -> int:
             "hf_cache_dir_override": args.hf_cache_dir,
             "device_override": args.device,
             "der_verbose": int(args.der_verbose),
+            "collar": args.collar,
             "ref_path": args.ref_rttm or None,
         },
     )
@@ -169,6 +177,7 @@ def main() -> int:
             args.run_name,
             args.der_verbose,
             result.results_file,
+            collar=args.collar,
         )
         if der_rc != 0:
             return der_rc
