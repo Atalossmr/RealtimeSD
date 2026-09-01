@@ -45,7 +45,10 @@ _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="实时管线 DER 评估（支持批量）")
+    parser = argparse.ArgumentParser(
+        description="实时管线 DER 评估（支持批量）",
+        allow_abbrev=False,  # 见 common/config/pipeline.py 的同名单元注释
+    )
     parser.add_argument(
         "audio",
         help="输入音频：单个 wav/flac/mp3、音频目录，或每行一个路径的文本清单",

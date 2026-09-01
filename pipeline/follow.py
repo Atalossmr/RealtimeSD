@@ -75,15 +75,17 @@ def wait_process_ready(proc: subprocess.Popen, ready_file: Path) -> None:
         time.sleep(1.0)
 
 
-def finish_follow_process(proc: subprocess.Popen, done_file: Path) -> None:
+def finish_follow_process(proc: subprocess.Popen, done_file: Path) -> int:
     """落 done 哨兵放行跟随进程收尾，等其排空积压后自行退出。
 
     无超时上限：follow 循环的清空判定（哨兵出现且本轮无新段）保证其
     自行退出；批量场景排空耗时可能远超管线运行时长，设上限等于截断转写。
+    返回子进程退出码：非 0 表示 follow 进程在排空阶段崩溃（OOM 等），
+    转写产物可能缺失/不全，调用方应据此置非零退出码。
     """
 
     done_file.touch()
-    proc.wait()
+    return proc.wait()
 
 
 __all__ = [

@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -142,6 +143,20 @@ class ChunkExtractor:
             for track, embedding in zip(
                 pending[start : start + batch_size], batch_embeddings
             ):
+                # 退化 embedding 防护：NaN/inf 会让下游 Hungarian 指派直接抛错
+                # （整个文件中途失败），零范数会造出永远无法匹配/合并的幽灵
+                # 质心。来源通常是分割误检出的数字静音段。记 embedding=None
+                # 交给下游统一按"无 embedding"处理（不指派、帧丢弃），
+                # observation 本身保留进 npz 缓存（has_embedding=False）供排查。
+                if embedding is not None and (
+                    not np.isfinite(embedding).all()
+                    or float(np.linalg.norm(embedding)) <= 1e-12
+                ):
+                    logger.warning(
+                        "degenerate embedding skipped: chunk local_idx=%d "
+                        "regions=%s", track.local_idx, track.regions,
+                    )
+                    embedding = None
                 observations.append(self.track_builder.to_observation(track, embedding))
         return observations
 

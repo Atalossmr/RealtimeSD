@@ -14,6 +14,7 @@
 | E4c | `ahc_oracle_k.py` | AHC 固定 n_clusters=真值人数 → 簇数选不准的损失 |
 | E4ab/E5 | （复用 `tools/sweep_params.py`） | streaming/ahc 阈值网格扫描 → 调参天花板 |
 | E6 | `separated_recluster.py` | 分离段重提嵌入 + AHC 重聚类 → 验证"嵌入噪声源于混合短段串扰" |
+| E7 | `padding_diff.py` | 两套提取缓存（不同 segment_batch_size）的 embedding 差分 → padding 泄漏量化 |
 
 ## 依赖与产物
 
@@ -62,6 +63,16 @@
     --segments exp/der_test/<run>/segments --ref datasets/task1-6/rttm \
     --mixture-input exp/experiments/task1-6_extract/embeddings \
     --output exp/experiments/e6_separated_recluster --device cuda
+
+# E7 padding 泄漏差分（先以不同 segment_batch_size 提两套缓存，需 GPU）
+.venv/bin/python -m diarization.extract.app --wav datasets/task1-6 \
+    --output_dir exp/experiments/e7_padding_leak/bs1 \
+    --config exp/experiments/e7_padding_leak/config_bs1.yaml --device cuda
+.venv/bin/python tools/experiments/padding_diff.py \
+    --base exp/experiments/e7_padding_leak/bs1/embeddings \
+    --other bs4=exp/experiments/e7_padding_leak/bs4/embeddings \
+    --rttm datasets/task1-6/rttm \
+    --output exp/experiments/e7_padding_leak/padding_diff.txt
 ```
 
 ## 实现要点

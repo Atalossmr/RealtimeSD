@@ -114,7 +114,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器（仅运行时/模型/开关参数）。"""
 
     parser = argparse.ArgumentParser(
-        description="chunk 级局部识别 + 增量聚类的实时说话人分离脚本"
+        description="chunk 级局部识别 + 增量聚类的实时说话人分离脚本",
+        # 关闭前缀缩写：merge_args_with_config 靠 argv 精确匹配判断显式 CLI
+        # 参数，允许缩写会让缩写形式漏检，导致 YAML 反向覆盖 CLI。
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--wav",

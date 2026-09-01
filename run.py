@@ -46,7 +46,8 @@ _TEST_NAME = "common"  # 输出固定在 {output_root}/common/{run_name}
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="实时管线一键运行（ASR 先就绪，再启管线与 viewer）"
+        description="实时管线一键运行（ASR 先就绪，再启管线与 viewer）",
+        allow_abbrev=False,  # 见 common/config/pipeline.py 的同名单元注释
     )
     parser.add_argument(
         "audio",

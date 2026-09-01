@@ -48,7 +48,10 @@ class AsrConfig:
 def build_arg_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器（仅运行时/开关参数；调参项都在 YAML）。"""
 
-    parser = argparse.ArgumentParser(description="exporter 音频段目录的 ASR 转写")
+    parser = argparse.ArgumentParser(
+        description="exporter 音频段目录的 ASR 转写",
+        allow_abbrev=False,  # 见 common/config/pipeline.py 的同名单元注释
+    )
     parser.add_argument(
         "--config",
         default=str(DEFAULT_CONFIG_PATH),

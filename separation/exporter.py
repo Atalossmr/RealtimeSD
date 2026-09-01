@@ -152,14 +152,20 @@ class StreamingSegmentExporter:
     ) -> None:
         """处理一个 chunk 的 commit 区：检测重叠、按需分离、逐 speaker 归集音频。
 
-        音频经 open-segment 管线跨 commit 区拼接；每次归集后闭合已确认沉默
-        的段（与 writer.close_inactive 同步 lowering 输出延迟）。
+        音频经 open-segment 管线跨 commit 区拼接；已确认沉默的段每个 chunk
+        都闭合（与 writer.close_inactive 同步 lowering 输出延迟），即使本
+        chunk 没有任何指派/活跃帧——否则尾段会拖到下一个有指派的 chunk
+        甚至 EOF 才 flush，徒增 ASR 延迟。注意闭合必须发生在喂入本 chunk
+        帧片之后（同 writer 先 consume_chunk 再 close_inactive 的顺序），
+        否则会把本 chunk 仍活跃的段误判为沉默而提前截断。
         """
 
         if not local_to_global:
+            self.assembler.close_inactive(chunk.commit_end)
             return
         frames = self._commit_frames(chunk, local_to_global)
         if not frames:
+            self.assembler.close_inactive(chunk.commit_end)
             return
         self._dispatch_chunk(chunk, local_to_global, frames)
         self.assembler.close_inactive(chunk.commit_end)

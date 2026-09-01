@@ -254,7 +254,20 @@ def process(
         # 落 done 哨兵放行 ASR 收尾并等其落盘（stage>=3）；stage<3 无 ASR，
         # 管线结束即 touch 哨兵，供 viewer 判定 LIVE 状态。
         if asr_proc is not None:
-            finish_follow_process(asr_proc, dirs.done_file)
+            asr_rc = finish_follow_process(asr_proc, dirs.done_file)
+            if asr_rc != 0:
+                logger.error(
+                    "ASR follow 进程异常退出（rc=%s），transcript 可能不全，见 %s",
+                    asr_rc,
+                    dirs.logs_dir / "transcribe.log",
+                )
+                print(
+                    f"WARNING: ASR follow 进程异常退出（rc={asr_rc}），"
+                    f"transcript 可能不全，见 {dirs.logs_dir}/transcribe.log",
+                    file=sys.stderr,
+                )
+                if rc == 0:
+                    rc = 1
         else:
             dirs.done_file.touch()
 
