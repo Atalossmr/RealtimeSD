@@ -180,7 +180,16 @@ class NativeERes2NetV2SegmentEmbedder:
         return embedding[0].detach().cpu().numpy().astype(np.float32, copy=False)
 
     def embed_segments(self, waveforms: list[torch.Tensor]) -> list[np.ndarray]:
-        """批量为多个候选段提 embedding。"""
+        """批量为多个候选段提 embedding。
+
+        已知精度风险：短段 FBank 被零填充到批内最长帧后直接过模型，而
+        ERes2NetV2 的 TSTP 池化（speakerlab/models/eres2net/pooling_layers.py）
+        无长度掩码，填充帧经 conv+BN 后会污染 mean/std 统计。因此同一段
+        语音走批量路径与单段路径（embed_segment）得到的 embedding 不完全
+        一致，短段偏移最严重。
+        未来修复方向：按长度分桶组批（bucket batching）减小填充量，或给
+        TSTP 池化加长度掩码 / 长度加权统计。
+        """
 
         if not waveforms:
             return []
