@@ -55,17 +55,22 @@ ASR 与 diarization / viewer 之间无 IPC，全部经共享输出目录的文�
 #### `path` 指向的音频段 wav
 
 - 单声道，采样率必须 = `asr.yaml` 的 `sample_rate`（默认 16000，须与管线
-  `config.yaml` 的 `sample_rate` 一致，不一致直接报错）。
+  `config.yaml` 的 `sample_rate` 一致）。采样率不匹配属确定性配置错误
+  （第一次失败即注定全部失败），首次出现即 fail-fast（非零退出），
+  不逐段跳过。
 
 ### 输出
 
 #### `{output_dir}/{uri}.transcript.jsonl`（viewer 的数据源；run.py 编排时为 `<exp_dir>/transcripts/`）
 
 - 每行 `{"uri", "speaker_id", "start", "end", "text"}`，按 `start` 排序；
-- 写语义：**整体重写**（文件小、幂等）；跟随模式每转完一段即时落盘（供
-  viewer 实时看到逐段生长，而不是等整批积压转完才一次性出现），退出前
-  的统一落盘是最后一次重写；
-- 空文本的段不写入。
+- 写语义：运行期 **append-only 追加**——跟随模式每转完一段即时单行追加
+  （供 viewer 实时看到逐段生长；单行单次 write 保证行完整，viewer 轮询
+  读到不完整行会跳过、下轮再读）。段按 manifest 顺序处理、start 基本
+  递增，append 顺序天然接近排序；进程收尾（退出/中断）的统一落盘做一次
+  **全量排序重写**（临时文件 + 原子替换），保证最终文件有序；
+- 空文本的段不写入；转写失败（瞬时 I/O 等）的段在收尾对账时重试一次，
+  仍失败则 WARNING 列出丢失清单。
 
 ### 协调哨兵（由 run.py / 调用方管理）
 

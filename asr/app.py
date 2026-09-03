@@ -12,8 +12,8 @@
   已有的全部段即落盘返回；
 - 跟随（`--follow --done_file <path>`）：与管线同时启动，轮询 manifest 增量
   读取新追加的段、即出即转（manifest 行在 wav 落盘之后才追加，读到行即
-  可读音频）；每转完一段即时重写落盘（供 viewer 实时展示），done
-  哨兵文件出现且积压清空后做最后一次落盘并退出。
+  可读音频）；每转完一段即时追加落盘（供 viewer 实时展示），done
+  哨兵文件出现且积压清空后做最后一次全量排序落盘并退出。
 
 输出：`{uri}.transcript.jsonl`（按 start 排序）。
 
@@ -57,12 +57,21 @@ _MANIFEST_SUFFIX = ".segments.jsonl"
 _FOLLOW_POLL_INTERVAL = 1.0
 
 
+class SegmentConfigError(ValueError):
+    """确定性配置错误（如段采样率与 asr.yaml 不一致）。
+
+    第一次失败即注定后续全部失败：消费循环遇到直接 fail-fast（非零退出），
+    不做逐段跳过（否则会产出空 transcript 且 rc=0）。
+    """
+
+
 def _write_transcript(
     uri: str,
     results: list[tuple[float, float, int, str]],
     output_dir: Path,
 ) -> None:
-    """按 start 排序写 transcript jsonl（格式与旧 ASRWorker.finalize 一致）。"""
+    """按 start 排序全量重写 transcript jsonl（收尾兜底用；运行期增量
+    落盘走 `_append_transcript`）。格式与旧 ASRWorker.finalize 一致。"""
 
     results = sorted(results, key=lambda r: (r[0], r[1]))
     jsonl_path = output_dir / f"{uri}.transcript.jsonl"
@@ -87,28 +96,66 @@ def _write_transcript(
     logger.info("[asr] wrote %d segments to %s", len(results), jsonl_path)
 
 
+def _append_transcript(
+    uri: str,
+    result: tuple[float, float, int, str],
+    output_dir: Path,
+) -> None:
+    """运行期增量落盘：把一条新结果追加到 transcript jsonl（append-only）。
+
+    单行单次 write 保证行完整（与 manifest 的 append-only 模式一致）；
+    viewer 轮询若读到不完整行会跳过、下轮再读（见 viewer._read_jsonl）。
+    段按 manifest 顺序处理、start 基本递增，append 顺序天然接近排序，
+    收尾时 `_write_transcript` 再做一次全量排序重写。
+    """
+
+    start, end, speaker_id, text = result
+    line = (
+        json.dumps(
+            {
+                "uri": uri,
+                "speaker_id": speaker_id,
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": text,
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    jsonl_path = output_dir / f"{uri}.transcript.jsonl"
+    with open(jsonl_path, "a", encoding="utf-8") as jsonl_file:
+        jsonl_file.write(line)
+
+
 def _transcribe_entry(
     config,
     transcriber: SegmentTranscriber,
     entry: dict,
     results: list[tuple[float, float, int, str]],
-) -> None:
-    """转写一条 manifest 记录，非空结果追加到 results。"""
+) -> tuple[float, float, int, str] | None:
+    """转写一条 manifest 记录，非空结果追加到 results 并返回该条结果。
+
+    空文本返回 None。采样率不匹配抛 SegmentConfigError（确定性配置错误，
+    调用方 fail-fast）；其余异常（坏音频、瞬时 I/O 等）由调用方按瞬时
+    失败处理。
+    """
 
     speaker_id = int(entry["speaker_id"])
     start = float(entry["start"])
     end = float(entry["end"])
     waveform, sample_rate = torchaudio.load(entry["path"])
     if int(sample_rate) != int(config.sample_rate):
-        raise ValueError(
+        raise SegmentConfigError(
             f"segment sample rate mismatch: {entry['path']} is {sample_rate}, "
             f"expected {config.sample_rate}"
         )
     text = transcriber.transcribe_segment(waveform)
     if not text:
         logger.info("[asr] empty text: spk%d [%.3f, %.3f]", speaker_id, start, end)
-        return
-    results.append((start, end, speaker_id, text))
+        return None
+    result = (start, end, speaker_id, text)
+    results.append(result)
     logger.info(
         "[asr] segment_done: spk%d [%.3f, %.3f] (%.3fs) %r",
         speaker_id,
@@ -117,6 +164,7 @@ def _transcribe_entry(
         end - start,
         text[:50],
     )
+    return result
 
 
 def _read_new_entries(manifest_path: Path, offset: int) -> tuple[list[dict], int]:
@@ -161,17 +209,18 @@ def consume_segments_dir(
 
     - 一次性（done_file=None）：单遍消费当前已有段即退出；
     - 跟随（done_file 给定）：轮询直到哨兵出现且本轮无新段（积压清空），
-      每轮把有新结果的 uri 即时重写落盘（供 viewer 实时读取）。
+      每转完一段即时追加落盘（供 viewer 实时读取）。
 
-    退出后按 uri 统一落盘 transcript。
+    转写失败的段记录后在循环结束、最终落盘前重试一次；退出后按 uri 做一次
+    全量排序重写落盘 transcript（运行期是 append-only，保证最终文件有序）。
     """
 
     offsets: dict[Path, int] = {}
     results_by_uri: dict[str, list[tuple[float, float, int, str]]] = {}
+    failed_entries: list[dict] = []  # 转写失败的 manifest 记录，收尾重试一次
     try:
         while True:
             progressed = False
-            dirty_uris: set[str] = set()
             for manifest_path in sorted(segments_dir.glob(f"*{_MANIFEST_SUFFIX}")):
                 uri = manifest_path.name[: -len(_MANIFEST_SUFFIX)]
                 entries, new_offset = _read_new_entries(
@@ -181,32 +230,63 @@ def consume_segments_dir(
                 results = results_by_uri.setdefault(uri, [])
                 for entry in entries:
                     try:
-                        _transcribe_entry(config, transcriber, entry, results)
+                        new_result = _transcribe_entry(
+                            config, transcriber, entry, results
+                        )
+                    except SegmentConfigError as exc:
+                        # 确定性配置错误：第一段失败即注定全部失败，逐段跳过
+                        # 只会产出空 transcript 且 rc=0，直接 fail-fast。
+                        logger.error("[asr] fatal config error, aborting: %s", exc)
+                        raise
                     except Exception:
-                        # 单段失败（坏音频、缺字段等）不杀死整个消费循环：
-                        # 记录后跳过，已转写结果保留，offset 不回退。
+                        # 单段失败（坏音频、瞬时 I/O 抖动等）不杀死整个消费
+                        # 循环：记录后跳过（offset 不回退），收尾统一重试一次。
                         logger.exception(
                             "[asr] skipping segment: %s", entry.get("path", entry)
                         )
+                        failed_entries.append(entry)
                         continue
                     progressed = True
-                    dirty_uris.add(uri)
-                    # 跟随模式逐段落盘（文件小、幂等重写）：viewer 能看到转写
-                    # 逐段生长，而不是等整批积压转完才一次性出现。
-                    if done_file is not None:
-                        _write_transcript(uri, results, output_dir)
-            if done_file is not None:
-                # 轮末兜底重写（与逐段落盘同一份结果，幂等）。
-                for uri in dirty_uris:
-                    _write_transcript(uri, results_by_uri[uri], output_dir)
+                    # 跟随模式逐段追加落盘（append-only）：viewer 能看到转写
+                    # 逐段生长，而不是等整批积压转完才一次性出现；且避免每段
+                    # 全量重写导致磁盘 I/O 随段数平方增长。
+                    if done_file is not None and new_result is not None:
+                        _append_transcript(uri, new_result, output_dir)
             if done_file is None:
                 break
             # 哨兵出现 = 管线已结束，不会再有新段；本轮无进展说明积压已清空。
             if done_file.exists() and not progressed:
                 break
             time.sleep(_FOLLOW_POLL_INTERVAL)
+        # 收尾对账：转写失败的段重试一次（瞬时 I/O 抖动兜底），仍失败的
+        # WARNING 列出丢失清单；重试成功的结果经下方全量落盘一并写出。
+        if failed_entries:
+            logger.info("[asr] retrying %d failed segment(s)", len(failed_entries))
+            lost_entries = []
+            for entry in failed_entries:
+                retry_uri = str(entry.get("uri", ""))
+                try:
+                    _transcribe_entry(
+                        config,
+                        transcriber,
+                        entry,
+                        results_by_uri.setdefault(retry_uri, []),
+                    )
+                except Exception:
+                    logger.exception(
+                        "[asr] retry failed, segment lost: %s",
+                        entry.get("path", entry),
+                    )
+                    lost_entries.append(entry)
+            if lost_entries:
+                logger.warning(
+                    "[asr] %d segment(s) lost after retry: %s",
+                    len(lost_entries),
+                    [e.get("path", e) for e in lost_entries],
+                )
     finally:
-        # 无论正常结束还是异常/中断退出，已转写结果都兜底落盘。
+        # 无论正常结束还是异常/中断退出，已转写结果都兜底做一次全量排序
+        # 重写（运行期是 append-only 追加，这里保证最终文件按 start 有序）。
         for uri, results in results_by_uri.items():
             _write_transcript(uri, results, output_dir)
 
