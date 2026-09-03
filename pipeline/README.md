@@ -38,8 +38,9 @@ diarization 的库代码（extract/cluster/utils）不依赖本包。
   （重依赖，仅 stage>=2 需要）。
 - `follow.py`：stage3 ASR 跟随进程的协作编排——`validate_follow_requirements`
   （前置契约校验：separation_enabled + streaming 后端）、`build_asr_follow_cmd`
-  （follow 子进程命令组装）、`wait_process_ready` / `finish_follow_process`
-  （就绪/done 哨兵协调）。
+  （follow 子进程命令组装，子进程 cwd 锚定仓库根）、`wait_process_ready` /
+  `finish_follow_process`（就绪/done 哨兵协调；收尾排空前有兜底超时，
+  超时按 terminate→kill 升级）。
 - `eval.py`：`run_der_evaluation`——对管线产出的 refined RTTM 目录计算
   逐文件 + 拼接全局 DER（封装 tools/compute_der.py 子进程调用与结果回写，
   路径按仓库根锚定，与 cwd 无关）。

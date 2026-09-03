@@ -158,7 +158,10 @@ class DiarizationRunner:
             # 输出本身由 runner/writer 完成。deferred 后端下 local_to_global
             # 为 None、emitted_frames 为 0（重放阶段不再回调）。
             # 分段音频导出：commit 区音频段输出（重叠区经 TIGER 分离）。
-            if exporter is not None and local_to_global:
+            # 空 local_to_global（本 chunk 无任何指派）也要调用：
+            # handle_chunk 内部会走 close_inactive 兜底，及时闭合连续无
+            # 分配期间已沉默的 open segment，否则段音频迟迟不推给 ASR。
+            if exporter is not None:
                 exporter.handle_chunk(chunk, local_to_global)
             log_structured(
                 logger,

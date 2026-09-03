@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional, Union
 
 from common.config import ChunkPipelineConfig, load_config_and_runtime
+from common.constants import BASE_DIR
 from common.utils import setup_logger
 
 from .follow import (
@@ -141,8 +142,10 @@ def process(
     启动前调用一次），供调用方启动 viewer 等伴随服务；挂起等待与 viewer
     收尾由调用方负责。
 
-    ASR 协调无超时上限：就绪等待与收尾排空都等到 follow 进程自行终结
-    （早退会立即报错），卡住时由用户 Ctrl+C 中断。
+    ASR 协调：就绪等待无超时上限（模型加载耗时不可预估，早退会立即
+    报错，卡住时由用户 Ctrl+C 中断）；收尾排空前有兜底上限（默认
+    300s，中断路径 30s），超时按 terminate→kill 升级并打 WARNING，
+    见 follow.finish_follow_process。
 
     管线异常不跳过收尾：记录后照常放行 ASR 收尾落盘；Ctrl+C 置 rc=130。
     """
@@ -188,9 +191,14 @@ def process(
 
     asr_cmd: list[str] = []
     if stage >= 3:
+        # 相对路径锚定仓库根（与 eval.py 的 BASE_DIR 口径一致）：
+        # follow 子进程 cwd 固定为仓库根，调用方 cwd 不影响解析。
+        asr_config_path = Path(asr_config)
+        if not asr_config_path.is_absolute():
+            asr_config_path = BASE_DIR / asr_config_path
         asr_cmd = build_asr_follow_cmd(
             dirs.exp_dir,
-            str(asr_config),
+            str(asr_config_path),
             dirs.done_file,
             dirs.ready_file,
             verbose=verbose or config.debug,
@@ -222,7 +230,9 @@ def process(
         #    diarization 重叠，且避免段积压到最后才转写。
         if stage >= 3:
             print(f"Starting ASR follow process: {shlex.join(asr_cmd)}")
-            asr_proc = subprocess.Popen(asr_cmd)
+            # cwd 锚定仓库根：python -m asr.app 依赖仓库根在 sys.path，
+            # 调用方 cwd 不是仓库根时子进程会立即 "No module named asr"。
+            asr_proc = subprocess.Popen(asr_cmd, cwd=BASE_DIR)
             print("Waiting for ASR model ready ...")
             wait_process_ready(asr_proc, dirs.ready_file)
             print("ASR model ready.")
@@ -232,6 +242,11 @@ def process(
             on_asr_ready()
 
         # 3. 本进程内逐文件跑 diarization 管线（stage>=2 启用 separation）。
+        # 已知风险（暂不修，留待后续去重/fail-fast）：uri 取
+        # Path(audio_path).stem，同批两个不同目录的同名文件（如
+        # a/01.wav 与 b/01.wav）会共用 uri——raw RTTM 相互覆盖、
+        # segments manifest 与 transcript 混合。调用方应避免同批
+        # 传入 stem 相同的音频。
         runner = DiarizationRunner(config, model_path, with_separation=stage >= 2)
         for audio_path in audio_paths:
             logger.info("Processing %s", audio_path)
@@ -254,7 +269,11 @@ def process(
         # 落 done 哨兵放行 ASR 收尾并等其落盘（stage>=3）；stage<3 无 ASR，
         # 管线结束即 touch 哨兵，供 viewer 判定 LIVE 状态。
         if asr_proc is not None:
-            asr_rc = finish_follow_process(asr_proc, dirs.done_file)
+            # 中断路径（rc=130）传更短的排空超时：保证 Ctrl+C 能尽快返回，
+            # 且等待期间的二次 Ctrl+C 不会把 ASR 子进程遗弃为孤儿。
+            asr_rc = finish_follow_process(
+                asr_proc, dirs.done_file, timeout=30.0 if rc == 130 else 300.0
+            )
             if asr_rc != 0:
                 logger.error(
                     "ASR follow 进程异常退出（rc=%s），transcript 可能不全，见 %s",

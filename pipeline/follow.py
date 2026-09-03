@@ -7,12 +7,15 @@ stage3（ASR 转写）以独立 follow 进程消费 stage2 产出的 segments ma
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from common.config import ChunkPipelineConfig
+
+logger = logging.getLogger(__name__)
 
 
 def validate_follow_requirements(config: ChunkPipelineConfig) -> None:
@@ -75,17 +78,36 @@ def wait_process_ready(proc: subprocess.Popen, ready_file: Path) -> None:
         time.sleep(1.0)
 
 
-def finish_follow_process(proc: subprocess.Popen, done_file: Path) -> int:
+def finish_follow_process(
+    proc: subprocess.Popen, done_file: Path, timeout: float = 300.0
+) -> int:
     """落 done 哨兵放行跟随进程收尾，等其排空积压后自行退出。
 
-    无超时上限：follow 循环的清空判定（哨兵出现且本轮无新段）保证其
-    自行退出；批量场景排空耗时可能远超管线运行时长，设上限等于截断转写。
-    返回子进程退出码：非 0 表示 follow 进程在排空阶段崩溃（OOM 等），
-    转写产物可能缺失/不全，调用方应据此置非零退出码。
+    正常路径行为不变：follow 循环的清空判定（哨兵出现且本轮无新段）
+    保证其自行退出，这里等到它排空为止。timeout 是兜底上限（秒）：
+    超时不等于截断转写的常规预期，而是防止父进程被无限阻塞——批量
+    积压排空过久、或中断路径上等待期间第二次 Ctrl+C 会把 ASR 子进程
+    遗弃为孤儿。超时后按 terminate → 短超时 wait → kill 升级（参照
+    run.py stop_viewer），并打 WARNING。
+    返回子进程退出码：非 0 表示 follow 进程在排空阶段崩溃（OOM 等）
+    或被超时强杀，转写产物可能缺失/不全，调用方应据此置非零退出码。
     """
 
     done_file.touch()
-    return proc.wait()
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "ASR follow 进程排空超过 %ss 未退出，terminate 强收（transcript 可能不全）",
+            timeout,
+        )
+    proc.terminate()
+    try:
+        return proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        logger.warning("ASR follow 进程 terminate 后仍未退出，kill 兜底")
+        proc.kill()
+        return proc.wait()
 
 
 __all__ = [

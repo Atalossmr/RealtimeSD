@@ -142,9 +142,10 @@ def main() -> int:
     print("==========================================")
 
     # viewer 支持多条 --audio uri=path 映射；批量时逐条传入。
+    # 脚本路径锚定仓库根：库式/他目录调用时 cwd 不一定是仓库根。
     viewer_cmd = [
         sys.executable,
-        "viewer/server.py",
+        str(BASE_DIR / "viewer" / "server.py"),
         "--exp_root",
         str(dirs.basic_dir),
         "--audio_root",
