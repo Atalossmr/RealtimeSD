@@ -5,10 +5,11 @@
 
 - 流式后端：逐 chunk 分配后即时写出帧级结果并闭合沉默 turn，零缓冲直通；
 - deferred（离线）后端：逐 chunk 暂存帧参数，finalize 统一聚类后按序重放；
-- refined 级（可选 refiner 参数，两后端通用）：流式后端逐 chunk 按最新合并
-  状态整体重生成 refined RTTM 与 speakers.json sidecar（merge 历史行修正 +
-  uncertain 标记随计数累积刷新）；deferred 后端在 EOF 重放完成后刷新；
-  两者均在 EOF 的 final 刷新叠加小样本强制合并。
+- refined 级（可选 refiner 参数，两后端通用）：流式后端按需整体重生成
+  refined RTTM 与 speakers.json sidecar——本 chunk 发生 merge 事件
+  （merged_into 有新增）或距上次刷新满固定 chunk 数时刷新（merge 历史行
+  修正 + uncertain 标记随计数累积刷新）；deferred 后端在 EOF 重放完成后
+  刷新；两者均在 EOF 的 final 刷新叠加小样本强制合并。
 """
 
 from __future__ import annotations
@@ -25,6 +26,12 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# 流式 refined 级的兜底刷新间隔（chunk 数）：无 merge 事件时按此周期刷新，
+# 避免每 chunk 全量重写 refined RTTM / speakers.json（raw 文件随音频时长
+# 线性增长，逐 chunk 全量重写是 O(n²) I/O，小时级音频不可接受）。
+# 默认 chunk_duration=10s 下约合每 60s 刷新一次。
+REFINER_REFRESH_INTERVAL_CHUNKS = 6
 
 # 每 chunk 处理完后的可选回调（日志、统计等）。
 ChunkHook = Callable[
@@ -44,9 +51,11 @@ def run_clustering(
     流式后端：逐 chunk 分配后即时写出帧级结果并闭合沉默 turn。
     deferred（离线）后端：逐 chunk 暂存帧参数，finalize 统一聚类后按序重放。
 
-    refiner（可选，两后端通用）：RefinedRTTMWriter。流式后端逐 chunk 按
-    最新合并状态重生成 refined RTTM 与 speaker 状态 sidecar；deferred
-    后端在 EOF 重放完成后刷新。EOF 的 final 刷新叠加小样本合并。
+    refiner（可选，两后端通用）：RefinedRTTMWriter。流式后端按需刷新——
+    本 chunk 发生 merge 事件（merged_into 有新增）或距上次刷新满
+    REFINER_REFRESH_INTERVAL_CHUNKS 个 chunk 时，按最新合并状态重生成
+    refined RTTM 与 speaker 状态 sidecar；deferred 后端在 EOF 重放完成
+    后刷新。EOF 的 final 刷新叠加小样本合并。
 
     中途异常时 writer.finalize() 仍会在 finally 中执行（闭合残余 open
     turn），refiner 的 final 刷新则只在正常跑完时执行。
@@ -54,6 +63,9 @@ def run_clustering(
 
     pending: list[ChunkArtifacts] = []
     completed = False
+    # refined 级刷新状态：上次刷新时的流式 merge 数与之后经过的 chunk 数。
+    last_merge_count = 0
+    chunks_since_refresh = 0
     try:
         for chunk in artifacts:
             # 流式后端立即返回最终 local->global；deferred 后端返回 None 并内部缓冲。
@@ -77,10 +89,20 @@ def run_clustering(
                 local_to_global,
             )
             writer.close_inactive(chunk.commit_end)
-            # refined 级逐 chunk 重生成：merge 事件的历史行修正即时生效，
-            # sidecar 的 speaker 时长/uncertain 标记也随时长累积刷新。
+            # refined 级按需重生成：本 chunk 发生 merge 事件（merged_into
+            # 有新增）时立即刷新，历史行修正即时生效；否则按固定 chunk 间隔
+            # 兜底刷新，让 sidecar 的 speaker 时长/uncertain 标记随时长累积
+            # 更新，同时避免逐 chunk 全量重写的 O(n²) I/O。
             if refiner is not None:
-                refiner.refresh()
+                merge_count = len(clusterer.merged_into)
+                chunks_since_refresh += 1
+                if (
+                    merge_count != last_merge_count
+                    or chunks_since_refresh >= REFINER_REFRESH_INTERVAL_CHUNKS
+                ):
+                    refiner.refresh()
+                    last_merge_count = merge_count
+                    chunks_since_refresh = 0
             if chunk_hook is not None:
                 chunk_hook(chunk, local_to_global, debug_info, emitted_frames)
 
@@ -112,7 +134,7 @@ def run_clustering(
 
         # EOF：refined 级最终刷新，叠加小样本强制合并（post-merge）。
         # 仅在正常跑完时执行：异常路径下避免 final 刷新出错掩盖原始异常，
-        # 此时 refined 保持最后一次逐 chunk 刷新的状态，仍然可用。
+        # 此时 refined 保持最后一次按需刷新的状态，仍然可用。
         if refiner is not None and completed:
             refiner.refresh(final=True)
 

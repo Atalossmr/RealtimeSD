@@ -12,7 +12,7 @@
 4. 聚合每个local slot的非重叠语音区，整体提取一个embedding；纯净区不足时回退到 `overlap_fallback`，将重叠区域也加入语音区计算。
 5. clusterer 负责进行local->global分配（后端可替换，见 `diarization/cluster/backends/`，项目内置了streaming和ahc两种）。默认的streaming后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；此外每次加入新片段后按 `merge_threshold` 尝试合并最相似的一对 speaker（小并入大）
 6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线（raw 级），无缓冲、无延迟确认；ahc 后端（deferred，离线）逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
-7. refined级：`post_process.RefinedRTTMWriter` 读取 raw RTTM + 当前 `merged_into`/centroid/counts 状态整体重生成 `*.refined.rttm`；streaming 在流式期间每次 merge 事件动态刷新（修正 merge 前写出的旧身份行），ahc 无流式 merge、EOF 重放完成后刷新；两者 EOF 最终刷新均叠加小样本强制合并（`post_merge_min_count > 0` 时生效）
+7. refined级：`post_process.RefinedRTTMWriter` 读取 raw RTTM + 当前 `merged_into`/centroid/counts 状态整体重生成 `*.refined.rttm`；streaming 在流式期间发生 merge 事件时即时刷新（修正 merge 前写出的旧身份行），无 merge 时按固定 chunk 间隔兜底刷新（避免逐 chunk 全量重写的 O(n²) I/O），ahc 无流式 merge、EOF 重放完成后刷新；两者 EOF 最终刷新均叠加小样本强制合并（`post_merge_min_count > 0` 时生效）
 8. 音频结束：闭合全部 open turn，writer 纯追加收尾。
 
 链路分层：
@@ -94,7 +94,7 @@ diarization/           # stage1：嵌入提取 + 聚类 + RTTM 输出
       streaming.py     #     StreamingChunkClusterer：默认 streaming 后端（Hungarian + SMA，一次定案）
       ahc.py           #     AHCChunkClusterer：离线层次聚类后端
     rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加；SpeakerTurn 定义于此）
-    post_process.py    #   refined 级输出（RefinedRTTMWriter，merge 事件动态重生成）+ 小样本簇强制合并（ahc finalize 内重映射）
+    post_process.py    #   refined 级输出（RefinedRTTMWriter，merge 事件即时重生成 + 周期兜底刷新）+ 小样本簇强制合并（ahc finalize 内重映射）
     runner.py          #   run_clustering：聚类消费循环（pipeline 与 cluster/app 共用）
     app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
 

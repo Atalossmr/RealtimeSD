@@ -5,10 +5,11 @@
 - raw 级：AppendOnlyRTTMWriter 的 append-only 输出，每行写出即最终
   （两后端统一为 `<stem>.raw.rttm`）；
 - refined 级（`<stem>.refined.rttm`）：由 RefinedRTTMWriter 维护，读取
-  raw 文件与 clusterer 当前合并状态整体重生成——streaming 在流式期间
-  每次 merge 事件动态刷新（修正 merge 前写出的旧身份行），ahc 无流式
-  merge、仅在 EOF 刷新；两者都在结束时（final）叠加小样本强制合并。
-  refined 是面向下游/展示的最终输出。
+  raw 文件与 clusterer 当前合并状态整体重生成——streaming 在流式期间发生
+  merge 事件时即时刷新（修正 merge 前写出的旧身份行），无 merge 时按固定
+  chunk 间隔兜底刷新（时机由 cluster/runner.py 控制，避免逐 chunk 全量
+  重写的 O(n²) I/O）；ahc 无流式 merge、仅在 EOF 刷新；两者都在结束时
+  （final）叠加小样本强制合并。refined 是面向下游/展示的最终输出。
 
 小样本强制合并语义（两后端共用，均在 refined 级生效）：聚类结束后，
 把样本计数低于 `min_count` 的簇/speaker 整体并入质心余弦相似度最高
@@ -257,9 +258,10 @@ def write_speaker_status(
 class RefinedRTTMWriter:
     """输出的第二级：raw RTTM + 当前合并状态 -> refined RTTM（两后端通用）。
 
-    streaming：流式期间每当发生 merge 事件即整体重生成（修正 merge 前写出
-    的旧身份行，即"动态处理合并事件"）；ahc（deferred）：无流式 merge，
-    仅在 EOF 重放完成后刷新。final=True 时叠加小样本强制合并
+    streaming：流式期间发生 merge 事件时整体重生成（修正 merge 前写出
+    的旧身份行，即"动态处理合并事件"），无 merge 时按固定 chunk 间隔
+    兜底刷新（刷新时机由 cluster/runner.py 控制）；ahc（deferred）：无
+    流式 merge，仅在 EOF 重放完成后刷新。final=True 时叠加小样本强制合并
     （post_merge_min_count > 0 才生效，按 clusterer 的 counts 判定）。
     raw 文件全程不动。每次刷新同步更新 `{uri}.speakers.json` sidecar
     （speaker 时长 / 计数 / uncertain 标记 / 合并事件），供前端实时展示。
