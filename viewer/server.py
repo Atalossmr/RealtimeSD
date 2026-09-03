@@ -24,6 +24,7 @@ import json
 import mimetypes
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -36,6 +37,11 @@ _RTTM_SUFFIX = ".refined.rttm"
 _MANIFEST_SUFFIX = ".segments.jsonl"
 _SPEAKERS_SUFFIX = ".speakers.json"
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+# 目录全量递归扫描的节流：/api/sessions 轮询重扫的最小间隔；产物是流式增长的，
+# 几秒内的可见性延迟可接受（文件内容另有逐请求读取路径，不经此缓存）
+_SCAN_MIN_INTERVAL = 3.0
+# get() 未命中触发的重扫最小间隔：防止客户端用不存在的 uri 轮询放大磁盘扫描
+_RESCAN_MIN_INTERVAL = 10.0
 # 新布局中产物的直接父目录名（其上一级才是 run 根目录）
 _LAYOUT_SUBDIRS = {"rttm", "transcripts", "segments"}
 
@@ -55,7 +61,7 @@ class SessionIndex:
     三类产物任一存在即成会话：refined RTTM（stage1）/ segments manifest
     （stage2）/ transcript（stage3）；speakers.json sidecar 与原始音频
     独立索引后挂到会话上。scan/读路径经 lock 串行化（ThreadingHTTPServer
-    并发 handler 共享本索引）。
+    并发 handler 共享本索引）。重扫带最小间隔节流，间隔内复用上次结果。
     """
 
     def __init__(self, exp_roots: list[Path], audio_roots: list[Path],
@@ -65,10 +71,17 @@ class SessionIndex:
         self.overrides = overrides
         self.lock = threading.Lock()
         self.sessions: dict[str, dict] = {}
+        self._last_scan = float("-inf")  # 首次扫描不受节流限制
         self.scan()
 
     def scan(self) -> None:
+        """重扫目录；距上次扫描不足最小间隔时复用上次结果（节流）。"""
+
         with self.lock:
+            now = time.monotonic()
+            if now - self._last_scan < _SCAN_MIN_INTERVAL:
+                return
+            self._last_scan = now
             self._scan_locked()
 
     def _scan_locked(self) -> None:
@@ -130,11 +143,16 @@ class SessionIndex:
             return dict(session) if session else None
 
     def get(self, uri: str) -> dict | None:
-        """取会话（未命中时先重扫一次——产物可能刚落盘）。"""
+        """取会话（未命中时先重扫一次——产物可能刚落盘；重扫有独立的
+        更大间隔节流，防止用不存在的 uri 轮询放大磁盘扫描）。"""
 
         session = self._get(uri)
         if session is None:
-            self.scan()
+            with self.lock:
+                now = time.monotonic()
+                if now - self._last_scan >= _RESCAN_MIN_INTERVAL:
+                    self._last_scan = now
+                    self._scan_locked()
             session = self._get(uri)
         return session
 
@@ -335,7 +353,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             )
             return
         if route == "/api/sessions":
-            self.index.scan()  # 管线运行中产物会后出现，每次请求重扫
+            self.index.scan()  # 管线运行中产物会后出现；重扫有节流，间隔内复用缓存
             self._send_json([
                 {
                     "uri": s["uri"],

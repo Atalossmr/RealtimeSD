@@ -77,7 +77,8 @@ viewer 只读文件、不写；与管线/ASR 的交互全部经以下产物：
 HTTP 端点（服务器模式）：
 
 - `GET /api/sessions`：会话列表（`uri` / `audio_url` / `live` / 能力位
-  `has_rttm` `has_segments` `has_transcript` 及各产物 URL），每次请求重扫目录；
+  `has_rttm` `has_segments` `has_transcript` 及各产物 URL），目录重扫带节流
+  （最小间隔 3s，间隔内复用上次结果；未命中 uri 触发的重扫 10s 内至多一次）；
 - `GET /api/rttm/{uri}`：refined RTTM 段数组（`speaker_id`/`start`/`end`，无文本）；
 - `GET /api/segments/{uri}`：manifest 段数组（`speaker_id`/`start`/`end`/`file`，
   file 为 basename）；
@@ -107,6 +108,8 @@ transcript 兜底源按"旧段是新段前缀"增量合并，RTTM/manifest 源�
 ## 页面操作
 
 - 时间线色块 = 一个段，颜色 = 说话人；hover 看详情，点击 seek 原音频；
+- 时间线波形：≤10 分钟的音频全精度解码；更长音频按 ≤8M 采样抽稀解码
+  为概览波形（限制内存占用；解码复用单例 AudioContext，切换会话不重建）；
 - 段列表行的 "▶ 分离" 按钮回放该段的分离音频（stage>=2，独立播放器，
   不打断主音频位置）；
 - 滚轮缩放（以鼠标为锚点）、拖动平移、"适配全段"重置；

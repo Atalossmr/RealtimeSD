@@ -397,6 +397,7 @@ function setSession(uri, segments, audioUrl) {
   state.segments = segments;
   state.overlapFlags = computeOverlapFlags(segments);
   state.activeIdx = -1;
+  state.peaks = null; // 切换会话时清空旧波形（新音频的波形由 loadedmetadata 重建）
   state.speakerVisible = new Map(); // 切换会话时重置说话人可见性
   state.textMap = new Map();        // 切换会话时清空转写叠加层，防止串台
   state.lastTranscriptRaw = "";
@@ -466,12 +467,39 @@ player.addEventListener("loadedmetadata", () => {
 
 // ---------- 波形 ----------
 const PEAK_BUCKETS = 8192;
+// 全精度解码的时长上限：1h 44.1kHz 立体声解码后约 1.2GB Float32，会打爆
+// 标签页；超长音频改用低采样率抽稀解码，只画概览波形
+const WAVE_FULL_DECODE_MAX = 600;
+const WAVE_MAX_SAMPLES = 1 << 23; // 抽稀解码的采样数上限（8M 采样 ≈ 32MB Float32）
+
+// 单例 AudioContext：切换会话复用不重建（此前每次 loadedmetadata 新建且
+// 从不 close，会累积泄漏）；suspended（自动播放策略）时 resume
+let audioCtx = null;
+function getAudioContext() {
+  if (!audioCtx) audioCtx = new AudioContext();
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+
 async function buildWaveform() {
   state.peaks = null;
+  const src = player.src;
   try {
-    const resp = await fetch(player.src);
-    const buf = await resp.arrayBuffer();
-    const audio = await new AudioContext().decodeAudioData(buf);
+    const resp = await fetch(src);
+    let buf = await resp.arrayBuffer();
+    // 下载/解码期间已切换会话：丢弃结果，上一个音频的大 buffer 随作用域释放（允许 GC）
+    if (player.src !== src) return;
+    const duration = player.duration;
+    let audio;
+    if (duration <= WAVE_FULL_DECODE_MAX) {
+      audio = await getAudioContext().decodeAudioData(buf);
+    } else {
+      // OfflineAudioContext 按较低采样率解码（解码即抽稀），用完即抛由 GC 回收
+      const rate = Math.min(44100, Math.max(3000, Math.floor(WAVE_MAX_SAMPLES / duration)));
+      audio = await new OfflineAudioContext(1, Math.ceil(duration * rate), rate)
+        .decodeAudioData(buf);
+    }
+    buf = null; // 解除大 arrayBuffer 引用，允许 GC
     const data = audio.getChannelData(0);
     const per = Math.max(1, Math.floor(data.length / PEAK_BUCKETS));
     const peaks = new Float32Array(PEAK_BUCKETS * 2);
@@ -484,6 +512,7 @@ async function buildWaveform() {
       }
       peaks[b * 2] = lo; peaks[b * 2 + 1] = hi;
     }
+    if (player.src !== src) return; // 解码期间已切换会话，丢弃峰值结果
     state.peaks = { peaks, buckets: PEAK_BUCKETS, duration: audio.duration };
   } catch (err) {
     console.warn("波形解码失败，仅画时间线", err);
