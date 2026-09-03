@@ -45,6 +45,7 @@ _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="实时管线 DER 评估（支持批量）",
         allow_abbrev=False,  # 见 common/config/pipeline.py 的同名单元注释
@@ -104,6 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """CLI 入口：解析参数、批量跑管线并计算 DER。"""
     parser = build_parser()
     args = parser.parse_args()
 

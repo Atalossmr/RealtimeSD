@@ -6,7 +6,14 @@ from pathlib import Path
 
 
 def load_rttm(path: str | Path) -> dict[str, list[tuple[float, float]]]:
-    """解析 RTTM，返回 {speaker: [(start, end), ...]}，按 start 排序。"""
+    """解析 RTTM。
+
+    Args:
+        path: RTTM 文件路径。
+
+    Returns:
+        {speaker: [(start, end), ...]}，各说话人的段按 start 排序。
+    """
 
     turns: dict[str, list[tuple[float, float]]] = {}
     with open(path, "r", encoding="utf-8") as file_obj:
@@ -24,7 +31,14 @@ def load_rttm(path: str | Path) -> dict[str, list[tuple[float, float]]]:
 
 
 def union_duration(segments: list[tuple[float, float]]) -> float:
-    """区间并集总时长（输入无需有序）。"""
+    """区间并集总时长（输入无需有序）。
+
+    Args:
+        segments: [(start, end), ...] 区间列表。
+
+    Returns:
+        并集总时长（秒）。
+    """
 
     total = 0.0
     current_start: float | None = None
@@ -48,6 +62,13 @@ def overlap_histogram(
     """按同时说话人数统计时长：{1: 单人时长, 2: 双人重叠时长, 3: ...}。
 
     以 step 为帧长扫描（10ms 足够精确，比区间事件法实现简单）。
+
+    Args:
+        turns: load_rttm 的返回。
+        step: 扫描帧长（秒）。
+
+    Returns:
+        {同时说话人数: 时长（秒）}；无语音返回空 dict。
     """
 
     all_segments = [seg for segments in turns.values() for seg in segments]

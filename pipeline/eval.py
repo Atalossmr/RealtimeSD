@@ -14,6 +14,7 @@ from common.constants import BASE_DIR
 
 
 def _read_summary_values(path: Path) -> dict[str, str]:
+    """读取 summary 文件的 key=value 行（不含 '=' 的行忽略）。"""
     values = {}
     with open(path, encoding="utf-8") as file_obj:
         for line in file_obj:
@@ -33,8 +34,19 @@ def run_der_evaluation(
 ) -> int:
     """对 exp_dir/rttm 下的 refined RTTM 计算 DER（逐文件 + 拼接全局）。
 
-    collar 为 md-eval 的宽容边界（秒），默认 0.0（最严格口径）。
-    返回退出码：0 成功或无可评文件；非 0 为 compute_der 子进程失败。
+    子进程调用 tools/compute_der.py，结果回写 der.log / der_summary.txt /
+    results.txt；无 refined RTTM 时记 SKIPPED 并直接返回 0。
+
+    Args:
+        exp_dir: 本次 run 的输出目录（取 exp_dir/rttm 下的 *.refined.rttm）。
+        ref_rttm: 参考 RTTM 目录。
+        run_name: 本次运行名（用于日志与汇总记录）。
+        der_verbose: 是否透传 --verbose 给 compute_der。
+        results_file: 追加写入 DER 汇总的文件。
+        collar: md-eval 的宽容边界（秒），默认 0.0（最严格口径）。
+
+    Returns:
+        退出码：0 成功或无可评文件；非 0 为 compute_der 子进程失败。
     """
 
     rttm_count = len(list((exp_dir / "rttm").glob("*.refined.rttm")))

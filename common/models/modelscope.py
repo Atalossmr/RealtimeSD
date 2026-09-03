@@ -11,7 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 def _load_snapshot_download() -> Callable[..., str]:
-    """延迟导入 ModelScope 下载接口，避免未使用时强依赖其运行环境。"""
+    """延迟导入 ModelScope 下载接口，避免未使用时强依赖其运行环境。
+
+    Returns:
+        modelscope.hub.snapshot_download.snapshot_download 函数。
+
+    Raises:
+        RuntimeError: 未安装 modelscope 或其 snapshot_download 不可用。
+    """
 
     try:
         snapshot_module = importlib.import_module("modelscope.hub.snapshot_download")
@@ -41,6 +48,19 @@ def resolve_modelscope_snapshot(
 
     is_complete 由调用方按模型所需文件判定（防止半成品缓存被当作可用）；
     缓存目录存在但不完整时判 miss 重新下载，下载后同样校验，不完整则抛错。
+
+    Args:
+        model_id: ModelScope 仓库 id。
+        cache_dir: 本地缓存根目录。
+        is_complete: 判定快照目录是否包含全部所需文件的回调。
+        revision: 仓库版本号，可为 None。
+
+    Returns:
+        本地快照目录。
+
+    Raises:
+        RuntimeError: ModelScope 下载接口不可用。
+        FileNotFoundError: 下载完成后仍缺少所需文件。
     """
 
     cache_dir = Path(cache_dir)

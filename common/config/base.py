@@ -21,7 +21,14 @@ T = TypeVar("T")
 
 
 def _parser_dest_set(parser: argparse.ArgumentParser) -> set[str]:
-    """收集 argparse 中定义过的参数名，用于校验 YAML 键名。"""
+    """收集 argparse 中定义过的参数名，用于校验 YAML 键名。
+
+    Args:
+        parser: 待检查的参数解析器。
+
+    Returns:
+        解析器中全部参数的 dest 集合（排除 help）。
+    """
 
     return {
         action.dest
@@ -33,7 +40,15 @@ def _parser_dest_set(parser: argparse.ArgumentParser) -> set[str]:
 def _extract_provided_dests(
     parser: argparse.ArgumentParser, argv: list[str] | None
 ) -> set[str]:
-    """根据原始命令行，判断用户显式传了哪些参数。"""
+    """根据原始命令行，判断用户显式传了哪些参数。
+
+    Args:
+        parser: 参数解析器，用于建立选项字符串到 dest 的映射。
+        argv: 原始命令行 token 列表；为 None 时视为未显式传参。
+
+    Returns:
+        用户显式传入参数的 dest 集合。
+    """
 
     if argv is None:
         return set()
@@ -55,7 +70,20 @@ def _extract_provided_dests(
 
 
 def _load_yaml_config(config_path: str, explicit: bool) -> dict[str, object]:
-    """读取 YAML 配置文件。"""
+    """读取 YAML 配置文件。
+
+    Args:
+        config_path: YAML 文件路径。
+        explicit: 是否为用户显式指定的配置；True 时文件不存在直接报错，
+            False 时文件不存在返回空配置。
+
+    Returns:
+        YAML 顶层 mapping；文件不存在且非显式指定时返回空 dict。
+
+    Raises:
+        FileNotFoundError: explicit 为 True 且文件不存在。
+        ValueError: YAML 顶层不是 mapping。
+    """
 
     path = Path(config_path)
     if not path.exists():
@@ -82,6 +110,20 @@ def merge_args_with_config(
 
     合并优先级：argparse 默认值 < YAML 配置 < 显式 CLI 参数。
     合法 YAML 键 = parser 参数名 ∪ config_type 的 dataclass 字段名。
+
+    Args:
+        parser: 命令行参数解析器。
+        args: argparse 已解析的参数。
+        argv: 原始命令行 token 列表，用于识别显式 CLI 参数；None 表示无。
+        default_config_path: 未显式指定 --config 时使用的默认配置路径。
+        config_type: 配置 dataclass 类型，其字段名计入合法 YAML 键。
+
+    Returns:
+        合并后的参数 Namespace，config 字段记录实际生效的配置路径。
+
+    Raises:
+        FileNotFoundError: 显式指定的配置文件不存在。
+        ValueError: YAML 中出现未知键。
     """
 
     provided_dests = _extract_provided_dests(parser, argv)
@@ -122,7 +164,18 @@ def dataclass_from_args(
     每个字段的值取自 args（缺失或为 None 时落回字段默认值），标量字段按
     默认值类型做 int/float/str 转换（bool 字段对字符串按内容解析，
     'true'/'false' 等大小写均可）；字段默认值是唯一兜底来源。
-    attr_overrides 处理字段名与 args 属性名不一致的情况。
+
+    Args:
+        args: 合并后的参数 Namespace。
+        config_type: 目标配置 dataclass 类型。
+        attr_overrides: 字段名到 args 属性名的映射，处理两者不一致的情况。
+
+    Returns:
+        构造完成的配置实例。
+
+    Raises:
+        ValueError: bool 字段收到无法解析的字符串，或字段值无法转换为
+            字段默认值的类型。
     """
 
     attr_overrides = attr_overrides or {}
@@ -169,8 +222,20 @@ def config_from_yaml(
     字段默认值是唯一兜底来源。YAML 中值为 null 的键视为"未配置"，不参与合并；
     YAML 键与 overrides 键必须是 config_type 的合法字段名（或 extra_keys）。
 
-    返回 (config, extras)：extras 为 extra_keys 中实际生效的键值——这些键
-    不属于 config 字段（如 model_path 等运行时参数），由调用方自行消费。
+    Args:
+        config_path: YAML 配置文件路径，必须存在。
+        config_type: 目标配置 dataclass 类型。
+        overrides: 调用方显式给定的覆盖值，值为 None 的键不参与覆盖。
+        extra_keys: 额外允许的键；这些键不属于 config 字段（如 model_path
+            等运行时参数），单独捕获返回，由调用方自行消费。
+
+    Returns:
+        (config, extras) 二元组：config 为构建的配置实例，extras 为
+        extra_keys 中实际生效的键值。
+
+    Raises:
+        FileNotFoundError: 配置文件不存在。
+        ValueError: YAML 顶层不是 mapping，或 YAML / overrides 中出现未知键。
     """
 
     yaml_config = _load_yaml_config(config_path, explicit=True)

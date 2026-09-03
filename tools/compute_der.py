@@ -57,6 +57,8 @@ class DerResult(TypedDict):
 
 
 class GlobalDerResult(TypedDict):
+    """全部匹配样本拼接后的全局 DER 评估结果。"""
+
     ms: float
     fa: float
     ser: float
@@ -65,7 +67,14 @@ class GlobalDerResult(TypedDict):
 
 
 def rectify(arr: np.ndarray) -> np.ndarray:
-    """修正 corner case 并转换为百分比。"""
+    """修正 corner case 并转换为百分比（NaN 归 0、inf 归 1，再乘 100）。
+
+    Args:
+        arr: 比例数组（原地修改）。
+
+    Returns:
+        百分比数组。
+    """
 
     arr[np.isnan(arr)] = 0
     arr[np.isinf(arr)] = 1
@@ -74,7 +83,14 @@ def rectify(arr: np.ndarray) -> np.ndarray:
 
 
 def _resolve_md_eval_path() -> str:
-    """查找项目内的 md-eval.pl。"""
+    """查找项目内的 md-eval.pl。
+
+    Returns:
+        md-eval.pl 的绝对路径。
+
+    Raises:
+        FileNotFoundError: 项目内找不到 md-eval.pl。
+    """
 
     possible_paths = [
         os.path.join(
@@ -96,7 +112,21 @@ def compute_der(
     collar: float = 0.0,
     ignore_overlap: bool = False,
 ) -> tuple[float, float, float, float]:
-    """计算单对 RTTM 的 DER，返回 (MS, FA, SER, DER)。"""
+    """计算单对 RTTM 的 DER，返回 (MS, FA, SER, DER)。
+
+    Args:
+        ref_rttm: 参考 RTTM 路径。
+        sys_rttm: 系统 RTTM 路径。
+        collar: 宽容边界（秒）。
+        ignore_overlap: 是否忽略重叠语音。
+
+    Returns:
+        (MS, FA, SER, DER)，均为百分比。
+
+    Raises:
+        RuntimeError: 找不到 perl、md-eval 执行失败或输出缺少统计行。
+        FileNotFoundError: 项目内找不到 md-eval.pl。
+    """
 
     md_eval_pl = _resolve_md_eval_path()
     perl = shutil.which("perl")
@@ -157,7 +187,14 @@ def compute_der(
 
 
 def analyze_rttm(rttm_file: str) -> Optional[RTTMStats]:
-    """分析 RTTM 文件并返回基础统计信息。"""
+    """分析 RTTM 文件并返回基础统计信息。
+
+    Args:
+        rttm_file: RTTM 文件路径。
+
+    Returns:
+        统计信息（说话人数/段数/总时长/各说话人时长）；文件不存在返回 None。
+    """
 
     if not os.path.exists(rttm_file):
         return None
@@ -198,7 +235,12 @@ def analyze_rttm(rttm_file: str) -> Optional[RTTMStats]:
 
 
 def _print_rttm_stats(title: str, rttm_path: str) -> None:
-    """打印单个 RTTM 的统计信息。"""
+    """打印单个 RTTM 的统计信息。
+
+    Args:
+        title: 输出标题。
+        rttm_path: RTTM 文件路径。
+    """
 
     stats = analyze_rttm(rttm_path)
     print("=" * 60)
@@ -222,7 +264,13 @@ def _print_rttm_stats(title: str, rttm_path: str) -> None:
 
 
 def _print_verbose_result(item: DerResult, index: int, total: int) -> None:
-    """打印单个样本的详细信息，兼容单文件和批量模式。"""
+    """打印单个样本的详细信息，兼容单文件和批量模式。
+
+    Args:
+        item: 单样本 DER 结果。
+        index: 当前序号（从 1 起）。
+        total: 样本总数。
+    """
 
     print("=" * 60)
     print(f"详细结果 [{index}/{total}]: {item['filename']}")
@@ -241,7 +289,20 @@ def _print_verbose_result(item: DerResult, index: int, total: int) -> None:
 
 
 def _collect_rttm_files(path_value: str, suffix: str, *, label: str) -> list[str]:
-    """收集单文件或目录下 RTTM 文件。"""
+    """收集单文件或目录下 RTTM 文件。
+
+    Args:
+        path_value: RTTM 文件或目录路径。
+        suffix: 目录模式下按文件名后缀筛选。
+        label: 错误信息中的路径角色（如 sys/ref）。
+
+    Returns:
+        RTTM 文件路径列表（目录模式按文件名排序）。
+
+    Raises:
+        FileNotFoundError: 路径不存在或目录下无匹配文件。
+        ValueError: 路径既非文件也非目录。
+    """
 
     if not os.path.exists(path_value):
         raise FileNotFoundError(f"找不到 {label.upper()} 路径: {path_value}")
@@ -269,7 +330,18 @@ def _match_reference(
     sys_suffix: str,
     ref_suffix: str,
 ) -> tuple[Optional[str], Optional[str]]:
-    """为单个系统 RTTM 匹配参考 RTTM。"""
+    """为单个系统 RTTM 匹配参考 RTTM。
+
+    Args:
+        sys_rttm: 系统 RTTM 路径。
+        ref_path: 参考 RTTM 文件或目录路径。
+        sys_count: 系统 RTTM 总数（ref 为单文件时要求为 1）。
+        sys_suffix: 系统 RTTM 后缀（剥掉后得到 stem）。
+        ref_suffix: 参考 RTTM 后缀。
+
+    Returns:
+        (匹配的参考 RTTM 路径, None)；匹配失败时为 (None, 原因)。
+    """
 
     filename = os.path.basename(sys_rttm)
     stem = (
@@ -293,6 +365,13 @@ def _match_reference(
 
 
 def _concat_rttm_files(paths: list[str], concat_path: str) -> None:
+    """把多个 RTTM 顺序拼接为一个文件（用于全局 DER）。
+
+    Args:
+        paths: 待拼接的 RTTM 路径列表。
+        concat_path: 拼接输出路径。
+    """
+
     with open(concat_path, "w", encoding="utf-8") as out_f:
         for p in paths:
             with open(p, "r", encoding="utf-8") as in_f:
@@ -315,10 +394,20 @@ def compute_der_batch(
 ) -> tuple[list[DerResult], list[tuple[str, str]], Optional[GlobalDerResult]]:
     """批量计算 RTTM DER。
 
-    返回 `(results, skipped, global_result)`：
-    - results: 每个成功样本的详细结果
-    - skipped: `(filename, reason)` 列表
-    - global_result: 拼接全部匹配样本后算出的全局 DER（无匹配样本时为 None）
+    Args:
+        ref_path: 参考 RTTM 文件或目录路径。
+        sys_path: 系统 RTTM 文件或目录路径。
+        collar: 宽容边界（秒）。
+        ignore_overlap: 是否忽略重叠语音。
+        sys_suffix: 批量模式下系统 RTTM 文件后缀。
+        ref_suffix: 批量模式下参考 RTTM 文件后缀。
+
+    Returns:
+        `(results, skipped, global_result)`：
+
+        - results: 每个成功样本的详细结果
+        - skipped: `(filename, reason)` 列表
+        - global_result: 拼接全部匹配样本后算出的全局 DER（无匹配样本时为 None）
     """
 
     sys_rttms = _collect_rttm_files(sys_path, sys_suffix, label="sys")
@@ -396,7 +485,14 @@ def _write_summary(
     skipped: list[tuple[str, str]],
     global_result: Optional[GlobalDerResult],
 ) -> None:
-    """把批量 DER 摘要写成简单 key=value 文件，便于 shell 直接读取。"""
+    """把批量 DER 摘要写成简单 key=value 文件，便于 shell 直接读取。
+
+    Args:
+        summary_file: 摘要输出路径。
+        results: 每个成功样本的详细结果。
+        skipped: `(filename, reason)` 列表。
+        global_result: 全局 DER；无匹配样本时各字段写 NA。
+    """
 
     global_ms = "NA"
     global_fa = "NA"
@@ -421,6 +517,12 @@ def _write_summary(
 
 
 def main() -> int:
+    """CLI 入口：单文件或批量评估 DER。
+
+    Returns:
+        退出码（0 正常；1 评估出错、全部被跳过或全局 DER 非有限值）。
+    """
+
     parser = argparse.ArgumentParser(description="计算说话人分割 DER")
     parser.add_argument(
         "--ref", required=True, help="参考 RTTM 路径，可传单个文件或目录"

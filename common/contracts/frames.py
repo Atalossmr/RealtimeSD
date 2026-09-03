@@ -23,7 +23,20 @@ def iter_commit_frames(
     只输出与提交区 [commit_start, commit_end) 相交的帧；跨界帧裁剪到提交区
     边界。相邻 chunk 的提交区无缝拼接，因此不重复也不遗漏。
     segmentation-3.0 经 powerset 转硬标签（0/1），> 0.0 即活跃；未分配
-    global（未建 track / 未过门控）的 local slot 帧直接丢弃。
+    global（未建 track / 未过门控）的 local slot 不计入活跃集合，
+    该帧仍以空的 active_global_ids 产出。
+
+    Args:
+        seg_scores: (num_frames, num_local_slots) 的帧级活跃分数。
+        frame_step: 帧移（秒）；<= 0 时按 1e-6 兜底。
+        chunk_start: chunk 起始时间（秒）。
+        commit_start: 提交区起始时间（秒，含）。
+        commit_end: 提交区结束时间（秒，不含）。
+        local_to_global: local slot 到 global speaker id 的映射。
+
+    Yields:
+        (frame_start, frame_end, active_global_ids) 三元组：裁剪到提交区
+        内的帧区间，及该帧活跃 global speaker id 的升序列表（可为空）。
     """
 
     frame_step = max(1e-6, float(frame_step))

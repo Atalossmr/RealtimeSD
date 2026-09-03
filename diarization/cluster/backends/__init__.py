@@ -14,7 +14,17 @@ from .streaming import StreamingChunkClusterer
 
 
 def build_clusterer(config: ChunkPipelineConfig) -> BaseChunkClusterer:
-    """按 YAML 的 clustering_backend 构造聚类后端。"""
+    """按 YAML 的 clustering_backend 构造聚类后端。
+
+    Args:
+        config: 管线配置，读取其 clustering_backend 字段选择后端。
+
+    Returns:
+        对应后端的 BaseChunkClusterer 实例。
+
+    Raises:
+        ValueError: clustering_backend 不是 'streaming' 或 'ahc'。
+    """
 
     backend = str(config.clustering_backend)
     if backend == "streaming":

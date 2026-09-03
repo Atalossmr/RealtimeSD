@@ -9,6 +9,12 @@ def l2_normalize(vec: np.ndarray) -> np.ndarray:
     """对 numpy 向量做 L2 单位化。
 
     当前聚类逻辑大量依赖余弦相似度，因此把向量保持为单位范数能让后续点积更稳定。
+
+    Args:
+        vec: 输入向量。
+
+    Returns:
+        单位化后的向量；零向量原样返回。
     """
 
     denom = np.linalg.norm(vec)

@@ -47,7 +47,13 @@ DUR_LABELS = ["<0.5s", "0.5-1s", "1-2s", "2-3.99s", "=4s截断"]
 def load_obs(npz_path: Path) -> dict[tuple, tuple[np.ndarray, float, float, float]]:
     """读一套缓存：key=(chunk_index, local_idx, start, end)（毫秒精度取整）。
 
-    只保留 has_embedding 的 observation；value=(embedding, duration, start, end)。
+    只保留 has_embedding 的 observation；embedding 读入后 L2 归一化。
+
+    Args:
+        npz_path: chunks.npz 路径。
+
+    Returns:
+        {key: (embedding, duration, start, end)} 字典。
     """
 
     data = np.load(npz_path, allow_pickle=False)
@@ -73,6 +79,8 @@ def load_obs(npz_path: Path) -> dict[tuple, tuple[np.ndarray, float, float, floa
 
 
 def bucket_of(duration: float) -> int:
+    """返回 observation 时长所属分桶下标（超长归入最后一桶）。"""
+
     for i, (lo, hi) in enumerate(DUR_BUCKETS):
         if lo <= duration < hi:
             return i
@@ -82,7 +90,17 @@ def bucket_of(duration: float) -> int:
 def diff_pair(
     base: dict, other: dict, segs, spk_index
 ) -> tuple[list[float], list[int], int, int, int]:
-    """对齐两套缓存的 observation，返回 (逐对余弦距离, 时长桶, 翻转数, 可判翻转数, 对齐数)。"""
+    """对齐两套缓存的 observation，返回 (逐对余弦距离, 时长桶, 翻转数, 可判翻转数, 对齐数)。
+
+    Args:
+        base: 基准缓存（load_obs 返回），翻转判定的质心由它建立。
+        other: 对照缓存（load_obs 返回）。
+        segs: 参考语音段 [(start, end, spk)]。
+        spk_index: 说话人名 -> 下标。
+
+    Returns:
+        (逐对余弦距离列表, 时长桶下标列表, 翻转数, 可判翻转数, 对齐数)。
+    """
 
     dists: list[float] = []
     buckets: list[int] = []
@@ -120,6 +138,8 @@ def diff_pair(
 
 
 def main() -> None:
+    """CLI 入口：逐文件对齐差分并输出汇总报告。"""
+
     parser = argparse.ArgumentParser(description="两套 chunks.npz 缓存的 embedding 差分")
     parser.add_argument("--base", required=True, help="基准缓存目录（如 bs=1）")
     parser.add_argument(

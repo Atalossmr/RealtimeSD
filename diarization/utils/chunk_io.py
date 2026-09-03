@@ -28,7 +28,17 @@ from common.utils.paths import ensure_parent_dir
 
 
 def save_chunks(path: str, uri: str, artifacts: list[ChunkArtifacts]) -> None:
-    """把整段音频的 chunk artifacts 写入 npz。"""
+    """把整段音频的 chunk artifacts 写入 npz。
+
+    各 chunk 的 seg_scores 形状 ragged（num_locals 随 chunk 变化），统一拉平
+    拼接存储；无 embedding 的 observation 以全零行占位，由 has_embedding
+    标记区分。父目录不存在时自动创建。
+
+    Args:
+        path: 输出 npz 路径。
+        uri: 音频标识（通常为文件 stem）。
+        artifacts: 逐 chunk 的 ChunkArtifacts 列表。
+    """
 
     ensure_parent_dir(path)
 
@@ -92,7 +102,18 @@ def save_chunks(path: str, uri: str, artifacts: list[ChunkArtifacts]) -> None:
 
 
 def load_chunks(path: str) -> tuple[str, list[ChunkArtifacts]]:
-    """读取 npz，还原 uri 与逐 chunk 的 ChunkArtifacts。"""
+    """读取 npz，还原 uri 与逐 chunk 的 ChunkArtifacts。
+
+    has_embedding=False 的占位零行还原为 None 而非零向量，避免下游把
+    零向量误当作有效 embedding 参与相似度计算。
+
+    Args:
+        path: save_chunks 写出的 npz 路径。
+
+    Returns:
+        (uri, artifacts) 二元组：音频标识与逐 chunk 的 ChunkArtifacts
+        列表（按文件中 chunk 顺序）。
+    """
 
     data = np.load(Path(path), allow_pickle=False)
     uri = str(data["uri"])

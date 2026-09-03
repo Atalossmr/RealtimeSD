@@ -74,7 +74,14 @@ MIN_SEGMENT_DURATION = 0.25
 
 
 def load_base_config(config_path: str) -> ChunkPipelineConfig:
-    """直接从 YAML 构造配置（与 tools/sweep_params.py 同口径）。"""
+    """直接从 YAML 构造配置（与 tools/sweep_params.py 同口径）。
+
+    Args:
+        config_path: 配置 YAML 路径。
+
+    Returns:
+        基准 ChunkPipelineConfig。
+    """
 
     import yaml
 
@@ -87,7 +94,15 @@ def load_base_config(config_path: str) -> ChunkPipelineConfig:
 
 
 def load_manifest(segments_dir: Path, uri: str) -> list[dict[str, object]]:
-    """读取 {uri}.segments.jsonl，返回段记录列表（按 start 排序）。"""
+    """读取 {uri}.segments.jsonl，返回段记录列表（按 start 排序）。
+
+    Args:
+        segments_dir: segments 根目录。
+        uri: 会话标识。
+
+    Returns:
+        段记录列表（含 start/end/path 等字段）。
+    """
 
     manifest_path = segments_dir / f"{uri}.segments.jsonl"
     entries = []
@@ -105,7 +120,18 @@ def embed_segments(
     embedder: NativeERes2NetV2SegmentEmbedder,
     sample_rate: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-    """逐段提 embedding，返回 (embeddings[N,dim], starts, ends, n_skipped)。"""
+    """逐段提 embedding，返回 (embeddings[N,dim], starts, ends, n_skipped)。
+
+    短于 MIN_SEGMENT_DURATION 的段（按时间段长或实际波形长判定）跳过。
+
+    Args:
+        entries: load_manifest 的段记录列表。
+        embedder: 段级 embedder。
+        sample_rate: 目标采样率（不一致时重采样，多声道强制混单声道）。
+
+    Returns:
+        (embeddings, starts, ends, 跳过的段数)；全部跳过时 embeddings 形状 (0, 0)。
+    """
 
     embeddings, starts, ends = [], [], []
     n_skipped = 0
@@ -139,7 +165,18 @@ def evaluate_separability(
     segs: list[tuple[float, float, str]],
     spk_index: dict[str, int],
 ) -> dict[str, float]:
-    """分离段 embedding 的可分性指标（d-prime / 最优阈值错误率）。"""
+    """分离段 embedding 的可分性指标（d-prime / 最优阈值错误率）。
+
+    Args:
+        embeddings: 分离段 embedding 矩阵 (N, dim)。
+        starts: 各段起点（秒）。
+        ends: 各段终点（秒）。
+        segs: 参考语音段 [(start, end, spk)]。
+        spk_index: 说话人名 -> 下标。
+
+    Returns:
+        {"n_amb", "mu_within", "mu_between", "dp", "err", "thr"} 指标字典。
+    """
 
     labels = np.array(
         [map_to_ref(s, e, segs, spk_index) for s, e in zip(starts, ends)]
@@ -159,7 +196,15 @@ def evaluate_separability(
 
 
 def mixture_separability(npz_path: Path, rttm_path: Path) -> dict[str, float]:
-    """混合短段 embedding（chunks.npz）的可分性指标，作为对照。"""
+    """混合短段 embedding（chunks.npz）的可分性指标，作为对照。
+
+    Args:
+        npz_path: chunks.npz 路径。
+        rttm_path: 参考 RTTM 路径。
+
+    Returns:
+        {"dp", "err", "thr"} 指标字典。
+    """
 
     data = np.load(npz_path, allow_pickle=False)
     segs, spks = load_rttm(rttm_path)
@@ -186,7 +231,15 @@ def mixture_separability(npz_path: Path, rttm_path: Path) -> dict[str, float]:
 
 
 def ahc_labels(embeddings: np.ndarray, similarity_threshold: float) -> np.ndarray:
-    """cosine + average linkage AHC，与 cluster/backends/ahc.py 同口径。"""
+    """cosine + average linkage AHC，与 cluster/backends/ahc.py 同口径。
+
+    Args:
+        embeddings: embedding 矩阵 (N, dim)。
+        similarity_threshold: 相似度阈值（距离阈值 = 1 - 阈值）。
+
+    Returns:
+        逐样本簇标签数组。
+    """
 
     from sklearn.cluster import AgglomerativeClustering
 
@@ -206,7 +259,15 @@ def write_rttm(
     ends: np.ndarray,
     labels: np.ndarray,
 ) -> None:
-    """把 (时间段, 簇标签) 写成标准 RTTM。"""
+    """把 (时间段, 簇标签) 写成标准 RTTM。
+
+    Args:
+        path: 输出 RTTM 路径。
+        uri: 会话标识。
+        starts: 各段起点（秒）。
+        ends: 各段终点（秒）。
+        labels: 各段簇标签。
+    """
 
     with open(path, "w", encoding="utf-8") as file_obj:
         for start, end, label in zip(starts, ends, labels):
@@ -217,6 +278,8 @@ def write_rttm(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构造 CLI 参数解析器。"""
+
     parser = argparse.ArgumentParser(description="分离段重提嵌入 + AHC 重聚类实验")
     parser.add_argument("--segments", required=True, help="segments 根目录（含 {uri}.segments.jsonl）")
     parser.add_argument("--ref", required=True, help="参考 RTTM 目录（{uri}.rttm）")
@@ -239,6 +302,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """CLI 入口：pass 1 提嵌入+可分性，pass 2 AHC 阈值扫描+DER，写产物。"""
+
     args = build_parser().parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 

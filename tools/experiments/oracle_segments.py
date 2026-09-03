@@ -63,7 +63,14 @@ logger = logging.getLogger("oracle_segments")
 
 
 def load_base_config(config_path: str) -> ChunkPipelineConfig:
-    """直接从 YAML 构造配置（与 tools/sweep_params.py 同口径）。"""
+    """直接从 YAML 构造配置（与 tools/sweep_params.py 同口径）。
+
+    Args:
+        config_path: 配置 YAML 路径。
+
+    Returns:
+        基准 ChunkPipelineConfig。
+    """
 
     with open(config_path, "r", encoding="utf-8") as file_obj:
         cfg_dict = yaml.safe_load(file_obj) or {}
@@ -74,7 +81,14 @@ def load_base_config(config_path: str) -> ChunkPipelineConfig:
 
 
 def iter_ref_turns(ref_dir: Path) -> list[tuple[str, Path, dict]]:
-    """列出 (uri, rttm_path, turns)，turns 为 load_rttm 的 {speaker: [(s,e)]}。"""
+    """列出 (uri, rttm_path, turns)，turns 为 load_rttm 的 {speaker: [(s,e)]}。
+
+    Args:
+        ref_dir: 参考 RTTM 目录。
+
+    Returns:
+        [(uri, rttm_path, turns)]，按文件名排序。
+    """
 
     return [
         (path.stem, path, load_rttm(path)) for path in sorted(ref_dir.glob("*.rttm"))
@@ -87,6 +101,8 @@ def iter_ref_turns(ref_dir: Path) -> list[tuple[str, Path, dict]]:
 
 
 def cmd_extract(args: argparse.Namespace) -> None:
+    """extract 子命令：按真值 turn 裁音频并逐段提 embedding 存 npz。"""
+
     import torch
 
     from common.models.embedding_infer import (
@@ -182,7 +198,14 @@ def cmd_extract(args: argparse.Namespace) -> None:
 
 
 def _load_embedding_npz(npz_path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """读 npz，返回 (L2 归一化 embeddings, 整数 labels)（labels 按名字字典序）。"""
+    """读 npz，返回 (L2 归一化 embeddings, 整数 labels)（labels 按名字字典序）。
+
+    Args:
+        npz_path: extract 产物 npz 路径。
+
+    Returns:
+        (L2 归一化 embedding 矩阵 (N, dim), 整数标签数组)。
+    """
 
     data = np.load(npz_path, allow_pickle=False)
     embeddings = data["embeddings"].astype(np.float64)
@@ -195,6 +218,8 @@ def _load_embedding_npz(npz_path: Path) -> tuple[np.ndarray, np.ndarray]:
 
 
 def cmd_analyze(args: argparse.Namespace) -> None:
+    """analyze 子命令：类内/类间余弦分布、d-prime 与最优阈值错误率报告。"""
+
     npz_dir = Path(args.work_dir) / "embeddings"
     npz_files = sorted(npz_dir.glob("*.npz"))
     if not npz_files:
@@ -252,7 +277,14 @@ def _write_turns_rttm(
     turns: list[tuple[float, float, int]],
     header: str,
 ) -> None:
-    """把 [(start, end, global_id)] 直接写成 RTTM（按 start 排序）。"""
+    """把 [(start, end, global_id)] 直接写成 RTTM（按 start 排序）。
+
+    Args:
+        path: 输出 RTTM 路径（父目录自动创建）。
+        uri: 会话标识。
+        turns: [(start, end, global_id)] 段列表。
+        header: 写入 RTTM 注释头的说明文字。
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as file_obj:
@@ -272,7 +304,14 @@ def _streaming_assign(
 ) -> int:
     """流式臂：伪 chunk 分组喂 StreamingChunkClusterer，raw + refined 两级输出。
 
-    返回被聚类器丢弃（未分配 global id）的 turn 数。
+    Args:
+        uri: 会话标识。
+        data: extract 产物 npz（embeddings/starts/ends）。
+        config: 配置（hop_duration 与真实聚类阈值）。
+        out_dir: streaming_rttm 输出目录（raw 落其 raw/ 子目录）。
+
+    Returns:
+        被聚类器丢弃（未分配 global id）的 turn 数。
     """
 
     from diarization.cluster.backends.streaming import StreamingChunkClusterer
@@ -344,7 +383,15 @@ def _ahc_oracle_assign(
     config: ChunkPipelineConfig,
     out_dir: Path,
 ) -> None:
-    """离线臂：AgglomerativeClustering(n_clusters=真值说话人数) 直接写 RTTM。"""
+    """离线臂：AgglomerativeClustering(n_clusters=真值说话人数) 直接写 RTTM。
+
+    Args:
+        uri: 会话标识。
+        data: extract 产物 npz（embeddings/starts/ends）。
+        num_speakers: 真值说话人数（n_clusters 上限）。
+        config: 配置（用其 ahc_linkage）。
+        out_dir: ahc_oracle_rttm 输出目录。
+    """
 
     from sklearn.cluster import AgglomerativeClustering
 
@@ -371,6 +418,14 @@ def _ahc_oracle_assign(
 
 
 def _eval_dir(ref_dir: str, sys_dir: Path, log) -> None:
+    """对一个系统 RTTM 目录跑批量 DER 评估并逐行 log。
+
+    Args:
+        ref_dir: 参考 RTTM 目录。
+        sys_dir: 系统 RTTM 目录。
+        log: 日志函数（print + 收集到报告）。
+    """
+
     results, skipped, global_result = compute_der_batch(
         ref_path=ref_dir,
         sys_path=str(sys_dir),
@@ -395,6 +450,8 @@ def _eval_dir(ref_dir: str, sys_dir: Path, log) -> None:
 
 
 def cmd_cluster(args: argparse.Namespace) -> None:
+    """cluster 子命令：streaming 与 ahc oracle-k 两版聚类各评一次 DER。"""
+
     config = load_base_config(args.config)
     work_dir = Path(args.work_dir)
     npz_dir = work_dir / "embeddings"
@@ -440,6 +497,8 @@ def cmd_cluster(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """CLI 入口：解析子命令并分发。"""
+
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 

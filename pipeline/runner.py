@@ -39,7 +39,7 @@ def _log_debug_chunk(
     debug_info: ChunkDebugInfo,
     emitted_frames: int,
 ) -> None:
-    """输出 chunk 级调试信息"""
+    """输出 chunk 级调试信息。"""
 
     debug_summary = {
         "chunk_index": int(chunk_index),
@@ -91,7 +91,11 @@ class DiarizationRunner:
 
     每条音频独立构建 clusterer / writer / exporter（状态不跨文件），
     仅 extractor 持有的模型（segmentation + embedding）跨文件复用。
-    with_separation=False 时不创建分段音频导出器（无 segments 输出）。
+
+    Attributes:
+        config: 管线配置。
+        with_separation: 是否创建分段音频导出器（False 时无 segments 输出）。
+        extractor: 持有模型的 chunk 提取器，跨文件复用。
     """
 
     def __init__(
@@ -100,12 +104,27 @@ class DiarizationRunner:
         model_path: Optional[str] = None,
         with_separation: bool = True,
     ):
+        """加载模型并初始化执行器。
+
+        Args:
+            config: 管线配置。
+            model_path: 显式模型路径覆盖。
+            with_separation: 是否启用 separation 分段音频导出。
+        """
         self.config = config
         self.with_separation = with_separation
         self.extractor = ChunkExtractor(config, model_path)
 
     def process_file(self, audio_path: str, exp_dir: Path) -> str:
-        """处理单条音频，输出 RTTM（+ 可选 segments）；返回 raw RTTM 路径。"""
+        """处理单条音频，输出 RTTM（+ 可选 segments）。
+
+        Args:
+            audio_path: 音频文件路径；uri 取其文件名主干。
+            exp_dir: 本次 run 的输出目录。
+
+        Returns:
+            raw RTTM 路径。
+        """
 
         config = self.config
         config.output_dir = str(exp_dir)
@@ -153,7 +172,15 @@ class DiarizationRunner:
             debug_info: ChunkDebugInfo,
             emitted_frames: int,
         ) -> None:
-            """# 每 chunk 分配完成后的回调，负责日志与分段导出"""
+            """每 chunk 分配完成后的回调：分段导出 + 日志输出。
+
+            Args:
+                chunk: 本 chunk 的产物。
+                local_to_global: 局部到全局的说话人映射；deferred 后端下为
+                    None（重放阶段不再回调）。
+                debug_info: chunk 级调试信息。
+                emitted_frames: 本 chunk 已提交帧数；deferred 后端下为 0。
+            """
 
             # 输出本身由 runner/writer 完成。deferred 后端下 local_to_global
             # 为 None、emitted_frames 为 0（重放阶段不再回调）。
@@ -234,8 +261,18 @@ def run_diarization(
 ) -> str:
     """单条音频的 diarization 管线：extract + cluster + RTTM/segments 输出。
 
-    供 diarization.app（stage1 独立 CLI）复用；返回 raw RTTM 路径。
-    批量场景请直接用 DiarizationRunner 以复用已加载的模型。
+    供 diarization.app（stage1 独立 CLI）复用；批量场景请直接用
+    DiarizationRunner 以复用已加载的模型。
+
+    Args:
+        config: 管线配置。
+        audio_path: 音频文件路径。
+        exp_dir: 本次 run 的输出目录。
+        model_path: 显式模型路径覆盖。
+        with_separation: 是否启用 separation 分段音频导出。
+
+    Returns:
+        raw RTTM 路径。
     """
 
     return DiarizationRunner(config, model_path, with_separation).process_file(

@@ -5,12 +5,14 @@
 按 chunk 顺序收集全部带 embedding 的 observation，用 sklearn
 AgglomerativeClustering(n_clusters=ref 说话人数, metric='cosine',
 linkage=config.ahc_linkage) 聚类，再按原 chunk 顺序重建逐 chunk 的
-local_to_global（同 chunk 同 local 的多条 observation 取第一条，与 ahc 后端
-finalize 的重建口径一致；无 embedding 的 local 不进 mapping，writer 对其帧
-直接丢弃），重放 AppendOnlyRTTMWriter 写 {uri}.raw.rttm（落 raw/ 子目录，
-避免被 sys_suffix='.rttm' 的批量评估误收），再叠加 refined 级逻辑
-（merged_into 传空 dict——离线 AHC 无流式 merge；centroids/counts 用
-post_process.cluster_stats 从聚类结果算；min_count 用配置的
+local_to_global（同 chunk 同 local 的多条 observation 取第一条——setdefault
+语义，与 ahc 后端 finalize 的后者覆盖写法不同，但实际同 chunk 同 local
+至多一条 observation，口径等价；无 embedding 的 local 不进 mapping，
+writer 对其帧直接丢弃），重放 AppendOnlyRTTMWriter 写 {uri}.raw.rttm
+（落 raw/ 子目录，避免被 sys_suffix='.rttm' 的批量评估误收），再叠加
+refined 级逻辑（merged_into 传空 dict——离线 AHC 无流式 merge；centroids
+用 post_process.cluster_stats 从聚类结果算，counts 用 np.unique 统计的
+簇内 observation 数，均与 ahc 后端 finalize 同口径；min_count 用配置的
 post_merge_min_count）写 {uri}.rttm，最后 compute_der_batch 评 DER。
 
 用法：
@@ -53,7 +55,14 @@ logger = logging.getLogger("ahc_oracle_k")
 
 
 def load_base_config(config_path: str) -> ChunkPipelineConfig:
-    """直接从 YAML 构造配置（与 tools/sweep_params.py 同口径）。"""
+    """直接从 YAML 构造配置（与 tools/sweep_params.py 同口径）。
+
+    Args:
+        config_path: 配置 YAML 路径。
+
+    Returns:
+        基准 ChunkPipelineConfig。
+    """
 
     with open(config_path, "r", encoding="utf-8") as file_obj:
         cfg_dict = yaml.safe_load(file_obj) or {}
@@ -66,7 +75,18 @@ def load_base_config(config_path: str) -> ChunkPipelineConfig:
 def cluster_oracle_k(
     chunks_path: Path, num_speakers: int, config: ChunkPipelineConfig
 ) -> tuple[str, list, list[dict[int, int]], dict, dict]:
-    """单文件聚类：返回 (uri, artifacts, 逐 chunk local_to_global, centroids, counts)。"""
+    """单文件 oracle-k 聚类。
+
+    无带 embedding 的 observation 时返回空映射/空统计。
+
+    Args:
+        chunks_path: chunks.npz 路径。
+        num_speakers: 真值说话人数（n_clusters 上限）。
+        config: 配置（用其 ahc_linkage）。
+
+    Returns:
+        (uri, artifacts, 逐 chunk local_to_global, centroids, counts)。
+    """
 
     from sklearn.cluster import AgglomerativeClustering
 
@@ -123,7 +143,17 @@ def replay_file(
     output_dir: Path,
     config: ChunkPipelineConfig,
 ) -> None:
-    """单文件：oracle-k 聚类 + 重放 writer + refined 级输出。"""
+    """单文件：oracle-k 聚类 + 重放 writer + refined 级输出。
+
+    Args:
+        chunks_path: chunks.npz 路径。
+        ref_dir: 参考 RTTM 目录（取真值说话人数）。
+        output_dir: 系统 RTTM 输出目录（raw 落其 raw/ 子目录）。
+        config: 配置。
+
+    Raises:
+        SystemExit: 对应参考 RTTM 不存在。
+    """
 
     uri_tmp = chunks_path.name[: -len(".chunks.npz")]
     ref_path = ref_dir / f"{uri_tmp}.rttm"
@@ -169,6 +199,8 @@ def replay_file(
 
 
 def main() -> None:
+    """CLI 入口：逐文件重放 oracle-k 聚类并评估 DER、写报告。"""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, help="chunks.npz 目录")
     parser.add_argument("--ref", required=True, help="参考 RTTM 目录")

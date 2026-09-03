@@ -23,6 +23,13 @@ def validate_follow_requirements(config: ChunkPipelineConfig) -> None:
 
     需要配置开启分段导出且使用 streaming 后端；
     ahc 后端不产出 segments manifest，ASR follow 进程会空转到超时。
+
+    Args:
+        config: 管线配置。
+
+    Raises:
+        SystemExit: separation_enabled 为 false，或 clustering_backend
+            不是 streaming。
     """
 
     if not config.separation_enabled:
@@ -41,7 +48,18 @@ def build_asr_follow_cmd(
     ready_file: Path,
     verbose: bool = False,
 ) -> list[str]:
-    """组装 ASR follow 子进程命令（消费 exp_dir/segments，产出 transcripts）。"""
+    """组装 ASR follow 子进程命令（消费 exp_dir/segments，产出 transcripts）。
+
+    Args:
+        exp_dir: 本次 run 的输出目录。
+        asr_config: ASR 转写的 YAML 配置路径。
+        done_file: diarization 完成哨兵路径。
+        ready_file: ASR 就绪哨兵路径。
+        verbose: 是否透传 --verbose。
+
+    Returns:
+        子进程命令列表。
+    """
 
     cmd = [
         sys.executable,
@@ -70,6 +88,13 @@ def wait_process_ready(proc: subprocess.Popen, ready_file: Path) -> None:
     """轮询等子进程的就绪哨兵；进程早退则报错退出。
 
     无超时上限：模型下载/加载耗时不可预估，卡住时由用户 Ctrl+C 中断。
+
+    Args:
+        proc: follow 子进程。
+        ready_file: 就绪哨兵路径。
+
+    Raises:
+        RuntimeError: 子进程在就绪前退出。
     """
 
     while not ready_file.exists():
@@ -84,13 +109,20 @@ def finish_follow_process(
     """落 done 哨兵放行跟随进程收尾，等其排空积压后自行退出。
 
     正常路径行为不变：follow 循环的清空判定（哨兵出现且本轮无新段）
-    保证其自行退出，这里等到它排空为止。timeout 是兜底上限（秒）：
-    超时不等于截断转写的常规预期，而是防止父进程被无限阻塞——批量
-    积压排空过久、或中断路径上等待期间第二次 Ctrl+C 会把 ASR 子进程
-    遗弃为孤儿。超时后按 terminate → 短超时 wait → kill 升级（参照
-    run.py stop_viewer），并打 WARNING。
-    返回子进程退出码：非 0 表示 follow 进程在排空阶段崩溃（OOM 等）
-    或被超时强杀，转写产物可能缺失/不全，调用方应据此置非零退出码。
+    保证其自行退出，这里等到它排空为止。timeout 是兜底上限：超时不
+    等于截断转写的常规预期，而是防止父进程被无限阻塞——批量积压排空
+    过久、或中断路径上等待期间第二次 Ctrl+C 会把 ASR 子进程遗弃为孤儿。
+    超时后按 terminate → 短超时 wait → kill 升级（参照 run.py
+    stop_viewer），并打 WARNING。
+
+    Args:
+        proc: follow 子进程。
+        done_file: 完成哨兵路径。
+        timeout: 排空等待的兜底上限（秒）。
+
+    Returns:
+        子进程退出码：非 0 表示 follow 进程在排空阶段崩溃（OOM 等）或
+        被超时强杀，转写产物可能缺失/不全，调用方应据此置非零退出码。
     """
 
     done_file.touch()

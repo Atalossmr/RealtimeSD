@@ -31,13 +31,26 @@ class SegmentTranscriber:
         self._asr = FunASRNanoASR(config)
 
     def warmup(self) -> None:
-        """立即加载模型（默认惰性到首次转写；跟随模式下提前加载以便与
-        管线启动阶段重叠，首个音频段闭合即可开始转写）。"""
+        """立即加载模型。
+
+        默认惰性到首次转写；跟随模式下提前加载以便与管线启动阶段重叠，
+        首个音频段闭合即可开始转写。
+        """
 
         self._asr._load()
 
     def transcribe_segment(self, waveform: torch.Tensor) -> str:
-        """转写一段音频 [1, T]（16k 单声道），返回文本（空串表示无内容）。"""
+        """转写一段音频 [1, T]（16k 单声道），返回文本（空串表示无内容）。
+
+        时长不超过 max_segment_duration 的段单次推理；超过的强制按固定
+        窗口滑窗续写（见 `_transcribe_long`）。
+
+        Args:
+            waveform: 音频张量 [1, T]，采样率须与 config.sample_rate 一致。
+
+        Returns:
+            转写文本（已 strip）。
+        """
 
         duration = waveform.shape[1] / self.sample_rate
         if duration <= float(self.config.max_segment_duration):
@@ -46,7 +59,15 @@ class SegmentTranscriber:
 
     @staticmethod
     def _strip_stitch_overlap(accumulated: str, new_text: str) -> str:
-        """去掉 new_text 开头与 accumulated 结尾重复的部分（续写重吐兜底）。"""
+        """去掉 new_text 开头与 accumulated 结尾重复的部分（续写重吐兜底）。
+
+        Args:
+            accumulated: 已累计文本。
+            new_text: 本次续写文本。
+
+        Returns:
+            去掉重复前缀后的 new_text；无重复时原样返回。
+        """
 
         max_k = min(len(accumulated), len(new_text), _MAX_STITCH_OVERLAP_CHARS)
         for k in range(max_k, 0, -1):
@@ -55,12 +76,22 @@ class SegmentTranscriber:
         return new_text
 
     def _transcribe_long(self, waveform: torch.Tensor) -> str:
-        """长段滑窗推理：每次推进 step 秒，输入窗口 = 已转写前缀尾部 overlap
-        秒 + 新增 step 秒（总长 ≤ W），prev = 已累计文本尾部。
+        """长段滑窗续写推理。
 
-        模型把 prev 尾部与窗口头部的重叠区对齐、只续写新增部分；prev 覆盖的
-        音频必须是输入窗口的前缀，因此窗口不能从"新内容"处开始，必须带上
-        overlap 秒的已转写前缀。
+        每次推进 step 秒，输入窗口 = 已转写前缀尾部 overlap 秒 + 新增
+        step 秒（总长 ≤ W），prev = 已累计文本尾部（token 预算封顶，预算
+        <= 0 时按窗口重叠时长自动估计）。模型把 prev 尾部与窗口头部的
+        重叠区对齐、只续写新增部分；prev 覆盖的音频必须是输入窗口的前缀，
+        因此窗口不能从"新内容"处开始，必须带上 overlap 秒的已转写前缀。
+
+        Args:
+            waveform: 长段音频张量 [1, T]。
+
+        Returns:
+            整段拼接文本（拼接处已做后缀-前缀去重）。
+
+        Raises:
+            ValueError: window_overlap >= max_segment_duration 导致步长非正。
         """
 
         window = int(float(self.config.max_segment_duration) * self.sample_rate)

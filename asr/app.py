@@ -70,8 +70,16 @@ def _write_transcript(
     results: list[tuple[float, float, int, str]],
     output_dir: Path,
 ) -> None:
-    """按 start 排序全量重写 transcript jsonl（收尾兜底用；运行期增量
-    落盘走 `_append_transcript`）。格式与旧 ASRWorker.finalize 一致。"""
+    """按 start 排序全量重写 transcript jsonl。
+
+    收尾兜底用；运行期增量落盘走 `_append_transcript`。格式与旧
+    ASRWorker.finalize 一致。
+
+    Args:
+        uri: 音频标识（输出文件名前缀）。
+        results: (start, end, speaker_id, text) 元组列表，函数内部排序。
+        output_dir: transcript 输出目录。
+    """
 
     results = sorted(results, key=lambda r: (r[0], r[1]))
     jsonl_path = output_dir / f"{uri}.transcript.jsonl"
@@ -101,12 +109,18 @@ def _append_transcript(
     result: tuple[float, float, int, str],
     output_dir: Path,
 ) -> None:
-    """运行期增量落盘：把一条新结果追加到 transcript jsonl（append-only）。
+    """把一条新结果追加到 transcript jsonl（append-only）。
 
-    单行单次 write 保证行完整（与 manifest 的 append-only 模式一致）；
-    viewer 轮询若读到不完整行会跳过、下轮再读（见 viewer._read_jsonl）。
-    段按 manifest 顺序处理、start 基本递增，append 顺序天然接近排序，
-    收尾时 `_write_transcript` 再做一次全量排序重写。
+    运行期增量落盘用。单行单次 write 保证行完整（与 manifest 的
+    append-only 模式一致）；viewer 轮询若读到不完整行会跳过、下轮再读
+    （见 viewer._read_jsonl）。段按 manifest 顺序处理、start 基本递增，
+    append 顺序天然接近排序，收尾时 `_write_transcript` 再做一次全量排序
+    重写。
+
+    Args:
+        uri: 音频标识（输出文件名前缀）。
+        result: (start, end, speaker_id, text) 元组。
+        output_dir: transcript 输出目录。
     """
 
     start, end, speaker_id, text = result
@@ -136,9 +150,19 @@ def _transcribe_entry(
 ) -> tuple[float, float, int, str] | None:
     """转写一条 manifest 记录，非空结果追加到 results 并返回该条结果。
 
-    空文本返回 None。采样率不匹配抛 SegmentConfigError（确定性配置错误，
-    调用方 fail-fast）；其余异常（坏音频、瞬时 I/O 等）由调用方按瞬时
-    失败处理。
+    Args:
+        config: ASR 配置（用于校验段采样率）。
+        transcriber: 段级转写器。
+        entry: manifest 单行记录（含 speaker_id/start/end/path）。
+        results: 累积结果列表，非空结果会追加到其中。
+
+    Returns:
+        (start, end, speaker_id, text) 元组；空文本返回 None。
+
+    Raises:
+        SegmentConfigError: 段采样率与配置不一致（确定性配置错误，调用方
+            fail-fast）。其余异常（坏音频、瞬时 I/O 等）向上抛，由调用方
+            按瞬时失败处理。
     """
 
     speaker_id = int(entry["speaker_id"])
@@ -168,10 +192,18 @@ def _transcribe_entry(
 
 
 def _read_new_entries(manifest_path: Path, offset: int) -> tuple[list[dict], int]:
-    """从 offset 起增量读取 manifest 的完整行，返回 (新条目, 新 offset)。
+    """从 offset 起增量读取 manifest 的完整行。
 
-    末尾不完整的行（writer 正在写）留到下一轮：offset 回退到最后一处换行之后。
-    manifest 是 append-only，不回溯已消费部分。
+    末尾不完整的行（writer 正在写）留到下一轮：offset 回退到最后一处换行
+    之后。manifest 是 append-only，不回溯已消费部分。单行 JSON 损坏时跳过
+    该行（offset 照常前进，不重试），不杀死整个消费循环。
+
+    Args:
+        manifest_path: manifest 文件路径。
+        offset: 已消费的字节偏移。
+
+    Returns:
+        (新条目列表, 新 offset) 元组。
     """
 
     with open(manifest_path, "rb") as file_obj:
@@ -211,8 +243,20 @@ def consume_segments_dir(
     - 跟随（done_file 给定）：轮询直到哨兵出现且本轮无新段（积压清空），
       每转完一段即时追加落盘（供 viewer 实时读取）。
 
-    转写失败的段记录后在循环结束、最终落盘前重试一次；退出后按 uri 做一次
-    全量排序重写落盘 transcript（运行期是 append-only，保证最终文件有序）。
+    转写失败的段记录后在循环结束、最终落盘前重试一次（仍失败的 WARNING
+    列出丢失清单）；退出时（含异常/中断，走 finally）按 uri 做一次全量
+    排序重写落盘 transcript（运行期是 append-only，保证最终文件有序）。
+
+    Args:
+        config: ASR 配置。
+        segments_dir: exporter 输出目录（扫描其中所有 *.segments.jsonl）。
+        output_dir: transcript 输出目录。
+        transcriber: 段级转写器。
+        done_file: 跟随模式的结束哨兵文件路径；None 表示一次性模式。
+
+    Raises:
+        SegmentConfigError: 确定性配置错误（如段采样率不一致），fail-fast
+            直接向上抛。
     """
 
     offsets: dict[Path, int] = {}

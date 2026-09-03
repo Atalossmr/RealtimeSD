@@ -55,7 +55,14 @@ logger = logging.getLogger("sweep_params")
 
 
 def load_base_config(config_path: str) -> ChunkPipelineConfig:
-    """直接从 YAML 构造配置（跳过 CLI 合并，只取 dataclass 字段）。"""
+    """直接从 YAML 构造配置（跳过 CLI 合并，只取 dataclass 字段）。
+
+    Args:
+        config_path: 配置 YAML 路径。
+
+    Returns:
+        基准 ChunkPipelineConfig。
+    """
 
     with open(config_path, "r", encoding="utf-8") as file_obj:
         cfg_dict = yaml.safe_load(file_obj) or {}
@@ -66,7 +73,18 @@ def load_base_config(config_path: str) -> ChunkPipelineConfig:
 
 
 def parse_set_spec(spec: str, base_config: ChunkPipelineConfig) -> tuple[str, list]:
-    """解析 "field=v1,v2,..."，按字段当前值的类型转换各取值。"""
+    """解析 "field=v1,v2,..."，按字段当前值的类型转换各取值。
+
+    Args:
+        spec: 扫描维度描述，形如 field=v1,v2,...。
+        base_config: 基准配置（字段存在性与类型解析的依据）。
+
+    Returns:
+        (字段名, 取值列表)。
+
+    Raises:
+        SystemExit: 格式错误、字段未知、取值类型不匹配或为空。
+    """
 
     if "=" not in spec:
         raise SystemExit(f"--set 格式应为 field=v1,v2,...，收到: {spec!r}")
@@ -111,7 +129,16 @@ def replay_files(
     chunks_files: list[Path],
     work_dir: Path,
 ) -> dict[str, dict[str, object]]:
-    """逐文件重放聚类写 raw RTTM，返回各文件的 clusterer 终态。"""
+    """逐文件重放聚类写 raw RTTM，返回各文件的 clusterer 终态。
+
+    Args:
+        config: 本组合的完整配置。
+        chunks_files: chunks.npz 文件列表。
+        work_dir: raw RTTM 输出目录（{uri}.raw.rttm）。
+
+    Returns:
+        {uri: {"centroids": ..., "counts": ..., "merged_into": ...}}。
+    """
 
     states: dict[str, dict[str, object]] = {}
     for chunks_path in chunks_files:
@@ -139,7 +166,17 @@ def evaluate_combo(
     eval_dir: Path,
     config: ChunkPipelineConfig,
 ) -> dict[str, float]:
-    """在重放终态上叠加 refined 级逻辑（merge 链修正 + post-merge）并算 DER。"""
+    """在重放终态上叠加 refined 级逻辑（merge 链修正 + post-merge）并算 DER。
+
+    Args:
+        states: replay_files 的返回（uri -> clusterer 终态）。
+        raw_dir: raw RTTM 目录（{uri}.raw.rttm）。
+        eval_dir: refined RTTM 输出目录（{uri}.rttm）。
+        config: 本组合的完整配置。
+
+    Returns:
+        {"ms", "fa", "ser", "der"} 全局指标（百分比）。
+    """
 
     for uri, state in states.items():
         write_refined_rttm(
@@ -172,6 +209,8 @@ REF_DIR: Path
 
 
 def main() -> None:
+    """CLI 入口：按 --set 笛卡尔积逐组合重放聚类、评 DER 并写 CSV。"""
+
     global REF_DIR
 
     parser = argparse.ArgumentParser(description=__doc__)

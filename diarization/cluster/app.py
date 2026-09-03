@@ -35,6 +35,9 @@ def build_cluster_arg_parser() -> argparse.ArgumentParser:
 
     基于完整 pipeline parser 构建，保证 YAML 键名校验接受全部既有配置项
     （模型类参数在聚类阶段不生效，仅为兼容同一份 config.yaml）。
+
+    Returns:
+        追加 --input 参数后的 argparse.ArgumentParser。
     """
 
     parser = build_arg_parser()
@@ -48,7 +51,18 @@ def build_cluster_arg_parser() -> argparse.ArgumentParser:
 
 
 def collect_chunks_paths(input_path: str) -> list[str]:
-    """收集 .chunks.npz 路径（单文件 / 目录 / 文本清单）。"""
+    """收集 .chunks.npz 路径（单文件 / 目录 / 文本清单）。
+
+    Args:
+        input_path: 单个 .chunks.npz、包含 npz 的目录（递归收集并排序），
+            或每行一个路径的文本清单文件。
+
+    Returns:
+        收集到的 .chunks.npz 路径列表。
+
+    Raises:
+        FileNotFoundError: 路径不存在。
+    """
 
     path = Path(input_path)
     if path.is_dir():
@@ -62,7 +76,16 @@ def collect_chunks_paths(input_path: str) -> list[str]:
 
 
 def cluster_file(chunks_path: str, config, output_dir: str) -> str:
-    """对单个 chunks.npz 执行聚类并输出 RTTM，返回输出路径。"""
+    """对单个 chunks.npz 执行聚类并输出 RTTM。
+
+    Args:
+        chunks_path: 嵌入提取阶段产出的 .chunks.npz 路径。
+        config: 管线配置（聚类后端、RTTM 与 post-merge 参数等）。
+        output_dir: 输出根目录，RTTM 写入其 rttm/ 子目录。
+
+    Returns:
+        写出的 raw RTTM 路径。
+    """
 
     uri, artifacts = load_chunks(chunks_path)
     clusterer = build_clusterer(config)

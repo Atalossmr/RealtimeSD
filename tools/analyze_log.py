@@ -39,7 +39,14 @@ _NO_TAG = "general"
 
 
 def _event_key(message: str) -> str:
-    """从消息体提取归一化的事件名：冒号前缀优先，否则前 5 个词；数字归一。"""
+    """从消息体提取归一化的事件名：冒号前缀优先，否则前 5 个词；数字归一。
+
+    Args:
+        message: 日志消息体（已剥离模块 tag）。
+
+    Returns:
+        归一化事件名（数字替换为 #，截断到 60 字符）。
+    """
 
     colon = message.find(":")
     if 0 < colon <= 40:
@@ -50,6 +57,16 @@ def _event_key(message: str) -> str:
 
 
 def analyze_file(path: Path) -> dict:
+    """解析单个日志文件并聚合计数。
+
+    Args:
+        path: 日志文件路径。
+
+    Returns:
+        统计 dict：行数/续行数/时间范围、module -> event -> level 计数、
+        WARNING/ERROR/CRITICAL 明细。
+    """
+
     stats = {
         "path": path,
         "total_lines": 0,
@@ -83,6 +100,16 @@ def analyze_file(path: Path) -> dict:
 
 
 def report(stats: dict, top: int) -> str:
+    """把单个日志的统计渲染为文本报告。
+
+    Args:
+        stats: analyze_file 的返回。
+        top: 每模块最多展示的事件种类数。
+
+    Returns:
+        多行文本报告。
+    """
+
     lines = [
         f"== {stats['path']}",
         f"   lines={stats['total_lines']} "
@@ -113,6 +140,15 @@ def report(stats: dict, top: int) -> str:
 
 
 def _collect_paths(raw_paths: list[str]) -> list[Path]:
+    """展开参数为日志文件列表（目录取其下所有 *.log）。
+
+    Args:
+        raw_paths: 日志文件或目录路径列表。
+
+    Returns:
+        日志文件路径列表。
+    """
+
     paths = []
     for raw in raw_paths:
         path = Path(raw)
@@ -124,6 +160,12 @@ def _collect_paths(raw_paths: list[str]) -> list[Path]:
 
 
 def main() -> int:
+    """CLI 入口：逐日志文件打印统计报告。
+
+    Returns:
+        退出码（0 正常；1 未找到任何日志文件）。
+    """
+
     parser = argparse.ArgumentParser(description="运行日志事件统计（模块 × 事件 × 级别）")
     parser.add_argument("logs", nargs="+", help="日志文件或包含 *.log 的目录（可多个）")
     parser.add_argument("--top", type=int, default=15, help="每模块最多展示的事件种类数")

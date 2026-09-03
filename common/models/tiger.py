@@ -15,6 +15,14 @@ class TigerSeparator:
     """commit 区音频的 2 路分离（TIGER，固定 2 路输出、16kHz）。"""
 
     def __init__(self, model_name: str, hf_cache_dir: str, sample_rate: int, device):
+        """初始化分离器；模型延迟到首次 separate 时才加载。
+
+        Args:
+            model_name: TIGER 模型名或 Hugging Face 仓库 id。
+            hf_cache_dir: Hugging Face 缓存目录。
+            sample_rate: 音频采样率（16kHz）。
+            device: 推理设备。
+        """
         self.model_name = model_name
         self.hf_cache_dir = hf_cache_dir
         self.sample_rate = sample_rate
@@ -23,6 +31,7 @@ class TigerSeparator:
         self._tiger = None
 
     def _load(self) -> None:
+        """加载 TIGER 模型并切换到 eval 模式。"""
         from common.look2hear.models import TIGER
 
         logger.info("[separation] loading TIGER model %s", self.model_name)
@@ -38,7 +47,14 @@ class TigerSeparator:
     ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
         """分离一段混合波形 [1, T]，返回 (混合波形, 分离音轨 [2, T])，长度已对齐。
 
-        波形切片由调用方完成（见 separation/exporter.py）；过短的输入返回 None。
+        波形切片由调用方完成（见 separation/exporter.py）；过短的输入（短于
+        1/4 秒）返回 None。
+
+        Args:
+            mix: shape 为 [1, T] 的混合波形。
+
+        Returns:
+            (对齐后的混合波形, [2, T] 分离音轨)；输入过短时返回 None。
         """
 
         if self._tiger is None:

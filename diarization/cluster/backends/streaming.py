@@ -88,7 +88,16 @@ class StreamingChunkClusterer(BaseChunkClusterer):
         speaker_id: int,
         observation: ChunkObservation,
     ) -> tuple[str, float]:
-        """以简单移动平均（SMA）增量更新对应 global speaker 的 centroid。"""
+        """以简单移动平均（SMA）增量更新对应 global speaker 的 centroid。
+
+        Args:
+            speaker_id: 待更新的 global speaker id。
+            observation: 携带 embedding 的观测；embedding 为 None 时不做任何更新。
+
+        Returns:
+            (mode, alpha)：mode 恒为 "sma"；alpha 为本次更新权重，
+            embedding 缺失时为 0.0。
+        """
 
         if observation.embedding is None:
             return "sma", 0.0
@@ -106,7 +115,17 @@ class StreamingChunkClusterer(BaseChunkClusterer):
         return "sma", alpha
 
     def _create_speaker(self, observation: ChunkObservation) -> int:
-        """基于 observation 新建全局说话人（立即成为永久身份）。"""
+        """基于 observation 新建全局说话人（立即成为永久身份）。
+
+        Args:
+            observation: 携带 embedding 的观测，其 embedding 归一化后作为初始 centroid。
+
+        Returns:
+            新建的 global speaker id。
+
+        Raises:
+            ValueError: observation 不带 embedding。
+        """
 
         if observation.embedding is None:
             raise ValueError("Cannot create speaker from observation without embedding")
@@ -127,9 +146,16 @@ class StreamingChunkClusterer(BaseChunkClusterer):
     ) -> Optional[tuple[int, int, float]]:
         """选出最相似的一对可合并 speaker。
 
-        返回 (survivor, absorbed, similarity)；无可合并对返回 None。
         方向按 (count, -id) 规则：count 大者为 survivor，count 相同保留
         id 较小者。
+
+        Args:
+            global_ids: 参与判定的 global speaker id 列表（已排序）。
+            similarities: 与 global_ids 对应的两两余弦相似度矩阵。
+
+        Returns:
+            (survivor, absorbed, similarity)；无可合并对（无相似度达到
+            merge_threshold 的配对）时返回 None。
         """
 
         n = len(global_ids)
@@ -164,6 +190,12 @@ class StreamingChunkClusterer(BaseChunkClusterer):
         加权平均后重归一化；被合并者从 centroid 集中移除，不再参与后续分配。
         raw RTTM 已写出行不受影响（历史行由 refined 级修正）；本 chunk 尚未
         写出的分配改挂到幸存 id。
+
+        Args:
+            local_to_global: 本 chunk 尚未写出的分配，指向被并者的条目
+                会被原地改挂到幸存 id。
+            debug_info: 本 chunk 的调试记录，local_assignments 中指向被并者
+                的条目同样改挂幸存 id。
         """
 
         if len(self.centroids) < 2:
@@ -216,7 +248,15 @@ class StreamingChunkClusterer(BaseChunkClusterer):
         self,
         observations: list[ChunkObservation],
     ) -> dict[int, tuple[Optional[int], float]]:
-        """用 cost matrix + Hungarian algorithm 计算本 chunk 的联合分配。"""
+        """用 cost matrix + Hungarian algorithm 计算本 chunk 的联合分配。
+
+        Args:
+            observations: 本 chunk 带 embedding 的观测列表。
+
+        Returns:
+            local_idx -> (匹配的 global id 或 None, 余弦相似度)；无 centroid
+            或未匹配（含 embedding 缺失、观测多于 centroid）时为 (None, -1.0)。
+        """
 
         if not self.centroids:
             return {obs.local_idx: (None, -1.0) for obs in observations}
@@ -256,7 +296,18 @@ class StreamingChunkClusterer(BaseChunkClusterer):
         self,
         observations: list[ChunkObservation],
     ) -> tuple[dict[int, int], ChunkDebugInfo]:
-        """完成一个 chunk 的 local->global 分配与 centroid 更新。"""
+        """完成一个 chunk 的 local->global 分配与 centroid 更新。
+
+        每条带 embedding 的观测先做 matched/new/fallback/放弃判定，随后尝试
+        合并最相似的一对 speaker（merge 可能影响本 chunk 后续观测的匹配对象）。
+
+        Args:
+            observations: 本 chunk 的一组 local track 观测。
+
+        Returns:
+            (local_to_global, debug_info)：local slot -> 最终 global id
+            （被放弃的 slot 不出现），以及本 chunk 的调试信息。
+        """
 
         debug_info: ChunkDebugInfo = {
             "num_centroids_before": len(self.centroids),
@@ -291,7 +342,21 @@ class StreamingChunkClusterer(BaseChunkClusterer):
         local_to_global: dict[int, int],
         debug_info: ChunkDebugInfo,
     ) -> None:
-        """对单个 observation 做 matched/new/fallback 判定并更新状态。"""
+        """对单个 observation 做 matched/new/fallback 判定并更新状态。
+
+        判定规则：相似度达到 global_match_threshold 直接沿用（matched）；
+        低于 new_speaker_threshold 且满足建簇条件（允许 centroid 更新、
+        speaker 数未满、时长足够）时新建 speaker（new）；介于两阈值之间
+        时保守沿用但不更新 centroid（fallback）；无匹配且不满足建簇条件时
+        放弃该 local slot。匹配对象若在本 chunk 内已被 merge，沿 merge 链
+        解析到幸存 id 并用其当前 centroid 重算相似度。
+
+        Args:
+            observation: 待判定的观测。
+            assignment: _build_assignment 的本 chunk 联合分配结果。
+            local_to_global: 本 chunk 的分配结果（原地追加）。
+            debug_info: 本 chunk 的调试记录（原地追加）。
+        """
 
         config = self.config
         local_idx = observation.local_idx

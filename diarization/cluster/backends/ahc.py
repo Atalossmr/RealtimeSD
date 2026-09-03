@@ -23,7 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 def _empty_debug_info() -> ChunkDebugInfo:
-    """离线后端在 assign_chunk 阶段不做判定，返回空的 debug 结构。"""
+    """离线后端在 assign_chunk 阶段不做判定，返回空的 debug 结构。
+
+    Returns:
+        各字段均为空值（计数为 0、列表为空）的 ChunkDebugInfo。
+    """
 
     return {
         "num_centroids_before": 0,
@@ -37,7 +41,18 @@ def _empty_debug_info() -> ChunkDebugInfo:
 
 
 class AHCChunkClusterer(BaseChunkClusterer):
-    """离线 AHC 后端：缓冲全部 embedding，音频结束后一次层次聚类。"""
+    """离线 AHC 后端：缓冲全部 embedding，音频结束后一次层次聚类。
+
+    assign_chunk 只按 chunk 顺序缓冲带 embedding 的 observations 并返回
+    (None, 空 debug)；finalize 用 AgglomerativeClustering（cosine 距离 +
+    distance_threshold，簇数完全由阈值决定）统一聚类，返回逐 chunk 的
+    local->global 映射供调用方重放写出。
+
+    Attributes:
+        centroids: finalize 后填充的簇质心（均值重归一化）。
+        counts: finalize 后填充的各簇 observation 数。
+        merged_into: 流式 merge 链；ahc 无流式 merge，恒为空。
+    """
 
     deferred = True
     # 与 streaming 后端统一：raw 级一律为 <stem>.raw.rttm。
@@ -57,6 +72,14 @@ class AHCChunkClusterer(BaseChunkClusterer):
         self,
         observations: list[ChunkObservation],
     ) -> tuple[Optional[dict[int, int]], ChunkDebugInfo]:
+        """按 chunk 顺序缓冲带 embedding 的 observations，不做任何判定。
+
+        Args:
+            observations: 本 chunk 的一组 local track 观测。
+
+        Returns:
+            (None, 空 debug_info)；标签在 finalize() 统一给出。
+        """
         # 离线后端此刻不做任何判定：只按 chunk 顺序缓冲带 embedding 的
         # observations，标签在 finalize 统一给出，因此这里返回 None。
         embedded = [obs for obs in observations if obs.embedding is not None]
@@ -64,6 +87,17 @@ class AHCChunkClusterer(BaseChunkClusterer):
         return None, _empty_debug_info()
 
     def finalize(self) -> list[dict[int, int]]:
+        """对缓冲的全部 embedding 做一次层次聚类，返回逐 chunk 的分配。
+
+        用 AgglomerativeClustering（cosine 距离 + distance_threshold，簇数
+        完全由阈值决定）统一聚类，同时填充 centroids / counts 供 refined 级
+        EOF 刷新时做小样本强制合并；小样本合并不在这里做，标签按原样写出
+        为 raw 级。
+
+        Returns:
+            与缓冲 chunk 一一对应的 local->global 映射列表（无 observation
+            时各项为空 dict）。
+        """
         # sklearn 延迟导入：streaming 后端运行时不需要它。
         from sklearn.cluster import AgglomerativeClustering
 

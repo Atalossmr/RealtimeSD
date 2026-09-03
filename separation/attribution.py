@@ -30,6 +30,15 @@ FrameActivity = tuple[float, float, list[int]]
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
+    """计算两向量的余弦相似度。
+
+    Args:
+        a: 向量 a。
+        b: 向量 b。
+
+    Returns:
+        余弦相似度（零向量按 1e-12 兜底避免除零）。
+    """
     a = a / (np.linalg.norm(a) + 1e-12)
     b = b / (np.linalg.norm(b) + 1e-12)
     return float(a @ b)
@@ -38,7 +47,14 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
 def overlap_regions(
     overlap_frames: list[FrameActivity],
 ) -> list[tuple[float, float]]:
-    """把重叠帧合成连续区间（时间上相邻的帧归并为一个区间）。"""
+    """把重叠帧合成连续区间（时间上相邻的帧归并为一个区间）。
+
+    Args:
+        overlap_frames: 重叠帧的帧级活跃记录（按时间有序）。
+
+    Returns:
+        归并后的 (start, end) 区间列表。
+    """
 
     regions: list[tuple[float, float]] = []
     for frame_start, frame_end, _ in overlap_frames:
@@ -57,6 +73,14 @@ def reference_embeddings(
     按 clusterer 契约，local_to_global 中的 slot 必有带 embedding 的
     observation（提不出 embedding 的 slot 不会进入分配），因此候选
     一定能被 observation 覆盖。
+
+    Args:
+        chunk: 本 chunk 的产物（取其 observations）。
+        local_to_global: local slot -> global speaker id 的分配。
+
+    Returns:
+        global speaker id -> 参照 embedding；同一 global 有多个观测时
+        保留后出现的。
     """
 
     refs: dict[int, np.ndarray] = {}
@@ -77,8 +101,19 @@ def energy_gate(
 ) -> list[int]:
     """能量门控：重叠帧区间上 音轨RMS / 混合RMS，返回过门控的 track 下标列表。
 
-    mix 为零点对应 chunk_ctx.commit_start 的混合波形；门控事件写
-    energy_gate 结构化日志（payload 字段与 exporter 内联实现一致）。
+    门控事件写 energy_gate 结构化日志（含各轨 ratio 与是否过门控）。
+
+    Args:
+        mix: 混合波形（[1, T]，零点对应 chunk_ctx.commit_start）。
+        track_sources: 各分离音轨的 (波形, 零点绝对时刻)。
+        regions: 重叠帧归并后的 (start, end) 区间列表。
+        sample_rate: 采样率。
+        threshold: 过门控的 RMS 比值阈值。
+        chunk_ctx: 本 chunk 的产物（提供 commit 区间与 chunk_index，用于
+            定位 mix 零点与写日志）。
+
+    Returns:
+        过门控的音轨下标列表（按 track 顺序）。
     """
 
     mix_rms = rms_over_regions(mix, chunk_ctx.commit_start, regions, sample_rate)
@@ -122,7 +157,22 @@ def match_pair(
     refs: dict[int, np.ndarray],
     min_sim: float,
 ) -> Optional[dict[int, int]]:
-    """2x2 互斥匹配：返回 track_idx -> global_id；总相似度过低返回 None。"""
+    """2x2 互斥匹配：返回 track_idx -> global_id；匹配不可靠时返回 None。
+
+    两种一一对应方案取总相似度较高者；任一对的相似度低于 min_sim
+    （min(pair_sims) < min_sim）或候选缺参照 embedding 时判不可靠。
+    匹配事件写 pair_match 结构化日志。
+
+    Args:
+        chunk_index: 本 chunk 序号（用于日志）。
+        track_embeddings: 两路分离音轨的 embedding（按下标对应 track 0/1）。
+        candidates: 两个候选 global speaker id。
+        refs: global speaker id -> 参照 embedding。
+        min_sim: 单对匹配的最小相似度阈值。
+
+    Returns:
+        track 下标 -> global speaker id 的映射；不可靠时返回 None。
+    """
 
     g0, g1 = candidates
     if g0 not in refs or g1 not in refs:
@@ -164,7 +214,16 @@ def best_match(
     candidates: list[int],
     refs: dict[int, np.ndarray],
 ) -> Optional[tuple[int, float]]:
-    """单路 winner 匹配：返回 (winner_global, similarity)；无可用参照返回 None。"""
+    """单路 winner 匹配：返回 (winner_global, similarity)；无可用参照返回 None。
+
+    Args:
+        embedding: 过门控音轨的 embedding。
+        candidates: 候选 global speaker id 列表。
+        refs: global speaker id -> 参照 embedding。
+
+    Returns:
+        (相似度最高的 global speaker id, 相似度)；候选均无参照时返回 None。
+    """
 
     sims = {g: cosine(embedding, refs[g]) for g in candidates if g in refs}
     if not sims:

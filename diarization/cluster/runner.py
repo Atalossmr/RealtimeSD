@@ -51,14 +51,24 @@ def run_clustering(
     流式后端：逐 chunk 分配后即时写出帧级结果并闭合沉默 turn。
     deferred（离线）后端：逐 chunk 暂存帧参数，finalize 统一聚类后按序重放。
 
-    refiner（可选，两后端通用）：RefinedRTTMWriter。流式后端按需刷新——
-    本 chunk 发生 merge 事件（merged_into 有新增）或距上次刷新满
-    REFINER_REFRESH_INTERVAL_CHUNKS 个 chunk 时，按最新合并状态重生成
-    refined RTTM 与 speaker 状态 sidecar；deferred 后端在 EOF 重放完成
-    后刷新。EOF 的 final 刷新叠加小样本合并。
-
     中途异常时 writer.finalize() 仍会在 finally 中执行（闭合残余 open
     turn），refiner 的 final 刷新则只在正常跑完时执行。
+
+    Args:
+        artifacts: ChunkArtifacts 序列（逐 chunk）。
+        clusterer: 聚类后端；deferred=False 时 assign_chunk 立即返回最终
+            local->global 映射，deferred=True 时只缓冲、由 finalize 统一给出。
+        writer: raw 级 RTTM 写出器。
+        chunk_hook: 可选的每 chunk 回调（日志、统计等）；deferred 模式下
+            分配阶段触发、emitted_frames 恒为 0，重放阶段不再回调。
+        refiner: 可选的 RefinedRTTMWriter（两后端通用）。流式后端按需刷新——
+            本 chunk 发生 merge 事件（merged_into 有新增）或距上次刷新满
+            REFINER_REFRESH_INTERVAL_CHUNKS 个 chunk 时，按最新合并状态重生成
+            refined RTTM 与 speaker 状态 sidecar；deferred 后端在 EOF 重放完成
+            后刷新。EOF 的 final 刷新叠加小样本合并。
+
+    Raises:
+        RuntimeError: deferred 后端 finalize 返回的分配数与暂存 chunk 数不一致。
     """
 
     pending: list[ChunkArtifacts] = []

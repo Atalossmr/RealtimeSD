@@ -28,6 +28,16 @@ from rttm_utils import load_rttm, overlap_histogram, union_duration  # noqa: E40
 def stats_for_file(
     rttm_path: Path, min_segment_duration: float
 ) -> dict[str, float | int]:
+    """统计单个参考 RTTM 的结构性下限指标。
+
+    Args:
+        rttm_path: 参考 RTTM 路径。
+        min_segment_duration: 判定短 turn 的时长阈值（秒）。
+
+    Returns:
+        指标字典（说话人数/turn 数/语音与重叠时长/短 turn/最短板说话人时长等）。
+    """
+
     turns = load_rttm(rttm_path)
     all_segments = [seg for segments in turns.values() for seg in segments]
     speech_total = union_duration(all_segments)
@@ -58,6 +68,8 @@ def stats_for_file(
 
 
 def main() -> None:
+    """CLI 入口：逐文件统计并打印/落盘汇总表。"""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref", required=True, help="参考 RTTM 目录")
     parser.add_argument("--min-segment-duration", type=float, default=0.30)

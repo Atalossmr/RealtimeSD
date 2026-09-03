@@ -6,7 +6,8 @@
 对每个 local slot 统计其活跃帧落在各参考说话人区间内的帧数，取覆盖帧数最多
 的说话人作为该 local 的 oracle global id（ref 说话人名按字典序映射为
 0..k-1）。无活跃帧或活跃帧完全无真值覆盖的 local 不放入 local_to_global
-（writer 对缺失 local 的帧直接丢弃，见 common/frames.py）。随后按 chunk 顺序
+（writer 对缺失 local 的帧直接丢弃，见 common/contracts/frames.py）。随后按
+chunk 顺序
 重放 AppendOnlyRTTMWriter（consume_chunk + close_inactive + finalize），
 得到的 DER 即"当前分割帧决策 + 完美说话人分配"的下限（分割层天花板）。
 
@@ -45,7 +46,14 @@ logger = logging.getLogger("oracle_tracks")
 
 
 def load_base_config(config_path: str) -> ChunkPipelineConfig:
-    """直接从 YAML 构造配置（与 tools/sweep_params.py 同口径）。"""
+    """直接从 YAML 构造配置（与 tools/sweep_params.py 同口径）。
+
+    Args:
+        config_path: 配置 YAML 路径。
+
+    Returns:
+        基准 ChunkPipelineConfig。
+    """
 
     with open(config_path, "r", encoding="utf-8") as file_obj:
         cfg_dict = yaml.safe_load(file_obj) or {}
@@ -61,6 +69,12 @@ def build_ref_timeline(
     """把 {speaker: [(start, end)]} 展平为按 start 排序的 [(start, end, global_id)]。
 
     ref 说话人名按字典序映射为 0..k-1 的整数 global id。
+
+    Args:
+        turns: load_rttm 的返回。
+
+    Returns:
+        按 start 排序的 [(start, end, global_id)]。
     """
 
     spk_index = {spk: idx for idx, spk in enumerate(sorted(turns))}
@@ -74,7 +88,15 @@ def build_ref_timeline(
 def speaker_at(
     segments: list[tuple[float, float, int]], time_point: float
 ) -> int | None:
-    """查 time_point 落在哪个参考说话人区间内；无覆盖返回 None（ref 无重叠）。"""
+    """查 time_point 落在哪个参考说话人区间内；无覆盖返回 None（ref 无重叠）。
+
+    Args:
+        segments: build_ref_timeline 的返回（按 start 排序）。
+        time_point: 查询时刻（秒）。
+
+    Returns:
+        覆盖该时刻的 global id；无覆盖返回 None。
+    """
 
     for start, end, global_id in segments:
         if start > time_point:
@@ -92,6 +114,13 @@ def oracle_local_to_global(
     帧判定严格镜像 iter_commit_frames：只取与提交区 [commit_start, commit_end)
     相交的帧（跨界裁剪），score > 0.0 即活跃。以帧中点查真值说话人，取覆盖
     帧数最多者；无活跃帧或无覆盖的 local 不进 mapping（writer 丢弃其帧）。
+
+    Args:
+        chunk: 单个 chunk 的产物（seg_scores/frame_step/提交区边界）。
+        segments: build_ref_timeline 的返回。
+
+    Returns:
+        local_idx -> oracle global id 的映射。
     """
 
     mapping: dict[int, int] = {}
@@ -124,7 +153,20 @@ def replay_file(
     output_dir: Path,
     config: ChunkPipelineConfig,
 ) -> dict[str, int]:
-    """单文件：oracle 打标签 + 重放 writer，返回 local 统计。"""
+    """单文件：oracle 打标签 + 重放 writer，返回 local 统计。
+
+    Args:
+        chunks_path: chunks.npz 路径。
+        ref_dir: 参考 RTTM 目录。
+        output_dir: 系统 RTTM 输出目录（{uri}.rttm）。
+        config: 配置。
+
+    Returns:
+        {"locals_total", "locals_assigned"} 统计。
+
+    Raises:
+        SystemExit: 对应参考 RTTM 不存在。
+    """
 
     uri, artifacts = load_chunks(str(chunks_path))
     ref_path = ref_dir / f"{uri}.rttm"
@@ -159,6 +201,8 @@ def replay_file(
 
 
 def main() -> None:
+    """CLI 入口：逐文件 oracle 打标签重放并评估 DER、写报告。"""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, help="chunks.npz 目录")
     parser.add_argument("--ref", required=True, help="参考 RTTM 目录")

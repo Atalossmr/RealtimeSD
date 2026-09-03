@@ -12,14 +12,26 @@ from pathlib import Path
 
 
 def env_flag(name: str, default: bool) -> bool:
-    """环境变量作为布尔缺省值：仅 "1" 为真。"""
+    """环境变量作为布尔缺省值：仅 "1" 为真。
+
+    Args:
+        name: 环境变量名。
+        default: 环境变量未设置时的缺省值。
+
+    Returns:
+        环境变量未设置时返回 default，否则返回其是否为 "1"。
+    """
 
     raw = os.environ.get(name)
     return default if raw is None else raw == "1"
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    """run.py 与 test_der.py 共有的 CLI 参数（缺省值取对应环境变量）。"""
+    """run.py 与 test_der.py 共有的 CLI 参数（缺省值取对应环境变量）。
+
+    Args:
+        parser: 待添加参数的 ArgumentParser。
+    """
 
     parser.add_argument(
         "--config", default=os.environ.get("CONFIG_PATH", "./config/config.yaml")
@@ -38,6 +50,13 @@ def check_input_paths(audio: Path, config_path: Path) -> None:
 
     audio 接受单个音频文件、目录或路径清单文本（与 collect_audio_paths
     的三种输入形式一致）。
+
+    Args:
+        audio: 音频输入路径（文件、目录或清单文本）。
+        config_path: YAML 配置路径。
+
+    Raises:
+        SystemExit: audio 或 config_path 不存在。
     """
 
     if not audio.exists():

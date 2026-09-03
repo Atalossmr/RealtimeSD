@@ -9,10 +9,17 @@ from pathlib import Path
 def collect_audio_paths(input_path: str) -> list[str]:
     """收集待处理音频路径。
 
-    支持三种输入形式：
-    - 单个音频文件；
-    - 音频目录；
-    - 文本清单文件，每行一个音频路径。
+    支持三种输入形式：单个音频文件；音频目录（递归收集
+    .wav / .mp3 / .flac）；文本清单文件（每行一个音频路径）。
+
+    Args:
+        input_path: 音频文件、音频目录或清单文件路径。
+
+    Returns:
+        音频路径列表。
+
+    Raises:
+        FileNotFoundError: 输入路径不存在。
     """
 
     path = Path(input_path)
@@ -30,7 +37,11 @@ def collect_audio_paths(input_path: str) -> list[str]:
 
 
 def ensure_parent_dir(path: str) -> None:
-    """确保目标文件的父目录存在。"""
+    """确保目标文件的父目录存在。
+
+    Args:
+        path: 目标文件路径。
+    """
 
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
 

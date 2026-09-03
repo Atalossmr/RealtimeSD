@@ -46,7 +46,11 @@ class AsrConfig:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    """构建命令行参数解析器（仅运行时/开关参数；调参项都在 YAML）。"""
+    """构建命令行参数解析器（仅运行时/开关参数；调参项都在 YAML）。
+
+    Returns:
+        配置好 --config/--output_dir/--verbose 的 ArgumentParser。
+    """
 
     parser = argparse.ArgumentParser(
         description="exporter 音频段目录的 ASR 转写",
@@ -75,6 +79,14 @@ def merge_args_with_config(
 
     合并优先级：argparse 默认值 < YAML 配置 < 显式 CLI 参数。
     调参项不在 CLI 上，因此它们的生效值始终以 YAML 为准。
+
+    Args:
+        parser: 参数解析器（用于识别显式传入的 CLI 参数）。
+        args: argparse 解析结果。
+        argv: 原始命令行参数；None 时由 common.config 取 sys.argv。
+
+    Returns:
+        合并后的 Namespace。
     """
 
     return common_config.merge_args_with_config(
@@ -90,6 +102,17 @@ def config_from_args(args: argparse.Namespace) -> AsrConfig:
     """把合并后的参数转换为 `AsrConfig` 并做合法性校验。
 
     字段值取自合并后的 args，缺失时落回 dataclass 字段默认值（唯一兜底来源）。
+
+    Args:
+        args: 合并后的 Namespace。
+
+    Returns:
+        校验通过的 AsrConfig。
+
+    Raises:
+        ValueError: 字段值非法（sample_rate 或 max_segment_duration 非正、
+            prev_text_max_tokens 为负、window_overlap 不在
+            [0, max_segment_duration) 区间内）。
     """
 
     config = common_config.dataclass_from_args(args, AsrConfig)

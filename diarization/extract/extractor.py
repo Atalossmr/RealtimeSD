@@ -1,8 +1,8 @@
 """嵌入提取阶段：音频 -> 逐 chunk 的 ChunkArtifacts（含 embedding）。
 
-`ChunkExtractor` 是 chunk 生产的唯一来源：端到端流程（run.py 的
-`run_diarization`）与提取 CLI（extract/app.py）共用它，保证两个阶段的
-chunk 切分、segmentation、track 聚合与 embedding 完全一致。
+`ChunkExtractor` 是 chunk 生产的唯一来源：端到端组合层（pipeline 的
+`run_diarization`）与提取 CLI（diarization/extract/app.py）共用它，保证
+两个阶段的 chunk 切分、segmentation、track 聚合与 embedding 完全一致。
 """
 
 from __future__ import annotations
@@ -43,6 +43,13 @@ class ChunkExtractor:
         config: ChunkPipelineConfig,
         embedding_model_path: Optional[str],
     ):
+        """初始化 embedding 模型、特征提取、segmentation 与 track 构造器。
+
+        Args:
+            config: chunk 管线配置。
+            embedding_model_path: embedding 模型权重路径；为 None 时按
+                model_type 解析默认路径。
+        """
         self.config = config
         self.device = resolve_device(config.device)
 
@@ -85,7 +92,16 @@ class ChunkExtractor:
         start: float,
         end: float,
     ) -> Optional[torch.Tensor]:
-        """按绝对时间从整段波形裁出单个 region；越界截断，空区间返回 None。"""
+        """按绝对时间从整段波形裁出单个 region；越界截断，空区间返回 None。
+
+        Args:
+            waveform: 整段波形，形状 (channels, samples)。
+            start: region 起点（绝对秒）。
+            end: region 终点（绝对秒）。
+
+        Returns:
+            裁剪后的波形切片；区间为空（含越界截断后为空）时返回 None。
+        """
 
         sample_rate = self.config.sample_rate
         total_samples = waveform.shape[1]
@@ -104,7 +120,15 @@ class ChunkExtractor:
         waveform: torch.Tensor,
         regions: list[tuple[float, float]],
     ) -> Optional[torch.Tensor]:
-        """按绝对时间从整段波形裁出各 region 并拼接。"""
+        """按绝对时间从整段波形裁出各 region 并拼接。
+
+        Args:
+            waveform: 整段波形，形状 (channels, samples)。
+            regions: 绝对秒 (start, end) 区间列表，按时间升序。
+
+        Returns:
+            各 region 切片沿时间维首尾拼接的波形；全部为空时返回 None。
+        """
 
         pieces: list[torch.Tensor] = []
         for start, end in regions:
@@ -121,7 +145,19 @@ class ChunkExtractor:
         waveform: torch.Tensor,
         tracks: list[LocalTrack],
     ) -> list[ChunkObservation]:
-        """批量为各 track 提 embedding 并组装 observation。"""
+        """批量为各 track 提 embedding 并组装 observation。
+
+        按 config.segment_batch_size 分批推理；NaN/inf 或零范数的退化
+        embedding 记为 None（保留 observation，交由下游按"无 embedding"处理）。
+
+        Args:
+            waveform: 整段波形（非当前 chunk），形状 (channels, samples)。
+            tracks: 当前 chunk 的 local track 列表。
+
+        Returns:
+            与有效 track 一一对应的 ChunkObservation 列表（裁不出波形的
+            track 会被跳过）。
+        """
 
         waveforms: list[torch.Tensor] = []
         pending: list[LocalTrack] = []
@@ -167,7 +203,16 @@ class ChunkExtractor:
     def prepare_waveform(
         self, waveform: torch.Tensor, sample_rate: int
     ) -> torch.Tensor:
-        """重采样到目标采样率、转单声道 float32。"""
+        """重采样到目标采样率、转单声道 float32。
+
+        Args:
+            waveform: 原始波形，一维或 (channels, samples)。
+            sample_rate: 原始采样率。
+
+        Returns:
+            形状 (1, samples) 的 float32 单声道波形，采样率为
+            config.sample_rate。
+        """
 
         waveform = resample_waveform_if_needed(
             waveform, sample_rate, self.config.sample_rate
@@ -179,7 +224,19 @@ class ChunkExtractor:
         return waveform.to(torch.float32)
 
     def iter_chunk_artifacts(self, waveform: torch.Tensor):
-        """按 chunk 顺序生产 ChunkArtifacts。"""
+        """按 chunk 顺序生产 ChunkArtifacts。
+
+        滑窗按 hop_duration 步进，每个窗口只提交中段 hop 秒（两侧留
+        margin 作边界缓冲；首窗左 margin 一并提交，尾窗截到音频末尾），
+        尾段不足一个 chunk 时补零后推理。
+
+        Args:
+            waveform: 单声道波形，形状 (1, samples)，采样率为
+                config.sample_rate。
+
+        Yields:
+            ChunkArtifacts: 逐 chunk 的 segmentation 分数与 observation。
+        """
 
         total_samples = waveform.shape[1]
         total_duration = total_samples / self.config.sample_rate
@@ -248,7 +305,17 @@ class ChunkExtractor:
             chunk_start_sample += hop_samples
 
     def extract_file(self, wav_path: str) -> str:
-        """提取阶段入口：生产 chunk artifacts 并落盘为 <stem>.chunks.npz。"""
+        """提取阶段入口：生产 chunk artifacts 并落盘为 <stem>.chunks.npz。
+
+        Args:
+            wav_path: 音频文件路径。
+
+        Returns:
+            落盘的 npz 路径（<output_dir>/embeddings/<stem>.chunks.npz）。
+
+        Raises:
+            ValueError: config.output_dir 未设置时。
+        """
 
         waveform = load_audio(wav_path, obj_fs=self.config.sample_rate)
         if self.config.output_dir is None:

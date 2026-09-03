@@ -40,7 +40,14 @@ INSEPARABLE_SIM = 0.85
 
 
 def load_rttm(path: Path) -> tuple[list[tuple[float, float, str]], list[str]]:
-    """返回 (语音段 [(start, end, spk)] 按 start 排序, 排序后的说话人列表)。"""
+    """解析 RTTM 为语音段与说话人列表。
+
+    Args:
+        path: RTTM 文件路径。
+
+    Returns:
+        (按 start 排序的语音段 [(start, end, spk)], 排序后的说话人列表)。
+    """
 
     segs = []
     with open(path, encoding="utf-8") as file_obj:
@@ -60,6 +67,15 @@ def map_to_ref(
     """按最大重叠把 observation 映射到参考说话人下标。
 
     最大重叠不足 observation 时长 50% 时返回 -1（ambiguous，不计入统计）。
+
+    Args:
+        start: observation 起点（秒）。
+        end: observation 终点（秒）。
+        segs: 参考语音段 [(start, end, spk)]，按 start 排序。
+        spk_index: 说话人名 -> 下标。
+
+    Returns:
+        参考说话人下标；ambiguous 或时长非正返回 -1。
     """
 
     dur = end - start
@@ -81,6 +97,14 @@ def pair_sims(
     """mask 选中的 observation 子集内，同类对与异类对的余弦相似度。
 
     embeddings 须已 L2 归一化；labels=-1 的 observation 不参与。
+
+    Args:
+        embeddings: L2 归一化的 embedding 矩阵 (N, dim)。
+        labels: 每个 observation 的参考说话人下标（-1 表示 ambiguous）。
+        mask: 参与统计的 observation 布尔掩码。
+
+    Returns:
+        (同类对相似度数组, 异类对相似度数组)。
     """
 
     idx = np.where((labels >= 0) & mask)[0]
@@ -99,6 +123,16 @@ def pair_sims(
 
 
 def dprime(within: np.ndarray, between: np.ndarray) -> float:
+    """两类相似度分布的 d-prime（可分性指标，越大越可分）。
+
+    Args:
+        within: 同类对相似度。
+        between: 异类对相似度。
+
+    Returns:
+        d-prime；合并方差为 0 时返回 nan。
+    """
+
     denom = np.sqrt((within.var() + between.var()) / 2)
     if denom <= 0:
         return float("nan")
@@ -106,7 +140,15 @@ def dprime(within: np.ndarray, between: np.ndarray) -> float:
 
 
 def best_threshold_err(within: np.ndarray, between: np.ndarray) -> tuple[float, float]:
-    """最优单阈值二分错误率（within 应高于阈值、between 应低于阈值）。"""
+    """最优单阈值二分错误率（within 应高于阈值、between 应低于阈值）。
+
+    Args:
+        within: 同类对相似度。
+        between: 异类对相似度。
+
+    Returns:
+        (最低错误率, 对应阈值)。
+    """
 
     thr = np.unique(np.concatenate([within, between]))
     if len(thr) > 4000:
@@ -121,7 +163,16 @@ def best_threshold_err(within: np.ndarray, between: np.ndarray) -> tuple[float, 
 def analyze_file(
     npz_path: Path, rttm_path: Path
 ) -> dict[str, object]:
-    """加载单个文件的 npz 与参考 RTTM，返回统计与可分性结果。"""
+    """加载单个文件的 npz 与参考 RTTM，返回统计与可分性结果。
+
+    Args:
+        npz_path: chunks.npz 路径。
+        rttm_path: 参考 RTTM 路径。
+
+    Returns:
+        统计与可分性结果字典（含归一化 embeddings、labels、within/between
+        相似度、d-prime、最优阈值错误率等）。
+    """
 
     data = np.load(npz_path, allow_pickle=False)
     segs, spks = load_rttm(rttm_path)
@@ -167,7 +218,13 @@ def analyze_file(
 
 
 def report_confusion(result: dict[str, object], out_dir: Path, log) -> None:
-    """输出单文件的参考说话人质心相似度矩阵、不可分对与热图。"""
+    """输出单文件的参考说话人质心相似度矩阵、不可分对与热图。
+
+    Args:
+        result: analyze_file 的返回。
+        out_dir: 热图输出目录（centroid_matrix_<uri>.png）。
+        log: 日志函数（print + 收集到 summary）。
+    """
 
     embeddings = result["embeddings"]  # type: ignore[assignment]
     labels = result["labels"]  # type: ignore[assignment]
@@ -250,6 +307,8 @@ def report_confusion(result: dict[str, object], out_dir: Path, log) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构造 CLI 参数解析器。"""
+
     parser = argparse.ArgumentParser(description="嵌入质量分析（chunks.npz + 参考 RTTM）")
     parser.add_argument("--input", required=True, help="chunks.npz 目录")
     parser.add_argument("--ref", required=True, help="参考 RTTM 目录（<uri>.rttm）")
@@ -264,6 +323,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """CLI 入口：逐文件分析并产出图表与 summary.txt。"""
+
     args = build_parser().parse_args()
     input_dir, ref_dir, out_dir = Path(args.input), Path(args.ref), Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)

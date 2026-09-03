@@ -29,7 +29,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SpeakerTurn:
-    """写入 RTTM 的说话人时间段（speaker 为内部 global id）。"""
+    """写入 RTTM 的说话人时间段（speaker 为内部 global id）。
+
+    Attributes:
+        start: 段起点（秒）。
+        end: 段终点（秒）。
+        speaker_id: 内部 global speaker id。
+    """
 
     start: float
     end: float
@@ -37,7 +43,18 @@ class SpeakerTurn:
 
 
 class AppendOnlyRTTMWriter:
-    """流式 RTTM 输出器。"""
+    """流式 RTTM 输出器（append-only，零重写）。
+
+    每个 speaker 维护一个未闭合的 open turn（驻留内存），帧判定后即时送入
+    拼接，仅在间隔超过 merge_gap 或 EOF 时闭合写出；写出的行即为最终。
+
+    Args:
+        output_path: 输出 RTTM 路径（构造时截断重建并写入头部注释行）。
+        uri: RTTM 行内的 file id。
+        min_segment_duration: 闭合时短于该时长的 turn 被丢弃（负值按 0 计）。
+        merge_gap: 同一 speaker 相邻片段间隔不超过该值时拼为同一 turn。
+        show_rttm: 写出每行的同时打印到 stdout。
+    """
 
     def __init__(
         self,
@@ -88,7 +105,13 @@ class AppendOnlyRTTMWriter:
         self._written_turns += 1
 
     def _feed_turn(self, speaker_id: int, start: float, end: float) -> None:
-        """把一段 [start, end) 送入 speaker 的 open-turn 管线（写出前拼接）。"""
+        """把一段 [start, end) 送入 speaker 的 open-turn 管线（写出前拼接）。
+
+        Args:
+            speaker_id: global speaker id。
+            start: 片段起点（秒）。
+            end: 片段终点（秒）。
+        """
 
         open_turn = self._open_turns.get(speaker_id)
         if open_turn is not None:
@@ -112,9 +135,20 @@ class AppendOnlyRTTMWriter:
         commit_end: float,
         local_to_global: dict[int, int],
     ) -> int:
-        """消费一个 chunk 的帧级结果（仅 [commit_start, commit_end) 提交区），返回消费的帧数。
+        """消费一个 chunk 的帧级结果（仅 [commit_start, commit_end) 提交区）。
 
         所有已分配 global id 的帧即时进入 open-turn 管线，无延迟缓冲。
+
+        Args:
+            seg_scores: 帧级分割得分矩阵（帧 x local speaker）。
+            frame_step: 帧步长（秒）。
+            chunk_start: 本 chunk 在整段音频中的起点（秒）。
+            commit_start: 提交区起点（秒）。
+            commit_end: 提交区终点（秒）。
+            local_to_global: local slot -> global speaker id 映射。
+
+        Returns:
+            消费的帧数。
         """
 
         if seg_scores.size == 0 or not local_to_global:
@@ -135,12 +169,18 @@ class AppendOnlyRTTMWriter:
         return emitted
 
     def close_inactive(self, commit_end: float) -> int:
-        """闭合已确认沉默的 open turn（chunk 末尾不再活跃者），返回闭合数。
+        """闭合已确认沉默的 open turn（chunk 末尾不再活跃者）。
 
         提交区无缝拼接：下一窗提交区起点即当前 commit_end，因此一旦
         `commit_end - turn.end > merge_gap`，该 turn 未来不可能再被延长，
         提前闭合与惰性闭合（下次开口回头闭合/EOF 闭合）产出完全相同，
         只是把写出提前，降低尾段输出延迟。
+
+        Args:
+            commit_end: 当前 chunk 提交区终点（秒）。
+
+        Returns:
+            本次闭合的 turn 数。
         """
 
         closed = 0

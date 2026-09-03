@@ -23,7 +23,19 @@ def resolve_hf_snapshot_path(
     cache_root: str,
     token: Optional[str] = None,
 ) -> str:
-    """确保 pyannote 模型已经缓存到本地，并返回缓存目录。"""
+    """确保 Hugging Face 模型已缓存到本地，并返回缓存目录。
+
+    缓存目录下存在任一权重标记文件（pytorch_model.bin / model.safetensors /
+    weights.ckpt）时直接复用，否则调用 snapshot_download 下载。
+
+    Args:
+        repo_id: Hugging Face 仓库 id。
+        cache_root: 本地缓存根目录。
+        token: Hugging Face 访问 token，可为 None。
+
+    Returns:
+        本地缓存目录路径。
+    """
 
     os.makedirs(cache_root, exist_ok=True)
     local_dir = os.path.join(cache_root, _sanitize_repo_id(repo_id))
@@ -48,7 +60,19 @@ def resolve_hf_snapshot_path(
 
 
 def resolve_hf_checkpoint_file(local_dir: str) -> str:
-    """在 pyannote snapshot 中寻找实际的权重文件。"""
+    """在缓存的 snapshot 目录中寻找实际的权重文件。
+
+    按 pytorch_model.bin → model.safetensors → weights.ckpt 的顺序查找。
+
+    Args:
+        local_dir: 本地缓存目录。
+
+    Returns:
+        权重文件路径。
+
+    Raises:
+        FileNotFoundError: 目录下没有任何受支持的权重文件。
+    """
 
     candidates = [
         os.path.join(local_dir, "pytorch_model.bin"),

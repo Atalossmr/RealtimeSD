@@ -22,7 +22,14 @@ DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "config.yaml"
 
 
 def validate_runtime_args(args: argparse.Namespace) -> None:
-    """校验运行实时脚本所必需的输入参数。"""
+    """校验运行实时脚本所必需的输入参数。
+
+    Args:
+        args: 合并 CLI 与 YAML 后的参数 Namespace。
+
+    Raises:
+        ValueError: wav 或 output_dir 缺失或为空字符串。
+    """
 
     missing: list[str] = []
     for field_name in ("wav", "output_dir"):
@@ -114,7 +121,12 @@ class ChunkPipelineConfig:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    """构建命令行参数解析器（仅运行时/模型/开关参数）。"""
+    """构建命令行参数解析器（仅运行时/模型/开关参数）。
+
+    Returns:
+        配置好全部参数的 ArgumentParser（已关闭前缀缩写，见
+        merge_args_with_config 的 argv 精确匹配约定）。
+    """
 
     parser = argparse.ArgumentParser(
         description="chunk 级局部识别 + 增量聚类的实时说话人分离脚本",
@@ -181,6 +193,18 @@ def merge_args_with_config(
 
     合并优先级：argparse 默认值 < YAML 配置 < 显式 CLI 参数。
     调参项不在 CLI 上，因此它们的生效值始终以 YAML 为准。
+
+    Args:
+        parser: build_arg_parser 构建的参数解析器。
+        args: argparse 已解析的参数。
+        argv: 原始命令行 token 列表，用于识别显式 CLI 参数；None 表示无。
+
+    Returns:
+        合并后的参数 Namespace，config 字段记录实际生效的配置路径。
+
+    Raises:
+        FileNotFoundError: 显式指定的配置文件不存在。
+        ValueError: YAML 中出现未知键。
     """
 
     return common_config.merge_args_with_config(
@@ -193,8 +217,20 @@ def merge_args_with_config(
 
 
 def _validate_and_normalize(config: ChunkPipelineConfig) -> ChunkPipelineConfig:
-    """数值校验 + hf_cache_dir 相对路径按仓库根解析（config_from_args 与
-    load_config_and_runtime 共用，规则只维护这一份）。"""
+    """数值校验 + hf_cache_dir 相对路径按仓库根解析。
+
+    config_from_args 与 load_config_and_runtime 共用，规则只维护这一份。
+
+    Args:
+        config: 待校验的配置实例。
+
+    Returns:
+        校验并规范化后的同一配置实例（原地修改 hf_cache_dir）。
+
+    Raises:
+        ValueError: chunk_duration / hop_duration / post_merge_* /
+            max_segment_duration 等数值约束不满足。
+    """
 
     if config.chunk_duration <= 0.0:
         raise ValueError("chunk_duration must be > 0")
@@ -221,6 +257,15 @@ def config_from_args(args: argparse.Namespace) -> ChunkPipelineConfig:
     """把合并后的参数转换为 `ChunkPipelineConfig`。
 
     字段值取自合并后的 args，缺失时落回 dataclass 字段默认值（唯一兜底来源）。
+
+    Args:
+        args: 合并后的参数 Namespace。
+
+    Returns:
+        校验并规范化后的 ChunkPipelineConfig。
+
+    Raises:
+        ValueError: 字段值类型转换失败或数值校验不通过。
     """
 
     return _validate_and_normalize(
@@ -243,6 +288,18 @@ def load_config_and_runtime(
     YAML < overrides 中非 None 值 < 字段默认值兜底（与 CLI 的
     "YAML < 显式 CLI"对应）。YAML 中的运行时键（RUNTIME_KEYS，当前仅
     model_path）不作为 config 字段，单独捕获返回，由调用方消费。
+
+    Args:
+        config_path: YAML 配置路径；None 时使用 DEFAULT_CONFIG_PATH。
+        overrides: 调用方显式覆盖值，值为 None 的键不参与覆盖。
+
+    Returns:
+        (config, extras) 二元组：config 为校验并规范化后的
+        ChunkPipelineConfig，extras 为 RUNTIME_KEYS 中实际生效的键值。
+
+    Raises:
+        FileNotFoundError: 配置文件不存在。
+        ValueError: YAML / overrides 中出现未知键或数值校验不通过。
     """
 
     path = str(config_path) if config_path is not None else str(DEFAULT_CONFIG_PATH)

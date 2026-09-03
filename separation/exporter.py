@@ -55,7 +55,16 @@ logger = logging.getLogger(__name__)
 
 
 class StreamingSegmentExporter:
-    """逐 commit 区导出各 speaker 的音频段（重叠区经 TIGER 分离）。"""
+    """逐 commit 区导出各 speaker 的音频段（重叠区经 TIGER 分离）。
+
+    Args:
+        config: 管线配置。
+        waveform: 整段波形 [1, T]，已重采样到 config.sample_rate 单声道。
+        embedder: 段级 speaker embedding 提取器（归属匹配用）。
+        uri: 音频标识。
+        output_dir: segments 输出根目录（默认 sink 落盘位置）。
+        on_segment: 段输出回调；为 None 时用默认的 WavSegmentSink。
+    """
 
     def __init__(
         self,
@@ -88,7 +97,15 @@ class StreamingSegmentExporter:
     def _commit_frames(
         self, chunk: ChunkArtifacts, local_to_global: dict[int, int]
     ) -> list[FrameActivity]:
-        """commit 区内逐帧的活跃 global speaker（与 writer 共用帧裁剪逻辑）。"""
+        """commit 区内逐帧的活跃 global speaker（与 writer 共用帧裁剪逻辑）。
+
+        Args:
+            chunk: 本 chunk 的产物。
+            local_to_global: local slot -> global speaker id 的分配。
+
+        Returns:
+            commit 区内逐帧的 (frame_start, frame_end, active_global_ids)。
+        """
 
         return list(
             iter_commit_frames(
@@ -114,9 +131,15 @@ class StreamingSegmentExporter:
     ) -> dict[int, list[SpeakerPiece]]:
         """按 speaker 归集帧片来源。
 
-        track_of: global_id -> 分离音轨来源（仅匹配成功的重叠 pair）；
-        重叠帧上无音轨的 speaker 用原始音频（串音兜底），
-        drop_overlap_for 中的 speaker 重叠帧直接丢弃（门控失败的落选方）。
+        Args:
+            frames: commit 区内逐帧的活跃记录。
+            overlap_frame_ids: 重叠帧在 frames 中的下标集合。
+            track_of: global_id -> 分离音轨来源（仅匹配成功的重叠 pair）。
+            drop_overlap_for: 重叠帧直接丢弃的 speaker 集合（门控失败的落选方）。
+
+        Returns:
+            global_id -> 帧片列表。重叠帧上无音轨的 speaker 用原始音频
+            （串音兜底），其余帧一律用原始波形切片。
         """
 
         pieces: dict[int, list[SpeakerPiece]] = {}
@@ -137,7 +160,12 @@ class StreamingSegmentExporter:
     def _fallback_all_mix(
         self, frames: list[FrameActivity], overlap_frame_ids: set[int]
     ) -> None:
-        """整窗回退：重叠帧不做分离，所有 speaker 一律用原始音频切片。"""
+        """整窗回退：重叠帧不做分离，所有 speaker 一律用原始音频切片。
+
+        Args:
+            frames: commit 区内逐帧的活跃记录。
+            overlap_frame_ids: 重叠帧在 frames 中的下标集合。
+        """
 
         self.assembler.feed_pieces(
             self._collect_pieces(frames, overlap_frame_ids, {}, set())
@@ -158,6 +186,11 @@ class StreamingSegmentExporter:
         甚至 EOF 才 flush，徒增 ASR 延迟。注意闭合必须发生在喂入本 chunk
         帧片之后（同 writer 先 consume_chunk 再 close_inactive 的顺序），
         否则会把本 chunk 仍活跃的段误判为沉默而提前截断。
+
+        Args:
+            chunk: 本 chunk 的产物。
+            local_to_global: local slot -> global speaker id 的分配；为空时
+                只做 close_inactive 兜底。
         """
 
         if not local_to_global:
@@ -181,7 +214,13 @@ class StreamingSegmentExporter:
         local_to_global: dict[int, int],
         frames: list[FrameActivity],
     ) -> None:
-        """单个 commit 区的重叠检测、分离与帧片归集（不含段闭合）。"""
+        """单个 commit 区的重叠检测、分离与帧片归集（不含段闭合）。
+
+        Args:
+            chunk: 本 chunk 的产物。
+            local_to_global: local slot -> global speaker id 的分配。
+            frames: commit 区内逐帧的活跃记录。
+        """
 
         overlap_frame_ids = {
             frame_idx

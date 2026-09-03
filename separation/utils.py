@@ -17,7 +17,18 @@ def slice_absolute(
     end: float,
     sample_rate: int,
 ) -> Optional[torch.Tensor]:
-    """从 source（零点对应绝对时刻 origin）裁出 [start, end)，越界截断。"""
+    """从 source（零点对应绝对时刻 origin）裁出 [start, end)，越界截断。
+
+    Args:
+        source: 源波形（[1, T]）。
+        origin: source 零点对应的绝对时刻（秒）。
+        start: 裁剪起点绝对时刻（秒）。
+        end: 裁剪终点绝对时刻（秒）。
+        sample_rate: 采样率。
+
+    Returns:
+        裁出的波形（[1, T]）；区间为空（越界截断后无样本）时返回 None。
+    """
 
     total = source.shape[1]
     start_sample = max(
@@ -32,6 +43,14 @@ def slice_absolute(
 
 
 def rms(waveform: torch.Tensor) -> float:
+    """计算波形的 RMS 能量（加 1e-12 避免全零时恰为 0）。
+
+    Args:
+        waveform: 波形张量。
+
+    Returns:
+        RMS 值；空张量返回 0.0。
+    """
     if waveform.numel() == 0:
         return 0.0
     return float(torch.sqrt(torch.mean(waveform.float() ** 2))) + 1e-12
@@ -43,6 +62,17 @@ def rms_over_regions(
     regions: list[tuple[float, float]],
     sample_rate: int,
 ) -> float:
+    """计算 source 在多个绝对时刻区间上的整体 RMS。
+
+    Args:
+        source: 源波形（[1, T]）。
+        origin: source 零点对应的绝对时刻（秒）。
+        regions: (start, end) 绝对时刻区间列表。
+        sample_rate: 采样率。
+
+    Returns:
+        各区间切片拼接后的 RMS；所有区间均为空时返回 0.0。
+    """
     pieces = [
         piece
         for start, end in regions

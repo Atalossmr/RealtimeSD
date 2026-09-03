@@ -1,4 +1,4 @@
-"""模型加载与推理相关模块。"""
+"""说话人嵌入（speaker embedding）模型的加载与分段推理。"""
 
 from __future__ import annotations
 
@@ -38,10 +38,28 @@ def load_embedding_model(
     embedding_size: int = 192,
     m_channels: int = 64,
 ) -> torch.nn.Module:
-    """加载 ERes2NetV2 说话人嵌入模型。
+    """加载 ERes2NetV2 说话人嵌入模型并载入 checkpoint。
 
-    当前实现保持与原脚本一致，只支持仓库内使用的 `eres2netv2`。
-    如果以后要扩展其他 speaker encoder，优先在这里做分支扩展。
+    当前只支持仓库内使用的 `eres2netv2`。优先以 weights_only=True 安全
+    反序列化，失败时回退 weights_only=False（仅对可信来源安全）；checkpoint
+    允许多余键（忽略并告警），但存在缺失键时报错而不是静默跑。
+
+    Args:
+        model_path: 本地 checkpoint 路径；为 None 时回退到 ModelScope 默认
+            仓库下载。
+        device: 模型加载与推理设备。
+        model_type: 模型类型，目前仅支持 "eres2netv2"。
+        feat_dim: 输入 FBank 特征维度。
+        embedding_size: 输出 embedding 维度。
+        m_channels: ERes2NetV2 的通道数配置。
+
+    Returns:
+        已切到 eval 模式并放到 device 上的嵌入模型。
+
+    Raises:
+        ValueError: model_type 不受支持。
+        FileNotFoundError: 显式指定的本地 checkpoint 不存在。
+        RuntimeError: checkpoint 与模型结构不匹配（存在缺失键）。
     """
 
     model_type = model_type.lower()
@@ -99,14 +117,24 @@ def load_embedding_model(
 
 
 def _is_valid_modelscope_model_id(model_id: str) -> bool:
-    """做一个轻量的 ModelScope model id 校验，避免引入 pipelines 侧重依赖。"""
+    """轻量校验 ModelScope model id 格式（`<namespace>/<name>`），避免引入重依赖。"""
 
     parts = [part for part in model_id.split("/") if part]
     return len(parts) == 2 and all(parts)
 
 
 def _modelscope_spec_for_model_type(model_type: str) -> dict[str, str]:
-    """返回当前 speaker encoder 对应的默认 ModelScope 仓库信息。"""
+    """返回当前 speaker encoder 对应的默认 ModelScope 仓库信息。
+
+    Args:
+        model_type: 模型类型。
+
+    Returns:
+        包含 model_id / revision / model_pt 的字典。
+
+    Raises:
+        ValueError: model_type 没有对应的 ModelScope 默认仓库。
+    """
 
     spec = MODELSCOPE_EMBEDDING_MODELS.get(model_type.lower())
     if spec is None:
@@ -119,8 +147,19 @@ def _modelscope_spec_for_model_type(model_type: str) -> dict[str, str]:
 def resolve_embedding_model_path(model_path: Optional[str], model_type: str) -> str:
     """解析 speaker encoder checkpoint 路径。
 
-    优先使用用户显式提供的本地路径；如果缺失，则回退到 ModelScope 默认仓库，
+    优先使用用户显式提供的本地路径；未提供时回退到 ModelScope 默认仓库，
     并把下载结果缓存在仓库内 `pretrained/modelscope` 下。
+
+    Args:
+        model_path: 本地 checkpoint 路径，可为 None。
+        model_type: 模型类型，用于确定 ModelScope 默认仓库。
+
+    Returns:
+        解析后的 checkpoint 文件路径。
+
+    Raises:
+        FileNotFoundError: 显式指定的本地 checkpoint 不存在。
+        ValueError: model_type 不受支持或默认 ModelScope model id 非法。
     """
 
     if model_path:
@@ -146,7 +185,15 @@ def resolve_embedding_model_path(model_path: Optional[str], model_type: str) -> 
 
 
 class NativeERes2NetV2SegmentEmbedder:
-    """原生 ERes2NetV2 embedding 提取器。"""
+    """原生 ERes2NetV2 分段 embedding 提取器。
+
+    Attributes:
+        model: 已加载的说话人嵌入模型。
+        feature_extractor: FBank 特征提取器。
+        sample_rate: 输入音频采样率。
+        normalize_embeddings: 是否对输出 embedding 做 L2 归一化。
+        device: 模型所在设备。
+    """
 
     def __init__(
         self,
@@ -155,9 +202,9 @@ class NativeERes2NetV2SegmentEmbedder:
         sample_rate: int,
         normalize_embeddings: bool = True,
     ):
-        """功能：初始化分段 embedding 提取器。
+        """初始化分段 embedding 提取器。
 
-        参数：
+        Args:
             embedding_model: 已加载的说话人嵌入模型。
             feature_extractor: 特征提取器（FBank）。
             sample_rate: 输入音频采样率。
@@ -170,7 +217,14 @@ class NativeERes2NetV2SegmentEmbedder:
         self.device = next(self.model.parameters()).device
 
     def embed_segment(self, waveform: torch.Tensor) -> np.ndarray:
-        """为单段语音提 embedding。"""
+        """为单段语音提 embedding。
+
+        Args:
+            waveform: 单通道语音波形张量。
+
+        Returns:
+            shape 为 (embedding_size,) 的 float32 embedding。
+        """
 
         with torch.inference_mode():
             feats = self.feature_extractor(waveform.cpu()).unsqueeze(0).to(self.device)
@@ -189,6 +243,12 @@ class NativeERes2NetV2SegmentEmbedder:
         一致，短段偏移最严重。
         未来修复方向：按长度分桶组批（bucket batching）减小填充量，或给
         TSTP 池化加长度掩码 / 长度加权统计。
+
+        Args:
+            waveforms: 候选段波形张量列表。
+
+        Returns:
+            与输入一一对应的 float32 embedding 列表；输入为空时返回空列表。
         """
 
         if not waveforms:

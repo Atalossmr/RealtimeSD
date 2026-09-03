@@ -46,7 +46,17 @@ def compute_merge_map(
 
     centroids 需已 L2 归一化；counts 为各簇样本计数，缺失按 0 计。
     计数 < min_count 的簇为 absorbed 候选，其余为可并入的 target；
-    无 target（全部簇都不达标）时不做任何合并。
+    无 target（全部簇都不达标）时不做任何合并。absorbed 候选并入质心
+    余弦相似度最高的 target，最高相似度仍低于 min_similarity 时保留原身份。
+
+    Args:
+        centroids: L2 归一化的簇质心（speaker id -> centroid）。
+        counts: 各簇样本计数。
+        min_count: 小样本阈值，计数低于该值的簇参与被并判定。
+        min_similarity: 允许并入的最低余弦相似度。
+
+    Returns:
+        合并映射（absorbed id -> survivor id）；无可合并对时为空 dict。
     """
 
     small = sorted(sid for sid in centroids if counts.get(sid, 0) < min_count)
@@ -90,7 +100,16 @@ def cluster_stats(
     observations: list,
     embeddings: np.ndarray,
 ) -> tuple[dict[int, np.ndarray], dict[int, float]]:
-    """按簇标签汇总质心（均值重归一化）与总发声时长。"""
+    """按簇标签汇总质心（均值重归一化）与总发声时长。
+
+    Args:
+        labels: 每条 observation 的簇标签。
+        observations: 与 labels 一一对应的观测（读取其 duration）。
+        embeddings: 与 labels 一一对应的 embedding。
+
+    Returns:
+        (centroids, durations)：簇标签 -> L2 归一化质心，簇标签 -> 总发声时长。
+    """
 
     unique_labels = sorted(int(label) for label in set(labels.tolist()))
     dim = int(embeddings.shape[1])
@@ -113,8 +132,18 @@ def cluster_stats(
 
 
 def _atomic_replace(tmp_path: str, dst_path: str) -> None:
-    """os.replace 的 Windows 容错封装：目标文件被杀毒软件/索引器等短暂占用时
-    会抛 PermissionError [WinError 5]，退避重试若干次再放弃。"""
+    """os.replace 的 Windows 容错封装（退避重试短暂占用）。
+
+    目标文件被杀毒软件/索引器等短暂占用时会抛 PermissionError
+    [WinError 5]，退避重试若干次再放弃。
+
+    Args:
+        tmp_path: 已写好的临时文件路径。
+        dst_path: 替换目标路径。
+
+    Raises:
+        PermissionError: 重试耗尽后目标仍被占用。
+    """
 
     attempts, delay = 10, 0.2
     for attempt in range(attempts):
@@ -143,8 +172,18 @@ def write_refined_rttm(
     判定）。RTTM 行内的 speaker 字段即 global id，被并 speaker 的行改挂
     幸存者的 global id。写出为临时文件后原子替换，避免读者看到半更新状态。
 
-    返回 {"merge_map": 小样本合并映射, "durations": 幸存 global id -> 总时长}，
-    供 RefinedRTTMWriter 写 speaker 状态（durations 仅用于展示，不参与判定）。
+    Args:
+        src_path: raw RTTM 路径（只读）。
+        dst_path: refined RTTM 输出路径（临时文件 + 原子替换）。
+        centroids: L2 归一化的簇质心（只保留在 raw 中实际出现的 speaker）。
+        merged_into: 流式 merge 链（absorbed id -> survivor id）。
+        counts: 各 speaker 的样本计数（小样本判定用）。
+        min_count: 小样本阈值；0 表示跳过小样本合并。
+        min_similarity: 允许并入的最低余弦相似度。
+
+    Returns:
+        {"merge_map": 小样本合并映射, "durations": 幸存 global id -> 总时长}，
+        供 RefinedRTTMWriter 写 speaker 状态（durations 仅用于展示，不参与判定）。
     """
 
     speaker_lines: list[list[str]] = []
@@ -213,6 +252,17 @@ def write_speaker_status(
       计数累积自动解除）、最终归属（merged_into，含流式 merge 链与
       post-merge 两级合并）；
     - merge_events：全部合并事件（kind 区分流式 merge 与 EOF post-merge）。
+
+    Args:
+        status_path: sidecar 输出路径（临时文件 + 原子替换）。
+        uri: 音频标识（写入 payload 的 uri 字段）。
+        durations: 幸存 global id -> 总发声时长（被并 speaker 的数值已并入
+            幸存者，自身置 null）。
+        counts: 各 speaker 的样本计数（uncertain 判定用）。
+        merged_into: 流式 merge 链。
+        merge_map: 小样本强制合并映射（post-merge）。
+        min_count: 小样本阈值（写入 payload，并用于 uncertain 判定）。
+        final: 是否为 EOF 最终刷新（写入 payload 的 final 字段）。
     """
 
     speakers = []
@@ -265,6 +315,14 @@ class RefinedRTTMWriter:
     （post_merge_min_count > 0 才生效，按 clusterer 的 counts 判定）。
     raw 文件全程不动。每次刷新同步更新 `{uri}.speakers.json` sidecar
     （speaker 时长 / 计数 / uncertain 标记 / 合并事件），供前端实时展示。
+
+    Args:
+        raw_path: raw 级 RTTM 路径（只读）。
+        refined_path: refined 级 RTTM 输出路径；sidecar 路径由其推导
+            （<stem>.refined.rttm -> <stem>.speakers.json）。
+        clusterer: 聚类后端，读取其 centroids / counts / merged_into。
+        min_count: 小样本阈值（仅 final 刷新时生效，中途刷新按 0 处理）。
+        min_similarity: 允许并入的最低余弦相似度。
     """
 
     def __init__(
@@ -284,7 +342,12 @@ class RefinedRTTMWriter:
         self.min_similarity = float(min_similarity)
 
     def refresh(self, final: bool = False) -> None:
-        """按当前合并状态重生成 refined RTTM 与 speaker 状态 sidecar。"""
+        """按当前合并状态重生成 refined RTTM 与 speaker 状态 sidecar。
+
+        Args:
+            final: True 时叠加小样本强制合并（post-merge），并在 sidecar 中
+                标记 final；流式中途刷新应传 False（计数尚未累积够会误并）。
+        """
 
         result = write_refined_rttm(
             self.raw_path,

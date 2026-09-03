@@ -18,6 +18,16 @@ class WavSegmentSink:
 
     output_dir 即 segments 根目录：wav 在 `{output_dir}/{uri}/`，
     manifest 为 `{output_dir}/{uri}.segments.jsonl`。
+
+    Args:
+        output_dir: segments 输出根目录。
+        uri: 音频标识（决定 wav 子目录与 manifest 文件名）。
+        sample_rate: 落盘 wav 的采样率。
+
+    Attributes:
+        sample_rate: 落盘 wav 的采样率。
+        segments_dir: wav 输出目录（构造时创建）。
+        manifest_path: manifest.jsonl 路径（追加写）。
     """
 
     def __init__(self, output_dir: str, uri: str, sample_rate: int):
@@ -34,6 +44,15 @@ class WavSegmentSink:
         end: float,
         waveform: torch.Tensor,
     ) -> None:
+        """保存一个音频段：wav 落盘并向 manifest 追加一行记录。
+
+        Args:
+            uri: 音频标识。
+            speaker_id: global speaker id。
+            start: 段起始绝对时刻（秒）。
+            end: 段结束绝对时刻（秒）。
+            waveform: 段音频（[1, T]，落盘前转到 CPU）。
+        """
         filename = f"spk{speaker_id}_{start:.3f}_{end:.3f}.wav"
         path = self.segments_dir / filename
         torchaudio.save(str(path), waveform.cpu(), self.sample_rate)

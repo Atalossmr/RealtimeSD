@@ -24,7 +24,13 @@ SpeakerPiece = tuple[float, float, AudioSource]
 
 @dataclass
 class _OpenSegment:
-    """单个 speaker 未闭合的音频段（驻留内存，闭合前可跨 commit 区续接）。"""
+    """单个 speaker 未闭合的音频段（驻留内存，闭合前可跨 commit 区续接）。
+
+    Attributes:
+        start: 段起始绝对时刻（秒）。
+        end: 段结束绝对时刻（秒）。
+        audios: 段内各次续接的音频块（[1, T]，按喂入顺序）。
+    """
 
     start: float
     end: float
@@ -32,7 +38,15 @@ class _OpenSegment:
 
 
 class SegmentAssembler:
-    """各 speaker 音频段的跨 commit 区拼接与闭合推出。"""
+    """各 speaker 音频段的跨 commit 区拼接与闭合推出。
+
+    Args:
+        config: 管线配置（segment_merge_gap / min_segment_duration /
+            max_segment_duration）。
+        sample_rate: 音频采样率。
+        uri: 音频标识（随段回调透传）。
+        on_segment: 段闭合推出时的回调。
+    """
 
     def __init__(
         self,
@@ -49,7 +63,11 @@ class SegmentAssembler:
         self._open_segments: dict[int, _OpenSegment] = {}
 
     def feed_pieces(self, pieces: dict[int, list[SpeakerPiece]]) -> None:
-        """把归集好的帧片逐 speaker 送入 open-segment 管线。"""
+        """把归集好的帧片逐 speaker 送入 open-segment 管线。
+
+        Args:
+            pieces: global speaker id -> 该 speaker 本 commit 区的帧片列表。
+        """
 
         for global_id, speaker_pieces in sorted(pieces.items()):
             self._feed_speaker_pieces(global_id, speaker_pieces)
@@ -63,6 +81,10 @@ class SegmentAssembler:
         segment_merge_gap 即断开（与 writer 逐帧喂入的合并判定等价，
         不会因窗级合并吞掉窗内较长的沉默）。音频只含活跃帧，run 内帧间
         的小于 merge_gap 的沉默不进入音频。
+
+        Args:
+            speaker_id: global speaker id。
+            pieces: 该 speaker 本 commit 区内的帧片列表（按时间有序）。
         """
 
         if not pieces:
@@ -92,7 +114,14 @@ class SegmentAssembler:
     def _feed_segment(
         self, speaker_id: int, start: float, end: float, audio: torch.Tensor
     ) -> None:
-        """把一段音频送入 speaker 的 open segment（闭合前持续拼接，跨窗生效）。"""
+        """把一段音频送入 speaker 的 open segment（闭合前持续拼接，跨窗生效）。
+
+        Args:
+            speaker_id: global speaker id。
+            start: 本段（run）起始绝对时刻（秒）。
+            end: 本段（run）结束绝对时刻（秒）。
+            audio: 本段音频（[1, T]）。
+        """
 
         open_seg = self._open_segments.get(speaker_id)
         if open_seg is not None:
@@ -120,7 +149,13 @@ class SegmentAssembler:
         )
 
     def _close_segment(self, speaker_id: int) -> None:
-        """闭合 speaker 的 open segment：拼接全部音频并推出。"""
+        """闭合 speaker 的 open segment：拼接全部音频并推出。
+
+        段总时长低于 min_segment_duration 时直接丢弃，不触发回调。
+
+        Args:
+            speaker_id: global speaker id；无 open segment 时为空操作。
+        """
 
         open_seg = self._open_segments.pop(speaker_id, None)
         if open_seg is None:
@@ -135,6 +170,9 @@ class SegmentAssembler:
 
         提交区无缝拼接：一旦 commit_end - seg.end > merge_gap，该段未来不可能
         再被延长，提前闭合以降低输出延迟。
+
+        Args:
+            commit_end: 本 chunk 提交区的结束绝对时刻（秒）。
         """
 
         for speaker_id, open_seg in list(self._open_segments.items()):

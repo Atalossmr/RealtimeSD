@@ -40,7 +40,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RunDirs:
-    """一次运行的全部路径约定（{output_root}/{test_name}/{run_name}）。"""
+    """一次运行的全部路径约定（{output_root}/{test_name}/{run_name}）。
+
+    Attributes:
+        basic_dir: {output_root}/{test_name} 目录。
+        exp_dir: 本次 run 的输出目录 {output_root}/{test_name}/{run_name}。
+        results_file: basic_dir 下按 run 追加的汇总记录。
+        logs_dir: exp_dir 下的日志目录。
+        done_file: diarization 完成哨兵。
+        ready_file: ASR 就绪哨兵。
+    """
 
     basic_dir: Path
     exp_dir: Path
@@ -53,7 +62,16 @@ class RunDirs:
 def resolve_run_dirs(
     output_root: str | Path, test_name: str, run_name: str
 ) -> RunDirs:
-    """纯路径计算（无副作用）；目录清理/创建由 process 负责。"""
+    """纯路径计算（无副作用）；目录清理/创建由 process 负责。
+
+    Args:
+        output_root: 输出根目录。
+        test_name: 测试/批次名。
+        run_name: 本次运行名。
+
+    Returns:
+        本次运行的全部路径约定。
+    """
 
     basic_dir = Path(output_root) / test_name
     exp_dir = basic_dir / run_name
@@ -68,7 +86,11 @@ def resolve_run_dirs(
 
 
 def _prepare_run_dirs(dirs: RunDirs) -> None:
-    """只清理本次 run 自己的输出目录，同 output_root 下的其他历史 run 保留。"""
+    """只清理本次 run 自己的输出目录，同 output_root 下的其他历史 run 保留。
+
+    Args:
+        dirs: 本次运行的路径约定。
+    """
 
     shutil.rmtree(dirs.exp_dir, ignore_errors=True)
     dirs.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +104,11 @@ def _append_run_header(
 ) -> None:
     """向 results.txt 追加一个 run 的记录头（按 run 追加，历史汇总保留）。
 
-    fields 中值为 None 的键不写出。
+    Args:
+        results_file: 汇总记录文件。
+        run_name: 本次运行名。
+        title: 记录头标题。
+        fields: 写出的键值字段；值为 None 的键不写出。
     """
 
     with open(results_file, "a", encoding="utf-8") as file_obj:
@@ -96,7 +122,18 @@ def _append_run_header(
 
 @dataclass
 class ProcessResult:
-    """`process` 的运行结果。相对路径字段均相对于 `exp_dir`。"""
+    """`process` 的运行结果。相对路径字段均相对于 `exp_dir`。
+
+    Attributes:
+        returncode: 退出码（0 成功；1 有文件失败或 ASR 异常；130 被 Ctrl+C 中断）。
+        exp_dir: 本次 run 的输出目录。
+        results_file: 汇总记录文件。
+        logs_dir: 日志目录。
+        failed: 处理失败的音频路径。
+        raw_rttms: 成功文件的 raw RTTM 路径。
+        rttm_count: refined RTTM 文件数。
+        transcript_count: transcript 文件数（stage<3 时为 0）。
+    """
 
     returncode: int
     exp_dir: Path
@@ -128,26 +165,45 @@ def process(
     """完整管线：stage1 diarization → +stage2 separation → +stage3 ASR。
 
     `stage` 为累积式：1=只 diarization（RTTM）；2=+separation 分段音频；
-    3=+ASR 转写（follow 子进程，先就绪再开跑）。
-
-    `audio` 为单个路径或路径列表。批量时全部音频的产物写入同一输出目录
-    （uri 区分文件名），模型只加载一次，单文件失败记入 `failed` 并继续，
-    有失败时 returncode=1。
-
-    config 缺省时经 `load_config_and_runtime(config_path, overrides)` 无
-    argparse 构建（config_path 缺省为仓库自带 config/config.yaml）；CLI
-    入口应自行合并后传入 config（config_path 此时仅用于运行记录）。
-
-    `on_asr_ready` 在 ASR 就绪后、管线启动前调用（stage<3 时同样在管线
-    启动前调用一次），供调用方启动 viewer 等伴随服务；挂起等待与 viewer
-    收尾由调用方负责。
+    3=+ASR 转写（follow 子进程，先就绪再开跑）。批量时全部音频的产物
+    写入同一输出目录（uri 区分文件名），模型只加载一次，单文件失败记入
+    `failed` 并继续，有失败时 returncode=1。
 
     ASR 协调：就绪等待无超时上限（模型加载耗时不可预估，早退会立即
     报错，卡住时由用户 Ctrl+C 中断）；收尾排空前有兜底上限（默认
     300s，中断路径 30s），超时按 terminate→kill 升级并打 WARNING，
-    见 follow.finish_follow_process。
+    见 follow.finish_follow_process。管线异常不跳过收尾：记录后照常
+    放行 ASR 收尾落盘；Ctrl+C 置 rc=130。
 
-    管线异常不跳过收尾：记录后照常放行 ASR 收尾落盘；Ctrl+C 置 rc=130。
+    Args:
+        audio: 单个音频路径或路径列表。
+        stage: 累积式运行阶段（1/2/3）。
+        config: 管线配置；缺省时经 `load_config_and_runtime(config_path,
+            overrides)` 无 argparse 构建（config_path 缺省为仓库自带
+            config/config.yaml）。CLI 入口应自行合并后传入（此时
+            config_path 仅用于运行记录）。
+        config_path: YAML 配置路径；仅 config 缺省时用于加载，否则只作记录。
+        overrides: 加载配置时的覆盖项。
+        output_root: 输出根目录。
+        run_name: 本次运行名（输出目录为 {output_root}/{test_name}/{run_name}）。
+        test_name: 测试/批次名。
+        model_path: 显式模型路径；优先级高于 YAML 的 model_path 运行时键。
+        asr_config: ASR 转写的 YAML 配置（仅 stage>=3 生效）。
+        verbose: 提升日志级别并透传给 ASR follow 子进程。
+        on_asr_ready: ASR 就绪后、管线启动前的回调（stage<3 时同样在管线
+            启动前调用一次），供调用方启动 viewer 等伴随服务；挂起等待与
+            viewer 收尾由调用方负责。
+        header_fields: results.txt 记录头字段；缺省为内置字段集，值为
+            None 的键不写出。
+        header_title: results.txt 记录头标题。
+
+    Returns:
+        运行结果（退出码、输出目录、失败列表、产物计数等）。
+
+    Raises:
+        ValueError: stage 非 1/2/3，或 audio 为空列表。
+        SystemExit: stage>=3 且配置不满足 ASR follow 前置要求
+            （见 follow.validate_follow_requirements）。
     """
 
     if stage not in (1, 2, 3):

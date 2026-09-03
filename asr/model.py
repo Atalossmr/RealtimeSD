@@ -28,7 +28,16 @@ logger = logging.getLogger(__name__)
 
 
 def _is_complete_model_dir(path: Path) -> bool:
-    """模型目录完整性检查：权重 + 配置齐全才算命中（防止半成品缓存被当作可用）。"""
+    """模型目录完整性检查：权重 + 配置齐全才算命中。
+
+    防止半成品缓存被当作可用。
+
+    Args:
+        path: 候选模型目录。
+
+    Returns:
+        model.pt 存在且 config.yaml 或 configuration.json 存在时为 True。
+    """
 
     return (path / "model.pt").is_file() and (
         (path / "config.yaml").is_file() or (path / "configuration.json").is_file()
@@ -36,7 +45,14 @@ def _is_complete_model_dir(path: Path) -> bool:
 
 
 def _resolve_model_path(model: str) -> str:
-    """把模型标识解析为本地路径：本地目录 > 仓库缓存 > ModelScope 下载。"""
+    """把模型标识解析为本地路径：本地目录 > 仓库缓存 > ModelScope 下载。
+
+    Args:
+        model: 本地模型目录路径或 ModelScope 模型 id。
+
+    Returns:
+        可用的本地模型目录路径。
+    """
 
     if Path(model).is_dir():
         return model
@@ -76,7 +92,17 @@ class FunASRNanoASR:
         self._tokenizer = self._kwargs["tokenizer"]
 
     def count_tokens(self, text: str) -> int:
-        """prev_text 预算计数用的 token 数。"""
+        """prev_text 预算计数用的 token 数。
+
+        模型未加载前退化为按字符数粗略估计（中文约 1 字 1 token），仅用于
+        兜底。
+
+        Args:
+            text: 待计数文本。
+
+        Returns:
+            token 数；tokenizer 未就绪时为字符数。
+        """
 
         if self._tokenizer is None:
             # 模型未加载前的粗略估计（中文约 1 字 1 token），仅用于兜底。
@@ -84,7 +110,16 @@ class FunASRNanoASR:
         return len(self._tokenizer.encode(text))
 
     def tail_text(self, text: str, max_tokens: int) -> str:
-        """取文本尾部，token 数不超过 max_tokens（长段内续写上下文用）。"""
+        """取文本尾部，token 数不超过 max_tokens（长段内续写上下文用）。
+
+        Args:
+            text: 已累计文本。
+            max_tokens: token 预算；<= 0 或 text 为空时返回空串。
+
+        Returns:
+            尾部文本；整体不超预算时原样返回。tokenizer 未就绪时按字符数
+            截尾兜底。
+        """
 
         if max_tokens <= 0 or not text:
             return ""
@@ -97,7 +132,16 @@ class FunASRNanoASR:
 
     @staticmethod
     def _strip_prefix(text: str, prev_text: str) -> str:
-        """剥离返回值中的 prev_text 前缀（模型把 prev_text 逐字拼回输出）。"""
+        """剥离返回值中的 prev_text 前缀（模型把 prev_text 逐字拼回输出）。
+
+        Args:
+            text: 模型输出文本。
+            prev_text: 推理时传入的 prev_text。
+
+        Returns:
+            剥离前缀后的新文本；输出未以 prev_text 开头时告警并保留完整
+            输出。
+        """
 
         if prev_text and text.startswith(prev_text):
             return text[len(prev_text) :]
@@ -115,6 +159,13 @@ class FunASRNanoASR:
 
         prev_text 必须是本段音频前缀的转写（长段窗切续写场景）；跨段上下文
         语义不成立（模型对齐失败会判转写完成而提前 EOS），不要那样用。
+
+        Args:
+            waveform: 音频张量 [1, T]，采样率须与 config.sample_rate 一致。
+            prev_text: 本段音频前缀的转写；空串表示无上下文（该键不传给模型）。
+
+        Returns:
+            新增文本（已剥离 prev_text 前缀并 strip）。
         """
 
         if self._model is None:
