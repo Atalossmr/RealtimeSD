@@ -88,6 +88,7 @@
 | `separation_model` | `JusperLee/TIGER-speech` | TIGER 分离模型（HF，固定 2 路输出、16kHz），缓存到 `hf_cache_dir` |
 | `separation_energy_ratio` | `0.05` | 能量门控：分离音轨在重叠帧区间的 RMS / 混合音频同区间 RMS，低于判为伪源（OSD 疑似误报）。仅一路过门控时该路匹配归属、落选 speaker 的重叠帧不输出；两路都不过门控则整窗回退原始音频 |
 | `separation_min_match_similarity` | `0.10` | 2x2 匹配结果的最小余弦相似度，低于判分离质量不可靠，回退原始音频。 |
+| `max_segment_duration` | `20.0` | 单个音频段的最长时长（秒）：open segment 达到该值即强制闭合推出并以本 run 另开新段续接（切点在 run 边界、人为切在语音中间，帧数据不丢不重）。避免连续讲话时段无界增长，为内存驻留与 ASR 输出延迟提供上界；不宜低于 `hop_duration` |
 
 ### RTTM 输出
 

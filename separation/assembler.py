@@ -3,7 +3,8 @@
 每个 speaker 维护一个未闭合的 open segment（驻留内存，闭合前可跨 commit 区
 续接）：帧片按 segment_merge_gap 拆成连续 run 喂入，相邻 run 间隔不超过
 merge_gap 时续接，超过或 EOF 时闭合推出（min_segment_duration 在闭合时对
-总时长判定）。
+总时长判定）；段时长达到 max_segment_duration 时强制闭合并另开新段续接，
+为内存驻留与 ASR 输出延迟提供上界。
 """
 
 from __future__ import annotations
@@ -98,7 +99,18 @@ class SegmentAssembler:
             forward_gap = start - open_seg.end
             # 间隔不超过 merge_gap 视为同一段，直接续接（与 writer 合并语义一致）。
             if forward_gap <= self.config.segment_merge_gap:
-                open_seg.end = max(open_seg.end, end)
+                new_end = max(open_seg.end, end)
+                # 段时长达到上限：先闭合当前段再以本 run 另开新段续接，避免
+                # 连续讲话时 open segment 无界增长（内存驻留与 ASR 输出延迟
+                # 失去上界）。切点落在 run 边界、人为切在语音中间，不依赖
+                # 对端沉默；闭合/新开复用既有路径，帧数据不丢不重。
+                if new_end - open_seg.start >= self.config.max_segment_duration:
+                    self._close_segment(speaker_id)
+                    self._open_segments[speaker_id] = _OpenSegment(
+                        start=float(start), end=float(end), audios=[audio]
+                    )
+                    return
+                open_seg.end = new_end
                 open_seg.audios.append(audio)
                 return
         # 间隔过大：先闭合旧段再开新段。

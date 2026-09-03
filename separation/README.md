@@ -22,7 +22,10 @@ local->global 分配后，把每个 commit 区的音频按 global speaker 拆成
      （宁可串音也不要坏轨/空轨进 ASR）。
 5. **段输出**：帧片经 open-segment 管线跨 commit 区拼接与闭合
    （assembler.py，与 RTTM writer 的 open-turn 同构），由 SegmentCallback
-   推出；默认 sink 落盘 wav + manifest（sink.py）。
+   推出；默认 sink 落盘 wav + manifest（sink.py）。段时长达到
+   `max_segment_duration` 时强制闭合并以本 run 另开新段续接（切点在
+   run 边界、人为切在语音中间，帧数据不丢不重），为内存驻留与 ASR
+   输出延迟提供上界。
 
 ## 模块分工
 

@@ -99,6 +99,9 @@ class ChunkPipelineConfig:
     separation_energy_ratio: float = 0.05
     # 2x2 匹配的最小余弦相似度，低于则回退原始音频（仅防分离崩溃，不宜调高）。
     separation_min_match_similarity: float = 0.10
+    # 单个音频段的最长时长（秒）：达到即强制闭合并另开新段续接，
+    # 避免连续讲话时 open segment 无界增长（内存与输出延迟失去上界）。
+    max_segment_duration: float = 20.0
 
     # ---- RTTM 输出 ----
     min_segment_duration: float = 0.30
@@ -201,6 +204,8 @@ def _validate_and_normalize(config: ChunkPipelineConfig) -> ChunkPipelineConfig:
         raise ValueError("post_merge_min_similarity must be >= 0")
     if config.hop_duration <= 0.0 or config.hop_duration > config.chunk_duration:
         raise ValueError("hop_duration must be in (0, chunk_duration]")
+    if config.max_segment_duration <= 0.0:
+        raise ValueError("max_segment_duration must be > 0")
 
     if config.hf_cache_dir:
         # YAML 中的相对路径（如 ./pretrained/huggingface）按仓库根目录解析，
