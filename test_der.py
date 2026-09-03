@@ -39,7 +39,7 @@ import pipeline
 from common.config import config_from_args, merge_args_with_config
 from common.utils import collect_audio_paths
 from pipeline import run_der_evaluation
-from pipeline.cli import add_common_args, env_flag
+from pipeline.cli import add_common_args, check_input_paths, env_flag
 
 _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
 
@@ -108,8 +108,7 @@ def main() -> int:
     args = parser.parse_args()
 
     audio = Path(args.audio)
-    if not audio.exists():
-        raise SystemExit(f"ERROR: 音频输入不存在: {audio}")
+    check_input_paths(audio, Path(args.config))
     audio_paths = collect_audio_paths(str(audio))
     if not audio_paths:
         raise SystemExit(f"ERROR: 未收集到音频文件: {audio}")

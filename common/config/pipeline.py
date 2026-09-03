@@ -77,13 +77,13 @@ class ChunkPipelineConfig:
     # ---- cluster 阶段：streaming 后端（全局 speaker 匹配与 centroid 维护） ----
     max_speakers: int = 50
     new_speaker_threshold: float = 0.50
-    global_match_threshold: float = 0.55
+    global_match_threshold: float = 0.50
     min_segment_duration_for_new_speaker: float = 1.00
     min_segment_duration_for_centroid_update: float = 1.50
-    merge_threshold: float = 0.70
+    merge_threshold: float = 0.90
 
     # ---- cluster 阶段：ahc 后端（离线层次聚类） ----
-    ahc_similarity_threshold: float = 0.50
+    ahc_similarity_threshold: float = 0.40
     ahc_linkage: str = "average"
 
     # ---- cluster 阶段：后处理 ----
