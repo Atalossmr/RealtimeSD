@@ -11,12 +11,14 @@
 零第三方依赖（纯标准库服务端 + 原生 JS 前端）。
 
 **实时模式**：与管线同时启动时（`run.py` 默认行为），产物逐 chunk/逐段落盘，
-页面每 2s 轮询增量刷新——时间线随管线运行逐段生长，顶栏 `● LIVE` 亮起表示
-仍在运行；管线结束（`.diarization_done` 哨兵出现，stage 1/2/3 均落）后 LIVE
-熄灭，结果为最终完整版。运行中能力位会随产物出现自动升档（rttm → +分离段
-→ +转写），无需手动刷新。管线跑完后 `run.py` 不立即退出：打印"音频已处理完成"
-并挂起等待，viewer 保持可访问；用户 Ctrl+C 后脚本才退出并关闭 viewer。之后想
-回看结果，按下方命令手动重启即可。
+服务端监听线程（0.5s 节拍，只对已知产物路径做 mtime 比对）发现变化即经 SSE
+推送，页面收到事件即增量刷新（整体延迟 ~1s）——时间线随管线运行逐段生长，
+顶栏 `● LIVE` 亮起表示仍在运行；管线结束（`.diarization_done` 哨兵出现，
+stage 1/2/3 均落）后 LIVE 熄灭，结果为最终完整版。运行中能力位会随产物出现
+自动升档（rttm → +分离段 → +转写），无需手动刷新。SSE 不可用（旧浏览器/
+直接 file:// 打开）时前端自动降级为 2s 轮询。管线跑完后 `run.py` 不立即退出：
+打印"音频已处理完成"并挂起等待，viewer 保持可访问；用户 Ctrl+C 后脚本才退出
+并关闭 viewer。之后想回看结果，按下方命令手动重启即可。
 
 ## 服务器模式（推荐）
 
@@ -51,7 +53,7 @@ viewer 只读文件、不写；与管线/ASR 的交互全部经以下产物：
 | `segments/{uri}.segments.jsonl` | separation（`separation.sink`） | 每行 `{"uri","speaker_id","start","end","path"}`，append-only；wav 在同名子目录 |
 | `transcripts/{uri}.transcript.jsonl` | ASR（`asr.app`） | 每行 `{"uri","speaker_id","start","end","text"}`，按 start 排序、整体重写；`speaker_id` 为合并前的 global id |
 | `{uri}.wav` | 原始音频 | 在 `--audio_root` 下按文件名（不含扩展名）= uri 递归匹配 |
-| `.diarization_done` | pipeline（`api.process`） | 哨兵：不存在 = 管线仍在运行（LIVE，持续轮询）；stage 1/2/3 结束均落 |
+| `.diarization_done` | pipeline（`api.process`） | 哨兵：不存在 = 管线仍在运行（LIVE，页面持续跟随更新）；stage 1/2/3 结束均落 |
 
 路径前缀为新布局（`rttm/`、`transcripts/`、`segments/` 子目录）；viewer 扫描
 与索引均为递归匹配，旧平铺布局的 exp 目录同样兼容。
@@ -76,6 +78,11 @@ viewer 只读文件、不写；与管线/ASR 的交互全部经以下产物：
 
 HTTP 端点（服务器模式）：
 
+- `GET /api/events`：SSE 事件流。后台监听线程对已知产物路径做 mtime/size
+  签名比对（0.5s 一拍），产物落盘/原子重写推送
+  `{"type":"artifact","uri":...,"kind":"rttm|segments|transcript|speakers"}`，
+  会话集合/能力位/live/音频匹配变化推送 `{"type":"sessions"}`；事件只描述
+  "什么变了"，数据仍走下列 JSON 端点拉取。15s 心跳保活，慢客户端自动摘除；
 - `GET /api/sessions`：会话列表（`uri` / `audio_url` / `live` / 能力位
   `has_rttm` `has_segments` `has_transcript` 及各产物 URL），目录重扫带节流
   （最小间隔 3s，间隔内复用上次结果；未命中 uri 触发的重扫 10s 内至多一次）；
@@ -90,14 +97,15 @@ HTTP 端点（服务器模式）：
 - `POST /api/shutdown`：停止服务器（响应送达后延时触发 shutdown；run.py
   的等待循环检测到 server 退出后随之收尾）。
 
-前端每 2s 轮询 sessions + 当前数据源 + speakers：段结构数据源按能力位选择
-（segments manifest > refined RTTM，始终跟随 diarization 节奏），transcript
-不作为段结构源——它是文本叠加层，按键 `spk{id}_{start}` 贴到段上、独立轮询，
-转写出一段补一段（无 manifest 的会话才兜底用 transcript 当段结构源）；
-能力位升档（rttm → segments）时保留页面状态增量叠加，不整页重载；
-transcript 兜底源按"旧段是新段前缀"增量合并，RTTM/manifest 源（会被 merge
-重写历史行）用 JSON 串比对、变化即整体重算；speakers.json 同理整体重算
-（合并映射、uncertain、重叠标记）。
+前端更新通道以 SSE 事件为主（`EventSource` 自带断线重连）、2s 轮询为降级：
+`sessions` 事件 → 重拉会话列表并刷新当前会话；`artifact` 事件 → 按 kind 只拉
+变化的产物。段结构数据源按能力位选择（segments manifest > refined RTTM，始终
+跟随 diarization 节奏），transcript 不作为段结构源——它是文本叠加层，按键
+`spk{id}_{start}` 贴到段上、随 artifact 事件独立刷新，转写出一段补一段（无
+manifest 的会话才兜底用 transcript 当段结构源）；能力位升档（rttm → segments）
+时保留页面状态增量叠加，不整页重载；transcript 兜底源按"旧段是新段前缀"增量
+合并，RTTM/manifest 源（会被 merge 重写历史行）用 JSON 串比对、变化即整体重算；
+speakers.json 同理整体重算（合并映射、uncertain、重叠标记）。
 
 ## 静态模式（无服务器）
 

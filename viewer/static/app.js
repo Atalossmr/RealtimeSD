@@ -141,7 +141,7 @@ segPlayer.onended = () =>
   document.querySelectorAll(".segplay.playing")
     .forEach(el => el.classList.remove("playing"));
 
-// ---------- 数据加载（服务器模式：轮询增量刷新，跟随管线实时更新） ----------
+// ---------- 数据加载（服务器模式：SSE 事件驱动为主，轮询降级） ----------
 const POLL_INTERVAL = 2000;
 const liveBadge = document.getElementById("liveBadge");
 
@@ -196,8 +196,7 @@ async function loadServerSessions() {
     } else {
       statusEl.textContent = "等待管线产出…";
     }
-    setTimeout(pollUpdate, POLL_INTERVAL);
-    return true;
+    return true; // 增量更新通道（SSE/轮询）由 init 决定
   } catch { return false; } // file:// 打开时 fetch 必失败 → 静态模式
 }
 
@@ -249,56 +248,106 @@ async function fetchSourceSegments(uri, source) {
   return list ? { raw: JSON.stringify(list), segments: list } : null;
 }
 
-async function pollUpdate() {
+// 拉取会话列表并刷新当前会话（SSE sessions 事件与轮询共用）
+async function refreshSessions() {
   try {
     const resp = await fetch("/api/sessions");
-    if (resp.ok) {
-      const sessions = await resp.json();
-      updateSessionSelect(sessions);
-      const opt = currentOption();
-      if (opt) {
-        // 音频可能晚于产物被匹配到，出现后补挂
-        if (opt.dataset.audioUrl && !player.getAttribute("src")) {
-          player.src = opt.dataset.audioUrl;
-        }
-        // 能力位升档（rttm → segments）时在原状态上叠加新内容，
-        // 不做整页重载（保留说话人可见性、时间线视口、滚动位置与播放状态）
-        if (wantedSource(opt) !== state.source) {
-          await upgradeSession(opt);
-        } else {
-          const data = await fetchSourceSegments(opt.value, state.source);
-          if (data && data.raw !== state.lastRaw) {
-            state.lastRaw = data.raw;
-            // transcript 源（无 manifest 的兜底）沿用前缀增量追加；
-            // rttm/segments 源会被 merge 事件或新段重写/追加，统一整体重渲染
-            if (state.source === "transcript" &&
-                data.segments.length !== state.segments.length) {
-              mergeSegments(data.segments);
-            } else if (state.source !== "transcript") {
-              replaceSegments(data.segments);
-            }
-          }
-          if (state.hasSegments) {
-            // manifest append-only：段数变了才重建映射并重渲染（补 ▶ 按钮）
-            const list = state.source === "segments" ? null :
-              await fetchJSON(`/api/segments/${encodeURIComponent(opt.value)}`);
-            if (list && list.length !== state.segFiles.size) {
-              buildSegFiles(list);
-              renderTranscript();
-            }
-          }
-        }
-        // transcript 文本叠加层：独立轮询，转写出一段就补一段文本，
-        // 段结构始终跟随 manifest/RTTM（diarization 节奏）
-        if (opt.dataset.transcript === "1" && state.source !== "transcript") {
-          await pollTranscriptOverlay(opt.value);
-        }
-        // 合并事件/uncertain 变化不改变段数，sidecar 每轮独立轮询
-        await fetchSpeakersInfo(opt.value);
-        setLiveBadge(opt.dataset.live === "1");
+    if (!resp.ok) return;
+    updateSessionSelect(await resp.json());
+    const opt = currentOption();
+    if (opt) await refreshCurrentSession(opt);
+  } catch { /* 服务器暂时不可达，下轮重试 */ }
+}
+
+// 拉取当前段结构源，有变化才更新（SSE artifact 事件与轮询共用）
+async function refreshSource(opt) {
+  const data = await fetchSourceSegments(opt.value, state.source);
+  if (data && data.raw !== state.lastRaw) {
+    state.lastRaw = data.raw;
+    // transcript 源（无 manifest 的兜底）沿用前缀增量追加；
+    // rttm/segments 源会被 merge 事件或新段重写/追加，统一整体重渲染
+    if (state.source === "transcript" &&
+        data.segments.length !== state.segments.length) {
+      mergeSegments(data.segments);
+    } else if (state.source !== "transcript") {
+      replaceSegments(data.segments);
+    }
+  }
+}
+
+// 当前会话的整体刷新：音频补挂、能力位升档、段结构源、文本叠加层、
+// speakers sidecar、live 标记（事件与轮询共用的完整路径）
+async function refreshCurrentSession(opt) {
+  // 音频可能晚于产物被匹配到，出现后补挂
+  if (opt.dataset.audioUrl && !player.getAttribute("src")) {
+    player.src = opt.dataset.audioUrl;
+  }
+  // 能力位升档（rttm → segments）时在原状态上叠加新内容，
+  // 不做整页重载（保留说话人可见性、时间线视口、滚动位置与播放状态）
+  if (wantedSource(opt) !== state.source) {
+    await upgradeSession(opt);
+  } else {
+    await refreshSource(opt);
+    if (state.hasSegments) {
+      // manifest append-only：段数变了才重建映射并重渲染（补 ▶ 按钮）
+      const list = state.source === "segments" ? null :
+        await fetchJSON(`/api/segments/${encodeURIComponent(opt.value)}`);
+      if (list && list.length !== state.segFiles.size) {
+        buildSegFiles(list);
+        renderTranscript();
       }
     }
-  } catch { /* 服务器暂时不可达，下轮重试 */ }
+  }
+  // transcript 文本叠加层：转写出一段就补一段文本，
+  // 段结构始终跟随 manifest/RTTM（diarization 节奏）
+  if (opt.dataset.transcript === "1" && state.source !== "transcript") {
+    await pollTranscriptOverlay(opt.value);
+  }
+  await fetchSpeakersInfo(opt.value);
+  setLiveBadge(opt.dataset.live === "1");
+}
+
+// SSE artifact 事件：按 kind 只拉变化的产物（其余逻辑经 raw 比对自然去重）
+async function refreshArtifact(uri, kind) {
+  const opt = currentOption();
+  if (!opt || opt.value !== uri) return; // 只跟随当前会话的产物
+  if (kind === "speakers") {
+    await fetchSpeakersInfo(uri);
+  } else if (kind === "transcript" && state.source !== "transcript") {
+    await pollTranscriptOverlay(uri);
+  } else {
+    // rttm / segments（及 transcript 兜底源）：走完整会话级刷新，
+    // 兼顾能力位升档与 merge 重写（内部经 raw 比对，无变化即无操作）
+    await refreshCurrentSession(opt);
+  }
+}
+
+// SSE 通道：产物变化由服务端推送，EventSource 自带断线重连；
+// 从未连接成功（旧服务端无端点/不支持 EventSource）才降级为轮询
+function startEventStream() {
+  if (typeof EventSource === "undefined") return false;
+  let opened = false;
+  const es = new EventSource("/api/events");
+  es.onopen = () => { opened = true; };
+  es.onmessage = event => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (msg.type === "sessions") refreshSessions();
+    else if (msg.type === "artifact") refreshArtifact(msg.uri, msg.kind);
+  };
+  es.onerror = () => {
+    if (!opened) {
+      es.close();
+      setTimeout(pollUpdate, POLL_INTERVAL); // 降级：2s 轮询
+    }
+    // 连上过：依赖 EventSource 自动重连，不介入
+  };
+  return true;
+}
+
+// 降级通道：2s 轮询（SSE 不可用时的兜底，行为与旧版一致）
+async function pollUpdate() {
+  await refreshSessions();
   setTimeout(pollUpdate, POLL_INTERVAL);
 }
 
@@ -811,6 +860,8 @@ function tick() {
   const ok = await loadServerSessions();
   if (!ok) {
     statusEl.textContent = "静态模式：请手动选择音频与 transcript.jsonl / refined.rttm 文件";
+  } else if (!startEventStream()) {
+    setTimeout(pollUpdate, POLL_INTERVAL); // 浏览器不支持 EventSource：轮询兜底
   }
   tick();
 })();

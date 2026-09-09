@@ -11,6 +11,12 @@
 `{uri}.wav`（递归）匹配原始整段音频；为前端页面提供会话列表、RTTM/转写/
 分段清单 JSON 和音频流（支持 HTTP Range，长音频可 seek）。
 
+实时推送：`GET /api/events` 为 SSE 事件流——后台监听线程对已知产物路径
+做 mtime/size 签名比对（0.5s 一拍，无 rglob），产物落盘/原子重写即推送
+{"type":"artifact",uri,kind}，会话列表/能力位/live 变化推送
+{"type":"sessions"}；前端收到事件后按需拉取对应 JSON 端点（SSE 只传
+"什么变了"，不传数据本身）。
+
 用法：
 
     python3 viewer/server.py --exp_root exp --audio_root datasets --port 8000
@@ -22,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import queue
 import re
 import threading
 import time
@@ -44,6 +51,10 @@ _SCAN_MIN_INTERVAL = 3.0
 _RESCAN_MIN_INTERVAL = 10.0
 # 新布局中产物的直接父目录名（其上一级才是 run 根目录）
 _LAYOUT_SUBDIRS = {"rttm", "transcripts", "segments"}
+# 产物监听线程的节拍：只 stat 索引中已有会话的产物路径，代价可忽略
+_WATCH_TICK = 0.5
+# SSE 心跳间隔：防中间代理/浏览器把空闲长连接掐断
+_SSE_HEARTBEAT = 15.0
 
 
 def _exp_dir_of(artifact: Path) -> Path:
@@ -351,11 +362,115 @@ class SessionIndex:
             return None  # sidecar 正在原子替换，下一轮轮询再读
 
 
+class ArtifactWatcher:
+    """产物变化监听线程：mtime/size 签名比对，变化即经 SSE 广播事件。
+
+    每拍先 index.scan()（沿用其节流）发现新会话/新产物路径，再对索引中
+    已有会话的产物路径逐个 stat（不 rglob，代价可忽略）；签名变化广播
+    artifact 事件，会话集合/能力位/live/音频匹配变化广播 sessions 事件。
+    事件只描述"什么变了"，数据仍由客户端走 JSON 端点拉取。
+
+    Attributes:
+        index: 会话索引。
+        subscribers: SSE 订阅者的消息队列集合。
+        lock: subscribers 的互斥锁。
+    """
+
+    # 会话字段 -> 事件 kind（manifest 对前端即 segments 数据源）
+    _KINDS = (("rttm", "rttm"), ("manifest", "segments"),
+              ("transcript", "transcript"), ("speakers", "speakers"))
+
+    def __init__(self, index: SessionIndex):
+        """建监听线程（未启动）。
+
+        Args:
+            index: 会话索引（scan/list_sessions 另有其内部锁与节流）。
+        """
+
+        self.index = index
+        self.subscribers: set[queue.Queue] = set()
+        self.lock = threading.Lock()
+        self._signatures: dict[Path, tuple[int, int]] = {}
+        self._session_snapshot: dict[str, tuple] = {}
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="artifact-watcher")
+
+    def start(self) -> None:
+        """启动后台监听线程（daemon，随进程退出）。"""
+
+        self._thread.start()
+
+    def subscribe(self) -> queue.Queue:
+        """注册 SSE 订阅者，返回其事件队列（有界，慢客户端会被丢弃）。"""
+
+        subscription: queue.Queue = queue.Queue(maxsize=100)
+        with self.lock:
+            self.subscribers.add(subscription)
+        return subscription
+
+    def unsubscribe(self, subscription: queue.Queue) -> None:
+        """摘除订阅者（断连/队列满时调用）。"""
+
+        with self.lock:
+            self.subscribers.discard(subscription)
+
+    def _broadcast(self, event: dict) -> None:
+        """向全部订阅者投递事件；队列满视为慢客户端，直接摘除。"""
+
+        with self.lock:
+            subscribers = list(self.subscribers)
+        for subscription in subscribers:
+            try:
+                subscription.put_nowait(event)
+            except queue.Full:
+                self.unsubscribe(subscription)
+
+    def _run(self) -> None:
+        """监听主循环：固定节拍 tick，异常（如产物正在原子替换）下拍重试。"""
+
+        while True:
+            try:
+                self._tick()
+            except OSError:
+                pass
+            time.sleep(_WATCH_TICK)
+
+    def _tick(self) -> None:
+        """一拍：重扫索引并比对会话快照与产物签名，有变化即广播。"""
+
+        self.index.scan()
+        sessions = self.index.list_sessions()
+        snapshot = {
+            s["uri"]: (bool(s["rttm"]), bool(s["manifest"]),
+                       bool(s["transcript"]), bool(s["audio"]),
+                       self.index.is_live(s))
+            for s in sessions
+        }
+        if snapshot != self._session_snapshot:
+            self._session_snapshot = snapshot
+            self._broadcast({"type": "sessions"})
+        for session in sessions:
+            for field, kind in self._KINDS:
+                path = session.get(field)
+                if path is None:
+                    continue
+                try:
+                    stat_result = path.stat()
+                except OSError:
+                    continue  # 产物被原子替换的瞬间，下拍再读
+                signature = (stat_result.st_mtime_ns, stat_result.st_size)
+                if self._signatures.get(path) != signature:
+                    self._signatures[path] = signature
+                    self._broadcast(
+                        {"type": "artifact", "uri": session["uri"], "kind": kind})
+
+
 class ViewerHandler(BaseHTTPRequestHandler):
     """HTTP handler：会话/产物 JSON API、静态页与音频流（支持 Range）。"""
 
-    server_version = "RealtimeSDViewer/1.1"
+    server_version = "RealtimeSDViewer/1.2"
     index: SessionIndex  # 由 main() 注入
+    watcher: ArtifactWatcher  # 由 main() 注入
 
     def log_message(self, fmt, *args):  # 保持安静，按需自行恢复
         pass
@@ -423,6 +538,32 @@ class ViewerHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass  # 客户端中断下载（取消播放等），属正常情况
 
+    def _send_events(self) -> None:
+        """SSE 事件流：产物/会话变化即推送，心跳保活，断连摘除订阅。
+
+        无 Content-Length：连接保持到客户端断开（SSE 语义）。线程模型为
+        每连接一线程（ThreadingHTTPServer），handler 在此循环内驻留。
+        """
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        subscription = self.watcher.subscribe()
+        try:
+            while True:
+                try:
+                    event = subscription.get(timeout=_SSE_HEARTBEAT)
+                    payload = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                except queue.Empty:
+                    payload = ": ping\n\n"
+                self.wfile.write(payload.encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # 客户端断开（关页面/切会话），属正常情况
+        finally:
+            self.watcher.unsubscribe(subscription)
+
     # stdlib 命名约定（do_GET 不可改成蛇形）
     def do_GET(self) -> None:  # noqa: N802
         """路由分发：静态页/静态资源、会话与产物 JSON、音频流。"""
@@ -443,6 +584,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 STATIC_DIR / name,
                 mimetypes.guess_type(name)[0] or "application/octet-stream",
             )
+            return
+        if route == "/api/events":
+            self._send_events()  # 长连接：handler 驻留至客户端断开
             return
         if route == "/api/sessions":
             self.index.scan()  # 管线运行中产物会后出现；重扫有节流，间隔内复用缓存
@@ -567,6 +711,9 @@ def main() -> None:
         print(f"  {uri}: [{', '.join(caps)}] | audio: {audio}")
 
     ViewerHandler.index = index
+    watcher = ArtifactWatcher(index)
+    watcher.start()
+    ViewerHandler.watcher = watcher
     server = ThreadingHTTPServer(("127.0.0.1", args.port), ViewerHandler)
     print(f"serving on http://127.0.0.1:{args.port}")
     try:
