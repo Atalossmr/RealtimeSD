@@ -7,7 +7,6 @@ requires-python = ">=3.13"
 # 直接依赖
 # pip用户使用requirements.txt。
 dependencies = [
-    "funasr==1.4.0",
     "huggingface-hub==1.7.1",
     "matplotlib==3.10.8",
     "modelscope==1.35.0",

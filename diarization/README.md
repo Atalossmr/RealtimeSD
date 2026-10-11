@@ -77,12 +77,12 @@
 
 包按两个阶段拆成两个顶层包，共享契约与模型代码上提 `common/`；端到端组合层
 为仓库根目录的 `pipeline/` 包（`run_diarization` 在 `pipeline/runner.py`），
-`diarization/app.py` 只是委托它的 stage1 薄 CLI（入口脚本级复用，属分层例外，
+`diarization/app.py` 只是委托它的薄 CLI（入口脚本级复用，属分层例外，
 见 `pipeline/README.md`）：
 
 ```
-diarization/           # stage1：嵌入提取 + 聚类 + RTTM 输出
-  app.py               # stage1 端到端 CLI（python3 -m diarization.app，委托 pipeline.run_diarization，with_separation=False）
+diarization/           # 嵌入提取 + 聚类 + RTTM 输出
+  app.py               # 端到端 CLI（python3 -m diarization.app，委托 pipeline.run_diarization）
   utils/               # chunk_io：两阶段中间文件 <stem>.chunks.npz 存取（通用工具已上提 common/utils）
   extract/             # 子模块 1：嵌入提取
     extractor.py       #   ChunkExtractor：模型加载、波形预处理、chunk 生成器（chunk 生产唯一来源）
@@ -98,19 +98,21 @@ diarization/           # stage1：嵌入提取 + 聚类 + RTTM 输出
     runner.py          #   run_clustering：聚类消费循环（pipeline 与 cluster/app 共用）
     app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
 
-separation/            # stage2：分段音频导出（接流式 ASR；仅 streaming 后端生效）
-  exporter.py          #   StreamingSegmentExporter：编排（commit 区重叠检测、dispatch、回退策略、段闭合调度）
-  attribution.py       #   身份确认纯函数：overlap_regions / cosine / reference_embeddings /
+separation/            # 独立离线工具：按 RTTM 拆分纯净段（不在管线内，见 separation/README.md）
+  app.py               #   离线 CLI（python -m separation.app --wav x.wav --rttm x.rttm --output_dir out/）
+  offline.py           #   separate_by_rttm：窗口归并、分离 dispatch、回退策略、段组装编排
+  rttm.py              #   RTTM 解析与帧级活跃生成
+  attribution.py       #   身份确认纯函数：overlap_regions / cosine /
                        #     energy_gate / match_pair / best_match
-  assembler.py         #   SegmentAssembler：open-segment 跨 commit 区拼接与闭合推出（与 rttm_writer 的 open-turn 同构）
+  assembler.py         #   SegmentAssembler：open-segment 拼接与闭合推出
   sink.py              #   SegmentCallback / WavSegmentSink：wav 落盘 + manifest.jsonl
   utils.py             #   切片/能量纯函数：AudioSource / slice_absolute / rms / rms_over_regions
 
 common/
   constants.py         # 路径常量（BASE_DIR）
   config/              # 配置体系：base（通用 YAML/CLI 合并机制）+ pipeline（ChunkPipelineConfig + 管线 CLI helper）
-  contracts/           # 跨包数据契约：schema（ChunkObservation / ChunkArtifacts / 调试 TypedDict）+
-                       #   frames（commit 区帧裁剪，RTTM writer 与 separation 共用单份实现）
+  contracts/           # chunk 管线共享数据契约：schema（ChunkObservation / ChunkArtifacts / 调试 TypedDict）+
+                       #   frames（commit 区帧裁剪，RTTM writer 使用；oracle 实验脚本镜像同口径）
   utils/               # 通用工具：log（setup_logger / log_structured）/ paths / numeric / device / audio（重采样）
   models/              # 模型封装：embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/
                        #   hf_resolver / tiger（TigerSeparator：TIGER 2 路分离的惰性封装）
@@ -130,7 +132,7 @@ common/
 （逐 chunk 的 observations 含 embedding + 帧级输出参数）
 
 ```bash
-# stage1 端到端（等价于 run.py --stage 1，不启用 separation）
+# diarization 端到端（等价于 run.py）
 python3 -m diarization.app --wav <音频> --output_dir <dir> --config config/config.yaml
 
 # 阶段 1：嵌入提取（产出 embeddings/<stem>.chunks.npz）
@@ -145,7 +147,7 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 ### CLI 参数
 
 两个分阶段入口（`diarization.extract.app` 提取 / `diarization.cluster.app` 聚类）
-与 stage1 端到端入口 `diarization.app` 共用 `common/config/pipeline.py` 的同一个
+与端到端入口 `diarization.app` 共用 `common/config/pipeline.py` 的同一个
 参数解析器（完整编排入口为仓库根目录的 `run.py`）。全部调参项以 `config/config.yaml`
 为唯一来源（逐项说明见
 `config/README.md`），CLI 仅保留运行时输入、模型/环境覆盖与开关；合并优先级：
@@ -153,9 +155,9 @@ argparse 默认值 < YAML 配置 < 显式 CLI 参数。
 
 | 参数 | 说明 |
 | --- | --- |
-| `--wav` | 输入音频（`extract.app` 必填）：单个 wav/flac/mp3、目录，或每行一个路径的文本文件 |
+| `--wav` | 输入音频（`extract.app` 与 `diarization.app` 必填）：单个 wav/flac/mp3、目录，或每行一个路径的文本文件 |
 | `--input` | 仅 `diarization.cluster.app`（必填）：`.chunks.npz`、含 npz 的目录，或路径清单文本 |
-| `--output_dir` | 必填；输出目录（RTTM 在 `rttm/`、npz 在 `embeddings/`、分段音频在 `segments/`、日志在 `logs/`） |
+| `--output_dir` | 必填；输出目录（RTTM 在 `rttm/`、npz 在 `embeddings/`、日志在 `logs/`） |
 | `--config` | YAML 配置文件路径，默认 `config/config.yaml` |
 | `--model_path` | 预训练 ERes2NetV2 checkpoint 路径；缺省自动从 ModelScope 下载默认模型 |
 | `--device` | 运行设备（`auto`/`cpu`/`cuda:0`），默认 `auto`；cluster 阶段不加载模型，无需设置 |
@@ -185,7 +187,7 @@ argparse 默认值 < YAML 配置 < 显式 CLI 参数。
 
 输出目录按内容类型分子文件夹。每个输入音频默认输出：
 
-- `rttm/*.<backend_tag>.rttm`
+- `rttm/*.raw.rttm`（两后端的 raw 级文件名后缀均为 `raw`）
 - `rttm/*.refined.rttm`（经过后处理的最终输出）
 - `rttm/*.speakers.json`（两后端通用；refined 级 sidecar）
 - `embeddings/*.chunks.npz`（仅提取阶段 `python3 -m diarization.extract.app` 产出）
@@ -193,7 +195,8 @@ argparse 默认值 < YAML 配置 < 显式 CLI 参数。
 
 ### 文件交互接口
 
-diarization 与 ASR / viewer 之间全部经共享输出目录的文件交互。
+diarization 的产物经输出目录的文件被下游消费（separation 离线工具消费
+refined RTTM，详见 `separation/README.md`）。
 **核心约定：所有对外文件里的 speaker id 都是 clusterer 的 global id**
 （含 RTTM 行内的 speaker 字段）。
 写读时序保证：追加在依赖之后、JSON/RTTM 重写均走临时文件 + 原子替换，保证消费者永远读不到半写文件。
@@ -205,7 +208,7 @@ diarization 与 ASR / viewer 之间全部经共享输出目录的文件交互。
 
 #### `rttm/{uri}.speakers.json`（refined 级 sidecar）
 
-随 refined RTTM 同步原子更新；viewer 用它做 uncertain 标记与合并展示：
+随 refined RTTM 同步原子更新，记录各 speaker 的统计与合并状态：
 
 ```json
 {
@@ -219,7 +222,7 @@ diarization 与 ASR / viewer 之间全部经共享输出目录的文件交互。
 }
 ```
 
-- `speakers[].id` = global id（与 transcript 的 `speaker_id` 同源）；
+- `speakers[].id` = global id（与 RTTM 行内的 speaker 字段同源）；
 - `duration`：总发声时长（秒，展示用）；被并 speaker 置 `null`（时长已计入幸存者）；
 - `count`：样本计数（streaming 为有效 centroid 更新次数）；被并 speaker 置 `null`；
 - `uncertain`：`post_merge_min_count > 0` 且未合并、计数未达标；
@@ -227,26 +230,17 @@ diarization 与 ASR / viewer 之间全部经共享输出目录的文件交互。
 - `merge_events[].kind`：`merge`（流式期间）/ `post_merge`（EOF 小样本强制合并）；
 - `final`：false = 管线仍在运行，状态还会变化；true = EOF 最终刷新。
 
-#### `segments/{uri}.segments.jsonl` + `segments/{uri}/`（仅 `separation_enabled: true`）
-
-接 ASR 的分段音频导出（详见 `separation/exporter.py`）：
-
-- manifest：append-only JSONL，每行
-  `{"uri", "speaker_id"(global id), "start", "end", "path"}`；
-  **行在其指向的 wav 落盘之后才追加**，读到行即可读音频；
-- 音频段：`segments/{uri}/spk{speaker_id}_{start}_{end}.wav`，
-  单声道、采样率 = `config.sample_rate`（默认 16kHz）；
-- `speaker_id` 为**合并前**的 global id（段一写定音，后续合并不回溯）。
-
 #### `embeddings/{uri}.chunks.npz`（extract → cluster 两阶段中间产物）
 
 逐 chunk 的 observations（含 embedding）+ 帧级输出参数，纯 numpy 无 pickle；
 字段布局见 `utils/chunk_io.py` 的模块 docstring。`diarization.cluster.app`
 消费它重放聚类（换后端/调参秒级完成）；离线分析需要的 embedding 也从这里取。
 
-#### 协调哨兵（由 pipeline.process 管理，diarization 本身不写）
+#### 分段音频（separation 离线工具产物）
 
-- `.diarization_done`：pipeline 在管线退出后 touch；ASR 据此收尾退出，viewer 据此熄灭 LIVE。
+`segments/{uri}.segments.jsonl` + `segments/{uri}/` 由 `separation.app` 按
+refined RTTM 离线产出（写在其自己的 `--output_dir` 下），字段契约见
+`separation/README.md`。
 
 ### 调试建议
 
@@ -266,5 +260,5 @@ python3 run.py <音频.wav> --debug --verbose --show_rttm
 可用工具：
 
 ```bash
-python3 tools/analyze_log.py ./exp/demo/logs/run.log
+python3 tools/analyze_log.py ./exp/common/demo/logs/run.log
 ```

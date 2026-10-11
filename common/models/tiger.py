@@ -47,7 +47,7 @@ class TigerSeparator:
     ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
         """分离一段混合波形 [1, T]，返回 (混合波形, 分离音轨 [2, T])，长度已对齐。
 
-        波形切片由调用方完成（见 separation/exporter.py）；过短的输入（短于
+        波形切片由调用方完成（见 separation/offline.py）；过短的输入（短于
         1/4 秒）返回 None。
 
         Args:

@@ -15,7 +15,7 @@
 （d-prime 对比表 + 逐阈值 DER 表 + 逐文件最优 DER）。
 
 解读注意（实验设计的固有混淆，勿过度解读绝对 DER）：
-- 段时间线由 stage-1/2 的导出决策固定（gap 合并、min_segment_duration、
+- 段时间线由分离工具的导出决策固定（gap 合并、min_segment_duration、
   归属失败回退混合音频等），因此阈值扫描中 MS/FA 为常数、只有 SER 随阈值
   变化——这正是本实验想隔离的部分；但与管线 refined RTTM 的 DER 绝对值
   不可直接相比（时间线不同）。
@@ -25,7 +25,7 @@
 
 用法：
   .venv/bin/python tools/experiments/separated_recluster.py \
-      --segments exp/der_test/<run>/segments \
+      --segments exp/experiments/task1-6_sep \
       --ref datasets/task1-6/rttm \
       --mixture-input exp/experiments/task1-6_extract/embeddings \
       --output exp/experiments/e6_separated_recluster

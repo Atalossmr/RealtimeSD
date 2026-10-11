@@ -2,7 +2,7 @@
 
 `merge_args_with_config` 在包级别指向管线版（3 参便捷封装）；通用机制版
 （带 `default_config_path` / `config_type` 关键字参数）经 `common.config.base`
-取用（asr 侧即如此）。
+取用。
 """
 
 from .base import config_from_yaml, dataclass_from_args

@@ -97,11 +97,11 @@ class ChunkPipelineConfig:
     post_merge_min_count: int = 8
     post_merge_min_similarity: float = 0.0
 
-    # ---- 分段音频导出（接流式 ASR；仅 streaming 后端生效） ----
-    # 逐 speaker 音频段导出（wav + manifest）：无重叠纯切片，有重叠走 TIGER 语音分离
-    separation_enabled: bool = True
+    # ---- 分段音频导出（separation 独立离线工具使用；不在管线内） ----
     # TIGER 分离模型（Hugging Face，固定 2 路输出、16kHz）。
     separation_model: str = "JusperLee/TIGER-speech"
+    # 离线工具的帧扫描步长（秒）。
+    separation_frame_step: float = 0.05
     # 能量门控：音轨 RMS / 混合 RMS 低于该比值判伪源，整窗回退原始音频。
     separation_energy_ratio: float = 0.05
     # 2x2 匹配的最小余弦相似度，低于则回退原始音频（仅防分离崩溃，不宜调高）。
@@ -144,7 +144,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="输出目录；RTTM 写入其 rttm/ 子目录（raw 级 .raw.rttm，"
         "最终输出 .refined.rttm + .speakers.json），"
-        "embeddings npz 在 embeddings/，分段音频在 segments/，日志在 logs/",
+        "embeddings npz 在 embeddings/，日志在 logs/",
     )
     parser.add_argument(
         "--config",

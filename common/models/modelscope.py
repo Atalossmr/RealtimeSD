@@ -1,4 +1,4 @@
-"""ModelScope 模型缓存解析与下载（asr / diarization 共用）。"""
+"""ModelScope 模型缓存解析与下载（diarization / embedding 模型使用）。"""
 
 from __future__ import annotations
 

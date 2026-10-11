@@ -1,6 +1,8 @@
-"""commit 区帧裁剪：RTTM writer 与分段音频导出共用的逐帧遍历逻辑。
+"""commit 区帧裁剪：RTTM writer 的逐帧遍历逻辑。
 
-两侧必须严格一致才能保证 RTTM 时间线与导出音频段对齐，因此只保留这一份实现。
+当前唯一消费者是 `diarization/cluster/rttm_writer.py`；tools/experiments/
+的 oracle 实验脚本镜像同一判定口径（见其 docstring），因此实现留在
+common.contracts 作为单一口径来源。
 """
 
 from __future__ import annotations

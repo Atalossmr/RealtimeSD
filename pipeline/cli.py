@@ -1,7 +1,7 @@
 """入口脚本（run.py / test_der.py）共用的 CLI 辅助。
 
 环境变量布尔缺省、公共 CLI 参数、启动前输入检查。只依赖标准库，
-不含任何业务 import；管线本体的编排逻辑在 api.py / follow.py。
+不含任何业务 import；管线本体的编排逻辑在 api.py。
 """
 
 from __future__ import annotations

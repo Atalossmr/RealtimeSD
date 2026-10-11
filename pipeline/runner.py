@@ -1,9 +1,7 @@
-"""diarization 执行器：组合 stage1（extract+cluster+RTTM）与 stage2（separation 导出）。
+"""diarization 执行器：extract + cluster + RTTM 的组合核心。
 
-DiarizationRunner 是管线的组合核心：持有 ChunkExtractor（模型只加载一次，
-可连续处理多条音频），每条音频独立构建 clusterer / writer / exporter
-（状态不跨文件），separation 的 StreamingSegmentExporter 以 chunk hook
-形式挂接在聚类循环上。
+DiarizationRunner 持有 ChunkExtractor（模型只加载一次，可连续处理多条
+音频），每条音频独立构建 clusterer / writer（状态不跨文件）。
 """
 
 from __future__ import annotations
@@ -89,12 +87,11 @@ def _log_debug_chunk(
 class DiarizationRunner:
     """可复用的 diarization 执行器：模型加载一次，可连续处理多条音频。
 
-    每条音频独立构建 clusterer / writer / exporter（状态不跨文件），
-    仅 extractor 持有的模型（segmentation + embedding）跨文件复用。
+    每条音频独立构建 clusterer / writer（状态不跨文件），仅 extractor
+    持有的模型（segmentation + embedding）跨文件复用。
 
     Attributes:
         config: 管线配置。
-        with_separation: 是否创建分段音频导出器（False 时无 segments 输出）。
         extractor: 持有模型的 chunk 提取器，跨文件复用。
     """
 
@@ -102,21 +99,18 @@ class DiarizationRunner:
         self,
         config: ChunkPipelineConfig,
         model_path: Optional[str] = None,
-        with_separation: bool = True,
     ):
         """加载模型并初始化执行器。
 
         Args:
             config: 管线配置。
             model_path: 显式模型路径覆盖。
-            with_separation: 是否启用 separation 分段音频导出。
         """
         self.config = config
-        self.with_separation = with_separation
         self.extractor = ChunkExtractor(config, model_path)
 
     def process_file(self, audio_path: str, exp_dir: Path) -> str:
-        """处理单条音频，输出 RTTM（+ 可选 segments）。
+        """处理单条音频，输出 RTTM。
 
         Args:
             audio_path: 音频文件路径；uri 取其文件名主干。
@@ -144,35 +138,13 @@ class DiarizationRunner:
             config.show_rttm,
         )
 
-        # 音频片段导出：仅 streaming 后端下逐 commit 区生效。
-        # 默认 WavSegmentSink 落盘 wav + manifest，转写由 ASR 跟随进程
-        # 读取输出目录独立完成；TIGER 仍是按需惰性加载。
-        exporter = None
-        if config.separation_enabled and self.with_separation:
-            if clusterer.deferred:
-                logger.warning(
-                    "[separation] separation 仅支持 streaming 后端，当前后端 %s 已跳过",
-                    type(clusterer).__name__,
-                )
-            else:
-                # 刻意惰性 import：separation 依赖 TIGER 等重库，仅 stage>=2 需要。
-                from separation import StreamingSegmentExporter
-
-                exporter = StreamingSegmentExporter(
-                    config,
-                    waveform,
-                    self.extractor.embedder,
-                    uri=uri,
-                    output_dir=str(exp_dir / "segments"),
-                )
-
         def chunk_log_hook(
             chunk: ChunkArtifacts,
             local_to_global: Optional[dict[int, int]],
             debug_info: ChunkDebugInfo,
             emitted_frames: int,
         ) -> None:
-            """每 chunk 分配完成后的回调：分段导出 + 日志输出。
+            """每 chunk 分配完成后的回调：日志输出。
 
             Args:
                 chunk: 本 chunk 的产物。
@@ -184,12 +156,6 @@ class DiarizationRunner:
 
             # 输出本身由 runner/writer 完成。deferred 后端下 local_to_global
             # 为 None、emitted_frames 为 0（重放阶段不再回调）。
-            # 分段音频导出：commit 区音频段输出（重叠区经 TIGER 分离）。
-            # 空 local_to_global（本 chunk 无任何指派）也要调用：
-            # handle_chunk 内部会走 close_inactive 兜底，及时闭合连续无
-            # 分配期间已沉默的 open segment，否则段音频迟迟不推给 ASR。
-            if exporter is not None:
-                exporter.handle_chunk(chunk, local_to_global)
             log_structured(
                 logger,
                 logging.INFO,
@@ -236,19 +202,13 @@ class DiarizationRunner:
 
         # 生成器惰性生产 chunk：streaming 后端下输出延迟 ≈ 一个 hop，
         # 不会因为组合成统一循环而引入额外的缓冲。
-        try:
-            run_clustering(
-                self.extractor.iter_chunk_artifacts(waveform),
-                clusterer,
-                writer,
-                chunk_hook=chunk_log_hook,
-                refiner=refiner,
-            )
-        finally:
-            # 闭合 exporter 残余的 open segment（音频结束，与 writer.finalize 同步）；
-            # 中途异常也要收尾，否则已累积的段音频不落盘。
-            if exporter is not None:
-                exporter.finalize()
+        run_clustering(
+            self.extractor.iter_chunk_artifacts(waveform),
+            clusterer,
+            writer,
+            chunk_hook=chunk_log_hook,
+            refiner=refiner,
+        )
         return raw_rttm_path
 
 
@@ -257,11 +217,10 @@ def run_diarization(
     audio_path: str,
     exp_dir: Path,
     model_path: Optional[str] = None,
-    with_separation: bool = True,
 ) -> str:
-    """单条音频的 diarization 管线：extract + cluster + RTTM/segments 输出。
+    """单条音频的 diarization 管线：extract + cluster + RTTM 输出。
 
-    供 diarization.app（stage1 独立 CLI）复用；批量场景请直接用
+    供 diarization.app（独立 CLI）复用；批量场景请直接用
     DiarizationRunner 以复用已加载的模型。
 
     Args:
@@ -269,15 +228,12 @@ def run_diarization(
         audio_path: 音频文件路径。
         exp_dir: 本次 run 的输出目录。
         model_path: 显式模型路径覆盖。
-        with_separation: 是否启用 separation 分段音频导出。
 
     Returns:
         raw RTTM 路径。
     """
 
-    return DiarizationRunner(config, model_path, with_separation).process_file(
-        audio_path, exp_dir
-    )
+    return DiarizationRunner(config, model_path).process_file(audio_path, exp_dir)
 
 
 __all__ = ["DiarizationRunner", "run_diarization"]

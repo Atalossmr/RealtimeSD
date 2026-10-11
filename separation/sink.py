@@ -9,7 +9,7 @@ from typing import Callable
 import torch
 import torchaudio
 
-# ASR 侧接收音频段的回调签名：(uri, speaker_id, start, end, waveform[1, T])。
+# 段消费侧接收音频段的回调签名：(uri, speaker_id, start, end, waveform[1, T])。
 SegmentCallback = Callable[[str, int, float, float, torch.Tensor], None]
 
 
@@ -48,7 +48,7 @@ class WavSegmentSink:
 
         Args:
             uri: 音频标识。
-            speaker_id: global speaker id。
+            speaker_id: speaker id（RTTM label 按字典序映射的 int id，0 起）。
             start: 段起始绝对时刻（秒）。
             end: 段结束绝对时刻（秒）。
             waveform: 段音频（[1, T]，落盘前转到 CPU）。

@@ -1,13 +1,11 @@
 # 配置参数说明
 
-本目录两个配置文件：
-
-- **`config.yaml`** — diarization 管线的全部调参项；
-- **`asr.yaml`** — ASR 转写的全部调参项。
+本目录唯一配置文件 **`config.yaml`** — diarization 管线与 separation 离线
+工具共用的全部调参项。
 
 ---
 
-## 一、config.yaml（diarization 管线）
+## config.yaml
 
 参数按模块分组，与 `common/config/pipeline.py` 的 `ChunkPipelineConfig` 字段一一对应。
 下表"默认"列为仓库自带 `config.yaml` 的生效值；YAML 缺省时落回dataclass中定义的默认值。
@@ -17,6 +15,8 @@
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `device` | `auto` | 推理设备：`auto` / `cpu` / `cuda` / `cuda:0` |
+| `sample_rate` | `16000` | 音频采样率（Hz），全部模型与输出 wav 统一用该采样率 |
+| `hf_token` | 空 | Hugging Face token（也可用环境变量 `HF_TOKEN` 或 CLI `--hf_token`） |
 | `hf_cache_dir` | `./pretrained/huggingface` | Hugging Face 缓存目录，相对路径按仓库根目录解析 |
 
 ### extract 阶段：模型
@@ -25,7 +25,12 @@
 | --- | --- | --- |
 | `model_type` | `eres2netv2` | 说话人 embedding 模型类型（当前仅支持 eres2netv2） |
 | `model_path` | 空 | 本地 embedding checkpoint 路径；为空时自动下载 ModelScope 默认模型到 `pretrained/modelscope`（CLI 参数，也可写在 YAML） |
+| `embedding_size` | `192` | ERes2NetV2 输出 embedding 维度（需与 checkpoint 一致） |
+| `feat_dim` | `80` | FBank 特征维度 |
+| `m_channels` | `64` | ERes2NetV2 的通道数配置（需与 checkpoint 一致） |
+| `normalize_embeddings` | `true` | 是否对 segment embedding 做 L2 归一化 |
 | `segmentation_model` | `pyannote/segmentation-3.0` | pyannote 局部分割模型名，需 HF 授权（`HF_TOKEN`） |
+| `segmentation_batch_size` | `1` | segmentation 推理的 batch size |
 
 ### extract 阶段：chunk 调度
 
@@ -78,17 +83,17 @@
 | `post_merge_min_count` | `8` | 小样本簇的样本计数阈值，低于则作为被吸收候选；`0` = 关闭后处理。该值同时是 streaming 前端 uncertain |
 | `post_merge_min_similarity` | `0.0` | 强制合并的相似度下限 |
 
-### 分段音频导出
+### 分段音频导出（separation 离线工具）
 
-以下参数仅 `separation_enabled: true` 且 `clustering_backend: streaming` 时生效。
+以下参数仅 `python -m separation.app`（独立离线工具，不在管线内）使用。
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `separation_enabled` | `true` | 是否启用语音分离及分段音频导出 |
 | `separation_model` | `JusperLee/TIGER-speech` | TIGER 分离模型（HF，固定 2 路输出、16kHz），缓存到 `hf_cache_dir` |
+| `separation_frame_step` | `0.05` | 离线工具的帧扫描步长（秒）：RTTM 解析后按该步长生成全时间线逐帧活跃记录 |
 | `separation_energy_ratio` | `0.05` | 能量门控：分离音轨在重叠帧区间的 RMS / 混合音频同区间 RMS，低于判为伪源（OSD 疑似误报）。仅一路过门控时该路匹配归属、落选 speaker 的重叠帧不输出；两路都不过门控则整窗回退原始音频 |
 | `separation_min_match_similarity` | `0.10` | 2x2 匹配结果的最小余弦相似度，低于判分离质量不可靠，回退原始音频。 |
-| `max_segment_duration` | `20.0` | 单个音频段的最长时长（秒）：open segment 达到该值即强制闭合推出并以本 run 另开新段续接（切点在 run 边界、人为切在语音中间，帧数据不丢不重）。避免连续讲话时段无界增长，为内存驻留与 ASR 输出延迟提供上界；不宜低于 `hop_duration` |
+| `max_segment_duration` | `20.0` | 单个音频段的最长时长（秒）：open segment 达到该值即强制闭合推出并以本 run 另开新段续接（切点在 run 边界、人为切在语音中间，帧数据不丢不重）。避免连续讲话时段无界增长，为内存驻留提供上界；不宜低于 `hop_duration` |
 
 ### RTTM 输出
 
@@ -96,6 +101,7 @@
 | --- | --- | --- |
 | `min_segment_duration` | `0.30` | RTTM 写出最短片段时长（秒），闭合时更短的 turn 丢弃 |
 | `segment_merge_gap` | `0.25` | 同 speaker 相邻片段自动拼接允许的最大间隔（秒，跨 chunk 生效）；同时是沉默闭合判据：open turn 终点距 commit_end 超过该值即闭合写出 |
+| `output_dir` | 空 | 运行时输出目录（由 CLI `--output_dir` 或 `pipeline.process` 填充），一般不写进 YAML |
 | `show_rttm` | `false` | 同步把新增 RTTM 行打印到控制台 |
 
 ### 调试
@@ -103,18 +109,3 @@
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `debug` | `false` | 输出 chunk 级调试信息（`window_summary` / `new_speakers` / `updated_speakers` 等） |
-
----
-
-## 二、asr.yaml（ASR 转写，Fun-ASR-Nano）
-
-ASR 是独立于 pipeline 的模块
-
-| 参数 | 默认 | 说明 |
-| --- | --- | --- |
-| `sample_rate` | `16000` | 输入音频段的采样率，须与 pipeline 导出一致 |
-| `device` | `auto` | ASR 推理设备，独立于 diarization 的 `device`：跟随模式下两进程同时占卡，显存紧张时可将 ASR 单独放到其他卡或 CPU |
-| `model` | `FunAudioLLM/Fun-ASR-Nano-2512` | ASR 模型：本地目录 / ModelScope id（下载缓存到 `pretrained/modelscope`；缓存目录需含 `model.pt` + 配置才算命中，否则回退下载） |
-| `prev_text_max_tokens` | `0` | 长段窗切续写时 prev_text 的 token 预算（取本段已累计文本尾部）。`0` = 自动（≈ `window_overlap` × 4 token/s，刚好覆盖重叠区）。 |
-| `max_segment_duration` | `30.0` | 长段滑窗的窗口总长（秒）。超过该时长的段按窗口滑窗推理，每次推进（窗口 − 重叠）秒，单次推理成本有界 |
-| `window_overlap` | `10.0` | 长段滑窗的重叠时长（秒）：窗口头部带这段已转写音频供 prev 尾部对齐，模型跳过重叠区只续写新内容；必须小于 `max_segment_duration` |

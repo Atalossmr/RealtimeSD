@@ -1,12 +1,11 @@
-"""stage1 端到端 CLI：音频 -> RTTM（不启用 separation 分段导出）。
+"""diarization 端到端 CLI：音频 -> RTTM。
 
 用法：
 
     python -m diarization.app --wav <音频> --output_dir <目录> [--config ...]
 
 主体复用组合层 `pipeline.run_diarization`，避免复制组合逻辑。仅接受单个音频文件
-（与 run.py 一致，不做目录批量）；separation 不启用 ⇒ 无 segments 输出，
-ahc 后端也可用（RTTM-only 本来就支持）。
+（与 run.py 一致，不做目录批量）；RTTM-only，ahc 后端也可用。
 """
 
 from __future__ import annotations
@@ -55,7 +54,6 @@ def main() -> None:
         str(audio),
         Path(args.output_dir),
         model_path=args.model_path,
-        with_separation=False,
     )
     logger.info("Wrote raw RTTM to %s", rttm_path)
 

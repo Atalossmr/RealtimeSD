@@ -21,11 +21,17 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Optional, TypedDict
 
 import numpy as np
+
+# 作为脚本/子进程运行时 sys.path[0] 是 tools/，补仓库根以 import separation。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from separation.rttm import load_rttm  # noqa: E402
 
 # RTTM 解析正则
 SCORED_SPEAKER_TIME = re.compile(r"(?<=SCORED SPEAKER TIME =)[\d.]+")
@@ -189,6 +195,8 @@ def compute_der(
 def analyze_rttm(rttm_file: str) -> Optional[RTTMStats]:
     """分析 RTTM 文件并返回基础统计信息。
 
+    解析复用 separation.rttm.load_rttm（仅 SPEAKER 行参与统计）。
+
     Args:
         rttm_file: RTTM 文件路径。
 
@@ -199,37 +207,16 @@ def analyze_rttm(rttm_file: str) -> Optional[RTTMStats]:
     if not os.path.exists(rttm_file):
         return None
 
-    speakers: set[str] = set()
-    total_duration = 0.0
-    segments: list[tuple[float, str]] = []
-
-    with open(rttm_file, "r", encoding="utf-8") as file_obj:
-        for line in file_obj:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) < 8:
-                continue
-            try:
-                duration = float(parts[4])
-                speaker = parts[7]
-            except (ValueError, IndexError):
-                continue
-
-            speakers.add(speaker)
-            total_duration += duration
-            segments.append((duration, speaker))
-
-    speaker_durations: dict[str, float] = {}
-    for duration, speaker in segments:
-        speaker_durations[speaker] = speaker_durations.get(speaker, 0.0) + duration
-
+    turns = load_rttm(rttm_file)
+    speaker_durations = {
+        speaker: sum(end - start for start, end in segments)
+        for speaker, segments in turns.items()
+    }
     return {
-        "num_speakers": len(speakers),
-        "num_segments": len(segments),
-        "total_duration": total_duration,
-        "speakers": sorted(speakers),
+        "num_speakers": len(turns),
+        "num_segments": sum(len(segments) for segments in turns.values()),
+        "total_duration": sum(speaker_durations.values()),
+        "speakers": sorted(turns),
         "speaker_durations": speaker_durations,
     }
 

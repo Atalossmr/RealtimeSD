@@ -1,4 +1,4 @@
-"""日志初始化与结构化日志（asr / diarization / separation 共用）。"""
+"""日志初始化与结构化日志（diarization / separation 共用）。"""
 
 from __future__ import annotations
 

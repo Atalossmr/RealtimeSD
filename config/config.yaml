@@ -1,4 +1,4 @@
-# RealtimeSD diarization 管线配置（管线调参项的唯一来源；ASR 转写调参在 asr.yaml；逐项说明见本目录 README.md）
+# RealtimeSD diarization 管线配置（管线调参项的唯一来源；逐项说明见本目录 README.md）
 
 # ---- 运行环境 ----
 device: auto
@@ -38,9 +38,10 @@ ahc_linkage: average
 post_merge_min_count: 8
 post_merge_min_similarity: 0.0
 
-# ---- 分段音频导出（仅 streaming 后端生效） ----
-separation_enabled: true
+# ---- 分段音频导出（separation 独立离线工具使用；不在管线内） ----
 separation_model: JusperLee/TIGER-speech
+# 离线工具的帧扫描步长（秒）
+separation_frame_step: 0.05
 separation_energy_ratio: 0.05
 separation_min_match_similarity: 0.10
 max_segment_duration: 20.0

@@ -245,7 +245,7 @@ def write_speaker_status(
 ) -> None:
     """落盘 `{uri}.speakers.json`：refined 级的 speaker 状态 sidecar。
 
-    供 viewer 等下游实时消费（与 refined RTTM 同步原子更新）：
+    供下游实时消费（与 refined RTTM 同步原子更新）：
 
     - speakers：每个出现过的 global speaker 的总发声时长（展示用）、样本
       计数、uncertain 标记（开启小样本阈值且当前计数未达标；流式中途会随

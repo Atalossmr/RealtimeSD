@@ -5,14 +5,14 @@
 
 ## 项目内容
 
-- 入口：`python3 run.py <音频文件|目录|清单文本>`（端到端一键编排：ASR 先就绪，再跑 diarization 管线与 viewer；`--stage {1,2,3}` 控制推进阶段；目录/清单为批量模式，模型只加载一次）、`python3 -m diarization.app`（仅 diarization 阶段）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）、`python3 -m asr.app`（ASR 转写）、`python3 -m separation.app`（骨架：separation 暂不可独立运行，由 run.py `--stage >= 2` 驱动）
-- 库式调用：`pipeline.process(audio="x.wav", stage=1, run_name="demo")`
-- 配置文件：`config/config.yaml`（diarization及separation）、`config/asr.yaml`（ASR 转写）
-- 管线实现：`diarization/`（extract + cluster）+ `separation/`（语音分离）+ `pipeline/`（组合层），模型代码统一在 `common/models/`
-- 运行脚本：`run.py`（一键编排）、`test_der.py`（DER 评估）
+- 入口：`python3 run.py <音频文件|目录|清单文本>`（diarization 一键运行：音频 → RTTM；目录/清单为批量模式，模型只加载一次）、`python3 -m diarization.app`（diarization 独立 CLI）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）
+- 离线分离工具：`python3 -m separation.app --wav x.wav --rttm x.rttm --output_dir out/`（按 RTTM 把含混叠音频拆成各 speaker 纯净段，重叠区 TIGER 分离 + embedding 归属匹配；详见 `separation/README.md`）
+- 库式调用：`pipeline.process(audio="x.wav", run_name="demo")`、`separation.separate_by_rttm(...)`
+- 配置文件：`config/config.yaml`（diarization 管线 + separation 工具共用的调参项）
+- 管线实现：`diarization/`（extract + cluster）+ `pipeline/`（组合层）；`separation/` 为独立离线工具，与 diarization 互不 import。模型代码统一在 `common/models/`
+- 运行脚本：`run.py`（一键运行）、`test_der.py`（DER 评估）
 - DER 评估：`tools/compute_der.py`
 - 运行日志分析：`tools/analyze_log.py`
-- 结果可视化：`viewer/`（波形 + 按 stage 分层的产物时间线：stage1 diarization / stage2 +分离段回放 / stage3 +ASR 转写）
 
 ## 环境要求
 
@@ -43,8 +43,7 @@ pip install -r requirements.txt
 
 - `ERes2NetV2`（说话人 embedding）
 - `pyannote/segmentation-3.0`（局部说话人识别）
-- `TIGER`（语音分离）
-- `Fun-ASR-Nano`（ASR）
+- `TIGER`（语音分离，仅 separation 离线工具使用）
 
 默认行为：
 
@@ -83,37 +82,46 @@ python3 run.py <音频.wav> \
   --verbose
 ```
 
-仅跑 diarization（不启动 ASR/viewer，跑完直接退出）：
+diarization 独立 CLI（与 `run.py` 等价，直接指定输出目录）：
 
 ```bash
-python3 run.py <音频.wav> --stage 1 --no-viewer --no-wait
+python3 -m diarization.app --wav <音频.wav> --output_dir <dir> --config config/config.yaml
 ```
 
-`--stage` 控制流水线推进到哪一阶段（累积式，默认 3 跑完整管线）：
+离线分离（先跑 diarization 得到 RTTM，再按 RTTM 拆分纯净段）：
 
-- `--stage 1`：仅 diarization（RTTM 产物；等价于 `python3 -m diarization.app`）
-- `--stage 2`：diarization + speech separation（导出分段音频）
-- `--stage 3`：再加 ASR 转写（完整管线）
+```bash
+python3 -m separation.app \
+  --wav <音频.wav> \
+  --rttm <dir>/rttm/<音频>.refined.rttm \
+  --output_dir <分离输出目录>
+```
 
-调试与可视化：
+调试：
 
 - `--debug`：输出调试信息
 - `--show_rttm`：运行时把新写出的 RTTM 行同步打印到控制台
 
 ## 输出说明
 
-输出目录按内容类型分子文件夹（`output_dir/` 下）：
+`run.py` / `test_der.py` 的输出目录为 `{output_root}/{test_name}/{run_name}/`
+（`run.py` 的 test_name 固定为 `common`，`test_der.py` 固定为 `der_test`），
+按内容类型分子文件夹：
 
 ```
 output_dir/
-  rttm/           # {uri}.raw.rttm（两后端统一；raw 级 append-only）
-                  # {uri}.refined.rttm（两后端通用；修正与后处理后的最终输出）
+  rttm/           # {uri}.raw.rttm（raw 级 append-only，行写出即最终）
+                  # {uri}.refined.rttm（修正与后处理后的最终输出，下游应消费它）
                   # {uri}.speakers.json（refined 级 sidecar）
-  segments/       # {uri}.segments.jsonl + {uri}/*.wav（仅 separation_enabled）
-  transcripts/    # {uri}.transcript.jsonl（ASR 转写，run.py 编排时）
   embeddings/     # {uri}.chunks.npz（提取阶段 python3 -m diarization.extract.app 产出）
-  logs/           # run.log、transcribe.log、viewer.log、command.log 等
+  logs/           # run.log、command.log 等
 ```
+
+每次 run 的汇总记录追加在 run 目录上一级的 `{output_root}/{test_name}/results.txt`；
+`test_der.py` 的 DER 明细另写在 run 目录的 `logs/der.log` 与 `der_summary.txt`。
+
+`separation.app` 的输出目录独立指定（`--output_dir`），产出
+`{uri}.segments.jsonl` manifest 与 `{uri}/spk{id}_{start}_{end}.wav` 分段音频。
 
 ## 脚本使用
 
@@ -138,9 +146,7 @@ python3 test_der.py <wav 文件>
 ```
 
 `test_der.py` 也接受音频目录或每行一个路径的文本清单做批量评估：全部音频的
-RTTM 写入同一输出目录（模型只加载一次），最后输出逐文件 DER 与拼接全局 DER。
-`--stage` 控制批量推进阶段（默认 1）：2=+separation 分段音频，3=+ASR 转写
-（批量共享一个常驻 ASR follow 进程，transcript 为额外产物，DER 输入不变）：
+RTTM 写入同一输出目录（模型只加载一次），最后输出逐文件 DER 与拼接全局 DER：
 
 ```bash
 python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name task16
@@ -156,23 +162,13 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 - `RUN_NAME`
 - `DEBUG`
 - `SHOW_RTTM`
-- `STAGE`（流水线阶段 1/2/3，对应 `--stage`，默认 3）
-- `ASR_CONFIG_PATH`（ASR 转写配置，默认 `./config/asr.yaml`）
-- `WITH_VIEWER`（=0 时不启动结果可视化服务器）
-- `VIEWER_PORT`（默认为 8000）
-- `WAIT_VIEWER`（=0 时管线跑完不挂起等待 Ctrl+C，直接收尾退出）
 
 以下环境变量仅 `test_der.py` 使用：
 
 - `DEVICE`（运行设备覆盖，如 cpu/cuda）
 - `REF_RTTM`（参考 RTTM 目录）
 - `DER_VERBOSE`
-
-脚本行为说明：
-
-- 管线跑完后 `run.py` 不立即退出：打印"音频已处理完成"并挂起等待，
-  viewer 保持可访问；按 Ctrl+C 后脚本退出并关闭 viewer（无人值守场景
-  用 `--no-wait` / `WAIT_VIEWER=0` 跳过等待，跑完直接退出）
+- `COLLAR`（DER 评估的宽容边界，秒，默认 0.0）
 
 ## 配置
 
@@ -180,24 +176,20 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 
 ## 仓库结构
 
-分层规则：`common ← diarization / separation / asr ← pipeline ← run.py / test_der.py`。
-common 不 import 业务包；三个业务包互不 import；pipeline 是唯一同时依赖多个
+分层规则：`common ← diarization / separation ← pipeline ← run.py / test_der.py`。
+common 不 import 业务包；diarization 与 separation 两个业务包互不 import
+（separation 是独立离线工具，不在管线内）；pipeline 是唯一同时依赖多个
 业务包的组合层（详见 `pipeline/README.md`）。
 
 - `diarization/`：说话人识别（extract + cluster 两级，chunk 管线）
-- `separation/`：分段音频导出（commit 区重叠检测 + TIGER 分离 + 身份确认，接流式 ASR）
-- `pipeline/`：组合层（api：一次完整运行的公开入口 process（单/批量统一）；runner：stage1+2 组合执行；follow：ASR 跟随编排与哨兵协调；eval：DER 评估；cli：入口脚本公共 CLI 辅助）
+- `separation/`：离线分离工具（RTTM 解析 + 重叠区 TIGER 分离 + embedding 归属匹配 + 分段导出）
+- `pipeline/`：组合层（api：一次完整运行的公开入口 process（单/批量统一）；runner：diarization 组合执行；eval：DER 评估；cli：入口脚本公共 CLI 辅助）
 - `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志与设备/音频/路径/数值工具、`models/` 模型封装、路径常量、`speakerlab/` 与 `look2hear/` 两个 vendored 模型依赖）
 - `common/speakerlab/`：3D-Speaker相关依赖（vendored）与 `md-eval.pl`
 - `common/look2hear/`：TIGER相关依赖（vendored）
 - `tools`：常用工具，包括参数扫描，log分析等
-- `run.py`：运行编排脚本（ASR + diarization + viewer）
-- `asr/`：ASR模块
-- `viewer/`：管线产物可视化（stage 分层：diarization 时间线 / 分离段回放 / ASR 转写）
+- `run.py`：diarization 一键运行脚本
 - `test_der.py`：DER 评估脚本
-
-各模块（diarization / separation / asr / viewer）之间全部经共享输出目录的
-文件交互（manifest / transcript / speakers.json sidecar / 哨兵），接口字段定义见各模块 README 的"文件交互接口"/"数据接口"章节。
 
 ## 备注
 

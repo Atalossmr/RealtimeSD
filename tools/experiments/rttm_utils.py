@@ -1,33 +1,20 @@
-"""上限实验（tools/experiments/）的共享工具：RTTM 解析与区间运算。"""
+"""上限实验（tools/experiments/）的共享工具：RTTM 解析与区间运算。
+
+RTTM 解析的权威实现是 `separation.rttm.load_rttm`（返回结构相同：
+{speaker: [(start, end), ...]}，按 start 排序），此处 re-export 以兼容
+既有 `from rttm_utils import load_rttm` 的写法；本模块自身只保留区间运算。
+"""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
+# 本模块被同目录脚本以 `from rttm_utils import ...` 方式导入，自行补齐仓库根，
+# 保证 separation 可 import（不依赖调用方的 sys.path 设置顺序）。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-def load_rttm(path: str | Path) -> dict[str, list[tuple[float, float]]]:
-    """解析 RTTM。
-
-    Args:
-        path: RTTM 文件路径。
-
-    Returns:
-        {speaker: [(start, end), ...]}，各说话人的段按 start 排序。
-    """
-
-    turns: dict[str, list[tuple[float, float]]] = {}
-    with open(path, "r", encoding="utf-8") as file_obj:
-        for line in file_obj:
-            parts = line.split()
-            if len(parts) < 8 or parts[0] != "SPEAKER":
-                continue
-            start = float(parts[3])
-            duration = float(parts[4])
-            speaker = parts[7]
-            turns.setdefault(speaker, []).append((start, start + duration))
-    for segments in turns.values():
-        segments.sort()
-    return turns
+from separation.rttm import load_rttm  # noqa: E402
 
 
 def union_duration(segments: list[tuple[float, float]]) -> float:

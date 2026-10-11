@@ -2,7 +2,7 @@
 """运行日志事件统计：按模块 / 事件 / 级别聚合计数。
 
 解析 `setup_logger` 输出格式（`YYYY-MM-DD HH:MM:SS,mmm [LEVEL] message`）的日志
-文件（run.log / transcribe.log / extract / cluster 日志均可），统计：
+文件（run.log / extract / cluster 日志均可），统计：
 
 - 时间范围与日志行数（多行 JSON 负载等续行单独计数）；
 - 每个模块（消息开头的 `[tag]`，无 tag 归入 general）下每种事件的各级别
@@ -15,7 +15,7 @@
 
     python3 tools/analyze_log.py exp/common/default/run.log
     python3 tools/analyze_log.py exp/common/default          # 目录 → 其中所有 *.log
-    python3 tools/analyze_log.py run.log transcribe.log --top 20
+    python3 tools/analyze_log.py run.log --top 20
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from pathlib import Path
 _LINE_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d{3} \[(\w+)\] (.*)$"
 )
-# 消息体开头的模块 tag，如 [asr] / [runtime] / [separation]。
+# 消息体开头的模块 tag，如 [runtime] / [separation] / [merge]。
 _TAG_RE = re.compile(r"^\[([a-z_]+)\]\s*(.*)$")
 # 数字（含小数、负数）归一占位。
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """嵌入质量分析：复用 chunks.npz + 参考 RTTM，评估 embedding 的说话人可区分性。
 
-只读 npz 与 RTTM（纯 numpy，不加载任何模型、不依赖项目代码），逐文件：
+只读 npz 与 RTTM（纯 numpy，不加载任何模型；RTTM 解析复用权威实现
+separation.rttm.load_rttm，标准库级依赖），逐文件：
 
 1. 基础统计：observation 数量、embedding 维度、L2 范数、时长分布、
    与参考说话人映射的 ambiguous 比例
@@ -24,11 +25,17 @@ summary.txt，全部落在 --output 目录。
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
 
 import matplotlib
+
+# 作为脚本直接运行时 sys.path[0] 是 tools/，补仓库根以 import separation。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from separation.rttm import load_rttm as _load_rttm_turns  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -40,7 +47,7 @@ INSEPARABLE_SIM = 0.85
 
 
 def load_rttm(path: Path) -> tuple[list[tuple[float, float, str]], list[str]]:
-    """解析 RTTM 为语音段与说话人列表。
+    """解析 RTTM 为语音段与说话人列表（separation.rttm.load_rttm 的薄封装）。
 
     Args:
         path: RTTM 文件路径。
@@ -49,15 +56,12 @@ def load_rttm(path: Path) -> tuple[list[tuple[float, float, str]], list[str]]:
         (按 start 排序的语音段 [(start, end, spk)], 排序后的说话人列表)。
     """
 
-    segs = []
-    with open(path, encoding="utf-8") as file_obj:
-        for line in file_obj:
-            parts = line.split()
-            if len(parts) >= 8 and parts[0] == "SPEAKER":
-                start, dur = float(parts[3]), float(parts[4])
-                segs.append((start, start + dur, parts[7]))
+    turns = _load_rttm_turns(path)
+    segs = [
+        (start, end, spk) for spk, segments in turns.items() for start, end in segments
+    ]
     segs.sort(key=lambda s: s[0])
-    spks = sorted({s[2] for s in segs}, key=lambda x: (len(x), x))
+    spks = sorted(turns, key=lambda x: (len(x), x))
     return segs, spks
 
 
