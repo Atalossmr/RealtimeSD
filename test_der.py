@@ -2,7 +2,7 @@
 """DER 评估脚本（替代原 test_der.sh）：跑实时管线 + 对 refined RTTM（两后端通用的最终输出）计算 DER。
 
 运行参数以 `config.yaml` 为准，脚本只补充运行时必须信息和少量覆盖项。
-管线批量执行由 `pipeline.process` 完成（模型只加载一次，单文件失败
+管线批量执行由 `diarization.pipeline.process` 完成（模型只加载一次，单文件失败
 不中断整批），本脚本只负责 CLI、DER 计算与退出码。
 环境变量仍作为缺省值生效：
 
@@ -31,11 +31,15 @@ import os
 import sys
 from pathlib import Path
 
-import pipeline
-from common.config import config_from_args, merge_args_with_config
-from common.utils import collect_audio_paths
-from pipeline import run_der_evaluation
-from pipeline.cli import add_common_args, check_input_paths, env_flag
+from diarization import pipeline
+from diarization.config import config_from_args, merge_args_with_config
+from diarization.pipeline import (
+    add_common_args,
+    check_input_paths,
+    env_flag,
+    run_der_evaluation,
+)
+from diarization.utils import collect_audio_paths
 
 _TEST_NAME = "der_test"  # 输出固定在 {output_root}/der_test/{run_name}
 
@@ -44,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="实时管线 DER 评估（支持批量）",
-        allow_abbrev=False,  # 见 common/config/pipeline.py 的同名单元注释
+        allow_abbrev=False,  # 见 diarization/config/pipeline.py 的同名单元注释
     )
     parser.add_argument(
         "audio",

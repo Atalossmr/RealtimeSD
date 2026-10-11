@@ -7,7 +7,7 @@
 内部为两层组合：
 - 前端 `ChunkFrontend`（diarization/frontend/，与 extract 平级）：
   滑窗调度 + segmentation + track 构建；
-- 提取器 `RegionEmbedder`（common/models/embedding_infer.py）：
+- 提取器 `RegionEmbedder`（diarization/models/embedding_infer.py）：
   波形 + 区间 -> embedding，oracle 模式（pipeline --oracle）亦复用。
 """
 
@@ -19,13 +19,13 @@ from typing import Iterator, Optional
 
 import torch
 
-from common.speakerlab.utils.fileio import load_audio
+from diarization.speakerlab.utils.fileio import load_audio
 
-from common.config import ChunkPipelineConfig
-from common.contracts import ChunkArtifacts, ChunkObservation
-from common.models.embedding_infer import RegionEmbedder, build_region_embedder
-from common.utils.audio import prepare_mono_waveform
-from common.utils.device import resolve_device
+from diarization.config import ChunkPipelineConfig
+from diarization.contracts import ChunkArtifacts, ChunkObservation
+from diarization.models.embedding_infer import RegionEmbedder, build_region_embedder
+from diarization.utils.audio import prepare_mono_waveform
+from diarization.utils.device import resolve_device
 
 from ..frontend import ChunkFrontend, LocalTrack
 from ..utils import save_chunks

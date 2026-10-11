@@ -22,9 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
-from common.contracts import ChunkArtifacts, ChunkObservation
+from diarization.contracts import ChunkArtifacts, ChunkObservation
 
-from common.utils.paths import ensure_parent_dir
+from diarization.utils.paths import ensure_parent_dir
 
 
 def save_chunks(path: str, uri: str, artifacts: list[ChunkArtifacts]) -> None:

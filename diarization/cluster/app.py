@@ -14,12 +14,12 @@ import os
 import sys
 from pathlib import Path
 
-from common.config import (
+from diarization.config import (
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
 )
-from common.utils import setup_logger
+from diarization.utils import setup_logger
 
 from ..utils import load_chunks
 from .backends import build_clusterer

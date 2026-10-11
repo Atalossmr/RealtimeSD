@@ -47,9 +47,9 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
-from common.config import ChunkPipelineConfig
-from common.contracts import ChunkDebugInfo, ChunkObservation
-from common.utils import l2_normalize
+from diarization.config import ChunkPipelineConfig
+from diarization.contracts import ChunkDebugInfo, ChunkObservation
+from diarization.utils import l2_normalize
 
 from ..base import BaseChunkClusterer
 

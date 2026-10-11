@@ -14,8 +14,8 @@ import torch
 import math
 import torch.nn as nn
 import torch.nn.functional as F
-import common.speakerlab.models.eres2net.pooling_layers as pooling_layers
-from common.speakerlab.models.eres2net.fusion import AFF
+import diarization.speakerlab.models.eres2net.pooling_layers as pooling_layers
+from diarization.speakerlab.models.eres2net.fusion import AFF
 
 class ReLU(nn.Hardtanh):
 

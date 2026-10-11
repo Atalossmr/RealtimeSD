@@ -10,13 +10,13 @@ import logging
 import os
 import sys
 
-from common.config import (
+from diarization.config import (
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
     validate_runtime_args,
 )
-from common.utils import collect_audio_paths, setup_logger
+from diarization.utils import collect_audio_paths, setup_logger
 
 from .extractor import ChunkExtractor
 

@@ -2,7 +2,7 @@
 
 前端负责 embedding 之前的一切：滑窗/commit 区调度、pyannote
 segmentation 局部识别、local track 聚合与选区。embedding 提取由
-`common.models.embedding_infer.RegionEmbedder` 承担，两者在
+`diarization.models.embedding_infer.RegionEmbedder` 承担，两者在
 `diarization.extract.extractor.ChunkExtractor` 中组合。
 """
 
@@ -16,9 +16,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from common.config import ChunkPipelineConfig
-from common.models.segmentation_infer import PyannoteStreamingSegmentation
-from common.utils.device import resolve_device
+from diarization.config import ChunkPipelineConfig
+from diarization.models.segmentation_infer import PyannoteStreamingSegmentation
+from diarization.utils.device import resolve_device
 
 from .scheduling import iter_chunk_schedule
 from .track_builder import ChunkTrackBuilder, LocalTrack

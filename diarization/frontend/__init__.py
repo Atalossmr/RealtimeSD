@@ -2,7 +2,7 @@
 
 `ChunkFrontend`：滑窗/commit 区调度 + pyannote segmentation 局部识别 +
 local track 构建（track_builder），产出 `PreparedChunk`；embedding 提取
-（`common.models.embedding_infer.RegionEmbedder`）与本包的组合在
+（`diarization.models.embedding_infer.RegionEmbedder`）与本包的组合在
 `diarization.extract.extractor.ChunkExtractor`。
 """
 

@@ -54,8 +54,8 @@ from analyze_embeddings import best_threshold_err, dprime, pair_sims  # noqa: E4
 from compute_der import compute_der_batch  # noqa: E402
 from rttm_utils import load_rttm  # noqa: E402
 
-from common.config import ChunkPipelineConfig  # noqa: E402
-from common.contracts import ChunkObservation  # noqa: E402
+from diarization.config import ChunkPipelineConfig  # noqa: E402
+from diarization.contracts import ChunkObservation  # noqa: E402
 from diarization.cluster.post_process import write_refined_rttm  # noqa: E402
 
 
@@ -105,12 +105,12 @@ def cmd_extract(args: argparse.Namespace) -> None:
 
     import torch
 
-    from common.models.embedding_infer import (
+    from diarization.models.embedding_infer import (
         NativeERes2NetV2SegmentEmbedder,
         load_embedding_model,
     )
-    from common.speakerlab.process.processor import FBank
-    from common.speakerlab.utils.fileio import load_audio
+    from diarization.speakerlab.process.processor import FBank
+    from diarization.speakerlab.utils.fileio import load_audio
 
     config = load_base_config(args.config)
     device = torch.device(args.device)

@@ -21,8 +21,8 @@ from typing import Iterator, Optional
 import numpy as np
 import torch
 
-from common.config import ChunkPipelineConfig
-from common.utils.rttm import FrameActivity, build_frame_activities, load_rttm
+from diarization.config import ChunkPipelineConfig
+from diarization.utils.rttm import FrameActivity, build_frame_activities, load_rttm
 
 from .frontend import PreparedChunk
 from .scheduling import iter_chunk_schedule

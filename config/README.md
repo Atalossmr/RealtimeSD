@@ -7,7 +7,7 @@
 
 ## config.yaml
 
-参数按模块分组，与 `common/config/pipeline.py` 的 `ChunkPipelineConfig` 字段一一对应。
+参数按模块分组，与 `diarization/config/pipeline.py` 的 `ChunkPipelineConfig` 字段一一对应。
 下表"默认"列为仓库自带 `config.yaml` 的生效值；YAML 缺省时落回dataclass中定义的默认值。
 
 ### 运行环境
@@ -108,7 +108,7 @@ ref RTTM 驱动的 oracle 前端替代 segmentation 前端）使用。
 | --- | --- | --- |
 | `min_segment_duration` | `0.30` | RTTM 写出最短片段时长（秒），闭合时更短的 turn 丢弃 |
 | `segment_merge_gap` | `0.25` | 同 speaker 相邻片段自动拼接允许的最大间隔（秒，跨 chunk 生效）；同时是沉默闭合判据：open turn 终点距 commit_end 超过该值即闭合写出 |
-| `output_dir` | 空 | 运行时输出目录（由 CLI `--output_dir` 或 `pipeline.process` 填充），一般不写进 YAML |
+| `output_dir` | 空 | 运行时输出目录（由 CLI `--output_dir` 或 `diarization.pipeline.process` 填充），一般不写进 YAML |
 | `show_rttm` | `false` | 同步把新增 RTTM 行打印到控制台 |
 
 ### 调试

@@ -58,13 +58,13 @@ from analyze_embeddings import (  # noqa: E402
 )
 from compute_der import compute_der_batch  # noqa: E402
 
-from common.config import ChunkPipelineConfig  # noqa: E402
-from common.models.embedding_infer import (  # noqa: E402
+from diarization.config import ChunkPipelineConfig  # noqa: E402
+from diarization.models.embedding_infer import (  # noqa: E402
     NativeERes2NetV2SegmentEmbedder,
     load_embedding_model,
 )
-from common.utils.device import resolve_device  # noqa: E402
-from common.speakerlab.process.processor import FBank  # noqa: E402
+from diarization.utils.device import resolve_device  # noqa: E402
+from diarization.speakerlab.process.processor import FBank  # noqa: E402
 
 logger = logging.getLogger("separated_recluster")
 

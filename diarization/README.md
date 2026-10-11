@@ -81,15 +81,25 @@
 
 ## 模块分工
 
-包按两个阶段拆成两个顶层包，共享契约与模型代码上提 `common/`；端到端组合层
-为仓库根目录的 `pipeline/` 包（`run_diarization` 在 `pipeline/runner.py`），
-`diarization/app.py` 只是委托它的薄 CLI（入口脚本级复用，属分层例外，
-见 `pipeline/README.md`）：
+包按「底座 + 两阶段业务」组织：共享底座（配置/契约/工具/模型/vendored
+依赖）与业务实现同包；编排逻辑集中在 `diarization/pipeline.py`
+（`process` / `run_diarization` 等），`diarization/app.py`
+只是委托它的薄 CLI：
 
 ```
-diarization/           # 前端 + 嵌入提取 + 聚类 + RTTM 输出
-  app.py               # 端到端 CLI（python3 -m diarization.app，委托 pipeline.run_diarization）
-  utils/               # chunk_io：两阶段中间文件 <stem>.chunks.npz 存取（通用工具已上提 common/utils）
+diarization/           # 底座 + 前端 + 嵌入提取 + 聚类 + RTTM 输出
+  app.py               # 端到端 CLI（python3 -m diarization.app，委托 diarization.pipeline.run_diarization）
+  pipeline.py          # 编排层：process（单/批量公开入口）/ DiarizationRunner / run_diarization /
+                       #   run_der_evaluation（DER 评估）/ 入口脚本 CLI 辅助（add_common_args 等）
+  constants.py         # 路径常量（BASE_DIR）
+  config/              # 配置体系：base（通用 YAML/CLI 合并机制）+ pipeline（ChunkPipelineConfig + 管线 CLI helper）
+  contracts/           # chunk 管线共享数据契约：schema（ChunkObservation / ChunkArtifacts / 调试 TypedDict）+
+                       #   frames（commit 区帧裁剪，RTTM writer 使用；oracle 实验脚本镜像同口径）
+  utils/               # 通用工具（log / paths / numeric / device / audio / rttm）+
+                       #   chunk_io：两阶段中间文件 <stem>.chunks.npz 存取
+  models/              # 模型封装：embedding_infer（ERes2NetV2 + RegionEmbedder）/ segmentation_infer（pyannote）/
+                       #   hf_resolver / modelscope（模型缓存解析）
+  speakerlab/          # vendored：3D-Speaker 依赖（ERes2NetV2 / FBank / fileio）+ md-eval.pl
   frontend/            # 子模块 1：extract 前端（embedding 之前的一切，与 extract 平级）
     frontend.py        #   ChunkFrontend：滑窗调度 + segmentation + track 构建，产 PreparedChunk
     oracle.py          #   OracleFrontend：ref RTTM 驱动的 oracle 前端（无模型，--oracle 模式）
@@ -107,22 +117,12 @@ diarization/           # 前端 + 嵌入提取 + 聚类 + RTTM 输出
       fastdiar.py      #     FastdiarChunkClusterer：fastdiar 风格在线聚类（中位数质心 + 连通分量并簇）
     rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加；SpeakerTurn 定义于此）
     post_process.py    #   refined 级输出（RefinedRTTMWriter，merge 事件即时重生成 + 周期兜底刷新）+ 小样本簇强制合并（ahc finalize 内重映射）
-    runner.py          #   run_clustering：聚类消费循环（pipeline 与 cluster/app 共用）
+    runner.py          #   run_clustering：聚类消费循环（pipeline.py 与 cluster/app 共用）
     app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
-
-common/
-  constants.py         # 路径常量（BASE_DIR）
-  config/              # 配置体系：base（通用 YAML/CLI 合并机制）+ pipeline（ChunkPipelineConfig + 管线 CLI helper）
-  contracts/           # chunk 管线共享数据契约：schema（ChunkObservation / ChunkArtifacts / 调试 TypedDict）+
-                       #   frames（commit 区帧裁剪，RTTM writer 使用；oracle 实验脚本镜像同口径）
-  utils/               # 通用工具：log（setup_logger / log_structured）/ paths / numeric / device / audio（重采样）/ rttm（RTTM 解析）
-  models/              # 模型封装：embedding_infer（ERes2NetV2 + RegionEmbedder）/ segmentation_infer（pyannote）/
-                       #   hf_resolver / modelscope（模型缓存解析）
-  speakerlab/          # vendored：3D-Speaker 依赖（ERes2NetV2 / FBank / fileio）+ md-eval.pl
 ```
 
-- 共享契约（contracts / config / models / utils）统一从 `common` 取，由
-  `pipeline/` 组合层做接线。
+- 共享契约（contracts / config / models / utils）统一从本包底座子包取，
+  由 `diarization/pipeline.py` 编排层做接线。
 - 若要新增聚类方法，则需在 `cluster/backends/` 下新建模块实现 `BaseChunkClusterer`（具体接口见 `cluster/base.py`）并在 `build_clusterer` 注册。
 
 ## 输入输出与调试
@@ -148,7 +148,7 @@ python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --conf
 ### CLI 参数
 
 两个分阶段入口（`diarization.extract.app` 提取 / `diarization.cluster.app` 聚类）
-与端到端入口 `diarization.app` 共用 `common/config/pipeline.py` 的同一个
+与端到端入口 `diarization.app` 共用 `diarization/config/pipeline.py` 的同一个
 参数解析器（完整编排入口为仓库根目录的 `run.py`）。全部调参项以 `config/config.yaml`
 为唯一来源（逐项说明见
 `config/README.md`），CLI 仅保留运行时输入、模型/环境覆盖与开关；合并优先级：

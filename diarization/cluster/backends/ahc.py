@@ -12,8 +12,8 @@ from typing import Optional
 
 import numpy as np
 
-from common.config import ChunkPipelineConfig
-from common.contracts import ChunkDebugInfo, ChunkObservation
+from diarization.config import ChunkPipelineConfig
+from diarization.contracts import ChunkDebugInfo, ChunkObservation
 
 from ..base import BaseChunkClusterer
 from ..post_process import cluster_stats

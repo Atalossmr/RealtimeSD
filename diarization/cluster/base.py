@@ -19,7 +19,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
-from common.contracts import ChunkDebugInfo, ChunkObservation
+from diarization.contracts import ChunkDebugInfo, ChunkObservation
 
 if TYPE_CHECKING:
     import numpy as np

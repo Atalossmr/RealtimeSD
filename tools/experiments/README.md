@@ -80,7 +80,7 @@
 ## 实现要点
 
 - `oracle_tracks.py` / `ahc_oracle_k.py` 镜像 writer 的帧判定（`score > 0`、commit 区
-  裁剪，见 `common/contracts/frames.py`）重放 `AppendOnlyRTTMWriter`，保证与管线
+  裁剪，见 `diarization/contracts/frames.py`）重放 `AppendOnlyRTTMWriter`，保证与管线
   输出同口径；缺失 local（无活跃帧/无 embedding）不进 mapping，writer 会丢帧。
 - `oracle_segments.py extract` 的 4s 截断只作用于喂 embedding 的音频，npz 中保存
   完整 turn 区间供 cluster 步写 RTTM（截断区间会直接凭空贡献 MS，已踩过坑）。

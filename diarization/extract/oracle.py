@@ -12,7 +12,7 @@ from typing import Iterator
 
 import torch
 
-from common.contracts import ChunkArtifacts
+from diarization.contracts import ChunkArtifacts
 
 from ..frontend import ChunkTrackBuilder, PreparedChunk
 from .extractor import embed_tracks
@@ -28,7 +28,7 @@ def oracle_chunk_artifacts(
 
     embedding 提取复用 embed_tracks，与实时前端路径行为一致。
     region_embedder 由调用方构建（如
-    common.models.embedding_infer.build_region_embedder）。
+    diarization.models.embedding_infer.build_region_embedder）。
 
     Args:
         prepared_chunks: OracleFrontend.iter_prepared_chunks 的输出。

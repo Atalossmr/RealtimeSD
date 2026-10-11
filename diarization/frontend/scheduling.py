@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterator
 
-from common.config import ChunkPipelineConfig
+from diarization.config import ChunkPipelineConfig
 
 
 @dataclass

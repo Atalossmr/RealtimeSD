@@ -4,7 +4,7 @@
 
     python -m diarization.app --wav <音频> --output_dir <目录> [--config ...]
 
-主体复用组合层 `pipeline.run_diarization`，避免复制组合逻辑。仅接受单个音频文件
+主体复用编排层 `diarization.pipeline.run_diarization`，避免复制组合逻辑。仅接受单个音频文件
 （与 run.py 一致，不做目录批量）；RTTM-only，ahc 后端也可用。
 """
 
@@ -15,14 +15,14 @@ import os
 import sys
 from pathlib import Path
 
-from common.config import (
+from diarization.config import (
     build_arg_parser,
     config_from_args,
     merge_args_with_config,
     validate_runtime_args,
 )
-from common.utils import setup_logger
-from pipeline import run_diarization
+from diarization.pipeline import run_diarization
+from diarization.utils import setup_logger
 
 
 logger = logging.getLogger(__name__)

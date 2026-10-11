@@ -15,8 +15,8 @@ from .modelscope import resolve_modelscope_snapshot
 
 from ..constants import BASE_DIR
 from ..utils.device import resolve_device
-from common.speakerlab.models.eres2net.ERes2NetV2 import ERes2NetV2
-from common.speakerlab.process.processor import FBank
+from diarization.speakerlab.models.eres2net.ERes2NetV2 import ERes2NetV2
+from diarization.speakerlab.process.processor import FBank
 
 if TYPE_CHECKING:
     from ..config import ChunkPipelineConfig

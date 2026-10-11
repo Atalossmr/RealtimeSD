@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""实时 diarization 一键运行 CLI（薄封装：编排本体在 `pipeline.process`）。
+"""实时 diarization 一键运行 CLI（薄封装：编排本体在 `diarization.pipeline.process`）。
 
 本脚本只负责：argparse 与环境变量缺省、CLI/YAML 配置合并。管线本体
-（输出目录、结果汇总）见 pipeline.api。管线就是「音频 → RTTM」。
+（输出目录、结果汇总）见 diarization/pipeline.py。管线就是「音频 → RTTM」。
 
 环境变量作为对应命令行参数的缺省值：
 
@@ -24,10 +24,10 @@ import argparse
 import sys
 from pathlib import Path
 
-import pipeline
-from common.config import config_from_args, merge_args_with_config
-from common.utils import collect_audio_paths
-from pipeline.cli import add_common_args, check_input_paths, env_flag
+from diarization import pipeline
+from diarization.config import config_from_args, merge_args_with_config
+from diarization.pipeline import add_common_args, check_input_paths, env_flag
+from diarization.utils import collect_audio_paths
 
 _TEST_NAME = "common"  # 输出固定在 {output_root}/common/{run_name}
 
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="实时 diarization 一键运行（音频 → RTTM）",
-        allow_abbrev=False,  # 见 common/config/pipeline.py 的同名单元注释
+        allow_abbrev=False,  # 见 diarization/config/pipeline.py 的同名单元注释
     )
     parser.add_argument(
         "audio",

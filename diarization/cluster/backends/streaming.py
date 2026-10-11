@@ -21,9 +21,9 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from common.config import ChunkPipelineConfig
-from common.contracts import ChunkDebugInfo, ChunkObservation
-from common.utils import l2_normalize
+from diarization.config import ChunkPipelineConfig
+from diarization.contracts import ChunkDebugInfo, ChunkObservation
+from diarization.utils import l2_normalize
 
 from ..base import BaseChunkClusterer, resolve_merged
 

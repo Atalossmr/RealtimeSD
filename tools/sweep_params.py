@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from compute_der import compute_der_batch  # noqa: E402
 
-from common.config import ChunkPipelineConfig  # noqa: E402
+from diarization.config import ChunkPipelineConfig  # noqa: E402
 from diarization.cluster.backends import build_clusterer  # noqa: E402
 from diarization.cluster.post_process import write_refined_rttm  # noqa: E402
 from diarization.cluster.runner import run_clustering  # noqa: E402

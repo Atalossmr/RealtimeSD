@@ -2,7 +2,7 @@
 
 当前唯一消费者是 `diarization/cluster/rttm_writer.py`；tools/experiments/
 的 oracle 实验脚本镜像同一判定口径（见其 docstring），因此实现留在
-common.contracts 作为单一口径来源。
+diarization.contracts 作为单一口径来源。
 """
 
 from __future__ import annotations

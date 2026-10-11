@@ -6,7 +6,7 @@
 对每个 local slot 统计其活跃帧落在各参考说话人区间内的帧数，取覆盖帧数最多
 的说话人作为该 local 的 oracle global id（ref 说话人名按字典序映射为
 0..k-1）。无活跃帧或活跃帧完全无真值覆盖的 local 不放入 local_to_global
-（writer 对缺失 local 的帧直接丢弃，见 common/contracts/frames.py）。随后按
+（writer 对缺失 local 的帧直接丢弃，见 diarization/contracts/frames.py）。随后按
 chunk 顺序
 重放 AppendOnlyRTTMWriter（consume_chunk + close_inactive + finalize），
 得到的 DER 即"当前分割帧决策 + 完美说话人分配"的下限（分割层天花板）。
@@ -36,8 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from compute_der import compute_der_batch  # noqa: E402
 from rttm_utils import load_rttm  # noqa: E402
 
-from common.config import ChunkPipelineConfig  # noqa: E402
-from common.contracts import ChunkArtifacts  # noqa: E402
+from diarization.config import ChunkPipelineConfig  # noqa: E402
+from diarization.contracts import ChunkArtifacts  # noqa: E402
 from diarization.cluster.rttm_writer import AppendOnlyRTTMWriter  # noqa: E402
 from diarization.utils.chunk_io import load_chunks  # noqa: E402
 

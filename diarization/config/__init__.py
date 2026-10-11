@@ -1,7 +1,7 @@
 """配置体系：通用 YAML/CLI 合并机制（base）与管线配置（pipeline）。
 
 `merge_args_with_config` 在包级别指向管线版（3 参便捷封装）；通用机制版
-（带 `default_config_path` / `config_type` 关键字参数）经 `common.config.base`
+（带 `default_config_path` / `config_type` 关键字参数）经 `diarization.config.base`
 取用。
 """
 

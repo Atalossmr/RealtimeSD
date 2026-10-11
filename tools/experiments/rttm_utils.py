@@ -1,6 +1,6 @@
 """上限实验（tools/experiments/）的共享工具：RTTM 解析与区间运算。
 
-RTTM 解析的权威实现是 `common.utils.rttm.load_rttm`（返回结构相同：
+RTTM 解析的权威实现是 `diarization.utils.rttm.load_rttm`（返回结构相同：
 {speaker: [(start, end), ...]}，按 start 排序），此处 re-export 以兼容
 既有 `from rttm_utils import load_rttm` 的写法；本模块自身只保留区间运算。
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 # 保证 common 可 import（不依赖调用方的 sys.path 设置顺序）。
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from common.utils.rttm import load_rttm  # noqa: E402
+from diarization.utils.rttm import load_rttm  # noqa: E402
 
 
 def union_duration(segments: list[tuple[float, float]]) -> float:

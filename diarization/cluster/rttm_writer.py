@@ -20,8 +20,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from common.contracts import iter_commit_frames
-from common.utils import ensure_parent_dir
+from diarization.contracts import iter_commit_frames
+from diarization.utils import ensure_parent_dir
 
 
 logger = logging.getLogger(__name__)
