@@ -166,6 +166,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="pyannote/segmentation-3.0",
         help="pyannote segmentation 模型名",
     )
+    parser.add_argument(
+        "--oracle",
+        action="store_true",
+        help="oracle 模式：用 --ref 的参考 RTTM 替代 segmentation 前端"
+        "（不加载 segmentation 模型），用于上限实验",
+    )
+    parser.add_argument(
+        "--ref",
+        default=None,
+        help="oracle 模式的参考 RTTM：单文件给 RTTM 路径，批量给含 "
+        "{uri}.rttm 的目录；--oracle 时必填",
+    )
     parser.add_argument("--hf_token", default=None, help="Hugging Face token")
     parser.add_argument(
         "--hf_cache_dir",

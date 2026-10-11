@@ -6,8 +6,8 @@ test_der.py 均为其薄 CLI 封装；`DiarizationRunner` 为组合执行核心
 计算 DER；`add_common_args` 等为入口脚本共用的 CLI 辅助。
 
 oracle 模式（--oracle --ref）：用 ref RTTM 驱动的 OracleFrontend 替代
-segmentation 前端（不加载 segmentation 模型），与
-`diarization.extract.oracle.oracle_chunk_artifacts` 组合后走同一
+segmentation 前端（不加载 segmentation 模型），经
+`diarization.extract.oracle.OracleChunkExtractor` 组合后走同一
 聚类/输出路径，用于上限实验。
 
 归属判断标准：需要知道 ≥2 个模块协作语义的代码归这里；纯通用机制或
@@ -38,12 +38,9 @@ from .config import ChunkPipelineConfig, load_config_and_runtime
 from .constants import BASE_DIR
 from .contracts import ChunkArtifacts, ChunkDebugInfo, ChunkObservation
 from .extract.extractor import ChunkExtractor
-from .extract.oracle import oracle_chunk_artifacts
-from .frontend import ChunkTrackBuilder, OracleFrontend
-from .models.embedding_infer import build_region_embedder
+from .extract.oracle import OracleChunkExtractor, resolve_ref_rttm
 from .speakerlab.utils.fileio import load_audio
 from .utils import log_structured, setup_logger
-from .utils.audio import prepare_mono_waveform
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +447,7 @@ class DiarizationRunner:
         config: 管线配置。
         oracle: 是否 oracle 模式（ref RTTM 替代 segmentation 前端）。
         extractor: 正常模式的 chunk 提取器（oracle 模式为 None）。
+        oracle_extractor: oracle 模式的 chunk 提取器（正常模式不构建）。
     """
 
     def __init__(
@@ -463,44 +461,17 @@ class DiarizationRunner:
         Args:
             config: 管线配置。
             model_path: 显式模型路径覆盖。
-            oracle: True 时用 OracleFrontend（无 segmentation 模型）+
-                RegionEmbedder 组合替代 ChunkExtractor。
+            oracle: True 时用 OracleChunkExtractor（OracleFrontend +
+                RegionEmbedder，无 segmentation 模型）替代 ChunkExtractor。
         """
 
         self.config = config
         self.oracle = oracle
         if oracle:
             self.extractor = None
-            self.oracle_frontend = OracleFrontend(config)
-            self.region_embedder = build_region_embedder(config, model_path)
-            self.track_builder = ChunkTrackBuilder(config)
+            self.oracle_extractor = OracleChunkExtractor(config, model_path)
         else:
             self.extractor = ChunkExtractor(config, model_path)
-
-    @staticmethod
-    def _resolve_ref_rttm(ref: Optional[str], audio_path: str) -> str:
-        """解析当前音频对应的参考 RTTM 路径。
-
-        Args:
-            ref: --ref 传入的路径（RTTM 文件或含 {uri}.rttm 的目录）。
-            audio_path: 当前音频路径（uri 取其文件名主干）。
-
-        Returns:
-            参考 RTTM 路径。
-
-        Raises:
-            ValueError: oracle 模式未提供 --ref，或按目录解析的 RTTM 不存在。
-        """
-
-        if ref is None:
-            raise ValueError("oracle 模式需要 --ref 指定参考 RTTM（文件或目录）")
-        ref_path = Path(ref)
-        if ref_path.is_dir():
-            candidate = ref_path / f"{Path(audio_path).stem}.rttm"
-            if not candidate.is_file():
-                raise ValueError(f"参考 RTTM 不存在: {candidate}")
-            return str(candidate)
-        return str(ref_path)
 
     def process_file(
         self, audio_path: str, exp_dir: Path, ref: Optional[str] = None
@@ -523,16 +494,8 @@ class DiarizationRunner:
 
         waveform = load_audio(audio_path, obj_fs=config.sample_rate)
         if self.oracle:
-            ref_rttm = self._resolve_ref_rttm(ref, audio_path)
-            waveform = prepare_mono_waveform(
-                waveform, config.sample_rate, config.sample_rate
-            )
-            artifacts = oracle_chunk_artifacts(
-                self.oracle_frontend.iter_prepared_chunks(waveform, ref_rttm),
-                waveform,
-                self.region_embedder,
-                self.track_builder,
-            )
+            ref_rttm = resolve_ref_rttm(ref, audio_path)
+            artifacts = self.oracle_extractor.iter_chunk_artifacts(waveform, ref_rttm)
         else:
             waveform = self.extractor.prepare_waveform(waveform, config.sample_rate)
             artifacts = self.extractor.iter_chunk_artifacts(waveform)

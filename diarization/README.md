@@ -108,6 +108,7 @@ diarization/           # 底座 + 前端 + 嵌入提取 + 聚类 + RTTM 输出
   extract/             # 子模块 2：嵌入提取
     extractor.py       #   ChunkExtractor：前端 + RegionEmbedder 的组合 facade（chunk 生产唯一来源）
     oracle.py          #   oracle_chunk_artifacts：oracle 前端 + RegionEmbedder -> ChunkArtifacts
+                       #   OracleChunkExtractor：oracle 模式的 chunk 提取器（与 ChunkExtractor 对偶）
     app.py             #   提取阶段 CLI（python3 -m diarization.extract.app）
   cluster/             # 子模块 3：聚类与输出
     base.py            #   后端接口 BaseChunkClusterer
@@ -139,6 +140,9 @@ python3 -m diarization.app --wav <音频> --output_dir <dir> --config config/con
 # 阶段 1：嵌入提取（产出 embeddings/<stem>.chunks.npz）
 python3 -m diarization.extract.app --wav <音频> --output_dir <dir> --config config/config.yaml
 
+# 阶段 1（oracle 上限实验）：ref RTTM 替代 segmentation 前端，不加载 segmentation 模型
+python3 -m diarization.extract.app --wav <音频> --output_dir <dir> --oracle --ref <rttm或目录>
+
 # 阶段 2：聚类 + RTTM 输出（需要阶段1输出的npz，输出写入 <dir>/rttm/）
 python3 -m diarization.cluster.app --input <dir或npz> --output_dir <dir> --config config/config.yaml
 ```
@@ -164,6 +168,8 @@ argparse 默认值 < YAML 配置 < 显式 CLI 参数。
 | `--device` | 运行设备（`auto`/`cpu`/`cuda:0`），默认 `auto`；cluster 阶段不加载模型，无需设置 |
 | `--model_type` | speaker encoder 类型，当前仅支持 `eres2netv2` |
 | `--segmentation_model` | pyannote segmentation 模型名（仅 extract 阶段使用） |
+| `--oracle` | oracle 模式：用 `--ref` 的参考 RTTM 替代 segmentation 前端（`extract.app` 与 `run.py`；上限实验用） |
+| `--ref` | oracle 模式的参考 RTTM：单文件给 RTTM 路径，批量给含 `{uri}.rttm` 的目录；`--oracle` 时必填 |
 | `--hf_token` | Hugging Face token |
 | `--hf_cache_dir` | Hugging Face 模型缓存目录，默认仓库内 `pretrained/huggingface` |
 | `--show_rttm` | 把新生成的 RTTM 行同步输出到控制台 |

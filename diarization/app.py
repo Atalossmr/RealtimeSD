@@ -47,6 +47,12 @@ def main() -> None:
     run_log_path = os.path.join(args.output_dir, "logs", "run.log")
     setup_logger(bool(getattr(args, "verbose", False)), run_log_path)
 
+    if args.oracle:
+        # 端到端入口不支持 oracle：分段入口用 extract.app --oracle，
+        # 完整编排入口用仓库根的 run.py --oracle；静默忽略会产出正常前端的结果。
+        parser.error("diarization.app 不支持 --oracle，请用 run.py --oracle"
+                     " 或 python -m diarization.extract.app --oracle")
+
     logger.info("Run log is written to %s", run_log_path)
     logger.info("Processing %s", audio)
     rttm_path = run_diarization(
