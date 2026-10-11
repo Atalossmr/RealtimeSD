@@ -52,7 +52,7 @@
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `clustering_backend` | `streaming` | `streaming`（增量聚类，纯流式）/ `ahc`（离线层次聚类：缓冲全部 embedding，音频结束一次聚类再重放输出）。新后端实现 `cluster/base.py` 接口并在 `build_clusterer` 注册即可 |
+| `clustering_backend` | `streaming` | `streaming`（增量聚类，纯流式）/ `ahc`（离线层次聚类：缓冲全部 embedding，音频结束一次聚类再重放输出）/ `fastdiar`（fastdiar 风格在线聚类：中位数质心 + 连通分量并簇）。新后端实现 `cluster/base.py` 接口并在 `build_clusterer` 注册即可 |
 
 ### cluster 阶段：streaming 后端
 
@@ -75,6 +75,16 @@
 | --- | --- | --- |
 | `ahc_similarity_threshold` | `0.40` | AHC 余弦相似度阈值。 |
 | `ahc_linkage` | `average` | AHC 连接方式：`average` / `complete` / `single` |
+
+### cluster 阶段：fastdiar 后端
+
+以下参数仅 `clustering_backend: fastdiar` 时生效（括号内为对应 fastdiar OnlineClustering 的参数名）。
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `fastdiar_assign_threshold` | `0.45` | 指派阈值（clust_th）：observation 与最近质心相似度 ≥ 此值判 `matched`，否则尝试开新簇 |
+| `fastdiar_confidence_threshold` | `0.65` | anchor 置信阈值（confidence）：`matched` 且相似度 ≥ 此值才作为 anchor 追加并更新质心（中位数） |
+| `fastdiar_merge_threshold` | `0.80` | 连通分量并簇阈值（merge_th）：新建 speaker 后，质心相似度 > 此值的连通分量整组并簇；过低会过度并簇（false glue）抬高 SER |
 
 ### cluster 阶段：后处理（小样本簇强制合并）
 

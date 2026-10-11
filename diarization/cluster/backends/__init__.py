@@ -10,6 +10,7 @@ from common.config import ChunkPipelineConfig
 
 from ..base import BaseChunkClusterer
 from .ahc import AHCChunkClusterer
+from .fastdiar import FastdiarChunkClusterer
 from .streaming import StreamingChunkClusterer
 
 
@@ -23,7 +24,7 @@ def build_clusterer(config: ChunkPipelineConfig) -> BaseChunkClusterer:
         对应后端的 BaseChunkClusterer 实例。
 
     Raises:
-        ValueError: clustering_backend 不是 'streaming' 或 'ahc'。
+        ValueError: clustering_backend 不是 'streaming'、'ahc' 或 'fastdiar'。
     """
 
     backend = str(config.clustering_backend)
@@ -31,8 +32,11 @@ def build_clusterer(config: ChunkPipelineConfig) -> BaseChunkClusterer:
         return StreamingChunkClusterer(config)
     if backend == "ahc":
         return AHCChunkClusterer(config)
+    if backend == "fastdiar":
+        return FastdiarChunkClusterer(config)
     raise ValueError(
-        f"Unknown clustering_backend: {backend!r} (expected 'streaming' or 'ahc')"
+        f"Unknown clustering_backend: {backend!r} "
+        "(expected 'streaming', 'ahc' or 'fastdiar')"
     )
 
 
@@ -40,4 +44,5 @@ __all__ = [
     "build_clusterer",
     "StreamingChunkClusterer",
     "AHCChunkClusterer",
+    "FastdiarChunkClusterer",
 ]

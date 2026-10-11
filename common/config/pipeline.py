@@ -93,6 +93,12 @@ class ChunkPipelineConfig:
     ahc_similarity_threshold: float = 0.40
     ahc_linkage: str = "average"
 
+    # ---- cluster 阶段：fastdiar 后端（仅 clustering_backend: fastdiar 时生效） ----
+    # 对应 fastdiar OnlineClustering 的 clust_th / confidence / merge_th。
+    fastdiar_assign_threshold: float = 0.45
+    fastdiar_confidence_threshold: float = 0.65
+    fastdiar_merge_threshold: float = 0.80
+
     # ---- cluster 阶段：后处理 ----
     post_merge_min_count: int = 8
     post_merge_min_similarity: float = 0.0
@@ -242,6 +248,14 @@ def _validate_and_normalize(config: ChunkPipelineConfig) -> ChunkPipelineConfig:
         raise ValueError("hop_duration must be in (0, chunk_duration]")
     if config.max_segment_duration <= 0.0:
         raise ValueError("max_segment_duration must be > 0")
+    for name in (
+        "fastdiar_assign_threshold",
+        "fastdiar_confidence_threshold",
+        "fastdiar_merge_threshold",
+    ):
+        value = getattr(config, name)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be in [0, 1]")
 
     if config.hf_cache_dir:
         # YAML 中的相对路径（如 ./pretrained/huggingface）按仓库根目录解析，

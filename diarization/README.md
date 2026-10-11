@@ -10,15 +10,15 @@
 2. 按 `hop_duration` 沿时间轴推进，每次切出 `chunk_duration`（默认 10s）窗口
 3. 对窗口运行 `pyannote/segmentation-3.0`，得到帧级多标签分数（局部 ≤3 人、帧级 ≤2 人，含重叠）
 4. 聚合每个local slot的非重叠语音区，整体提取一个embedding；纯净区不足时回退到 `overlap_fallback`，将重叠区域也加入语音区计算。
-5. clusterer 负责进行local->global分配（后端可替换，见 `diarization/cluster/backends/`，项目内置了streaming和ahc两种）。默认的streaming后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；此外每次加入新片段后按 `merge_threshold` 尝试合并最相似的一对 speaker（小并入大）
+5. clusterer 负责进行local->global分配（后端可替换，见 `diarization/cluster/backends/`，项目内置了 streaming、ahc、fastdiar 三种）。默认的streaming后端用 Hungarian 做联合分配，按阈值判定 `matched/new/fallback`，SMA 更新 centroid；此外每次加入新片段后按 `merge_threshold` 尝试合并最相似的一对 speaker（小并入大）
 6. 只提交窗口中段 `hop_duration` 秒的帧级结果：streaming 后端即时进入 open-turn 写出管线（raw 级），无缓冲、无延迟确认；ahc 后端（deferred，离线）逐 chunk 暂存帧参数，音频结束统一聚类后用同一 writer 逻辑重放
-7. refined级：`post_process.RefinedRTTMWriter` 读取 raw RTTM + 当前 `merged_into`/centroid/counts 状态整体重生成 `*.refined.rttm`；streaming 在流式期间发生 merge 事件时即时刷新（修正 merge 前写出的旧身份行），无 merge 时按固定 chunk 间隔兜底刷新（避免逐 chunk 全量重写的 O(n²) I/O），ahc 无流式 merge、EOF 重放完成后刷新；两者 EOF 最终刷新均叠加小样本强制合并（`post_merge_min_count > 0` 时生效）
+7. refined级：`post_process.RefinedRTTMWriter` 读取 raw RTTM + 当前 `merged_into`/centroid/counts 状态整体重生成 `*.refined.rttm`；streaming / fastdiar 在流式期间发生 merge 事件时即时刷新（修正 merge 前写出的旧身份行），无 merge 时按固定 chunk 间隔兜底刷新（避免逐 chunk 全量重写的 O(n²) I/O），ahc 无流式 merge、EOF 重放完成后刷新；三者 EOF 最终刷新均叠加小样本强制合并（`post_merge_min_count > 0` 时生效）
 8. 音频结束：闭合全部 open turn，writer 纯追加收尾。
 
 链路分层：
 
 - `track_builder`：chunk 内 local track 聚合与 embedding 门控
-- `backends`：聚类后端（streaming / ahc）与工厂，`base` 为后端接口
+- `backends`：聚类后端（streaming / ahc / fastdiar）与工厂，`base` 为后端接口
 - `rttm_writer`：零重写 raw RTTM 写出（open-turn 管线）
 - `post_process`：refined 级输出 + 小样本簇强制合并后处理
 
@@ -73,6 +73,12 @@
 
 相关代码：`diarization/cluster/rttm_writer.py`
 
+### 5) fastdiar 后端（可选）
+
+仿 fastdiar 的 OnlineClustering（帧级在线聚类）适配到 observation 级：贪心取最近质心（不用 Hungarian），相似度 ≥ `fastdiar_assign_threshold` 判 `matched`（对应 fastdiar 的 clust_th），否则满足建簇条件时开新簇、不满足时无阈值兜底强制指派最近质心（`forced`，不更新质心，保证观测不丢）；只有相似度 ≥ `fastdiar_confidence_threshold`（对应 fastdiar 的 confidence 门控）且允许更新的 matched 观测才作为 anchor 追加，质心 = anchor embedding 逐维中位数（L2 归一化）；每次新建 speaker 后按 `fastdiar_merge_threshold`（对应 fastdiar 的 merge_th）在质心相似度图上取连通分量整组并簇（survivor = anchor 数最多者）。与 fastdiar 的差异：无自我纠正窗口（流式契约要求一次定案）、置信度为段级代理。参数均仅 `clustering_backend: fastdiar` 时生效，见 `config/README.md`。
+
+相关代码见`diarization/cluster/backends/fastdiar.py`
+
 ## 模块分工
 
 包按两个阶段拆成两个顶层包，共享契约与模型代码上提 `common/`；端到端组合层
@@ -93,6 +99,7 @@ diarization/           # 嵌入提取 + 聚类 + RTTM 输出
     backends/          #   内置后端与工厂 build_clusterer
       streaming.py     #     StreamingChunkClusterer：默认 streaming 后端（Hungarian + SMA，一次定案）
       ahc.py           #     AHCChunkClusterer：离线层次聚类后端
+      fastdiar.py      #     FastdiarChunkClusterer：fastdiar 风格在线聚类（中位数质心 + 连通分量并簇）
     rttm_writer.py     #   零重写 RTTM 写出（open-turn 管线，finalize 纯追加；SpeakerTurn 定义于此）
     post_process.py    #   refined 级输出（RefinedRTTMWriter，merge 事件即时重生成 + 周期兜底刷新）+ 小样本簇强制合并（ahc finalize 内重映射）
     runner.py          #   run_clustering：聚类消费循环（pipeline 与 cluster/app 共用）
@@ -187,9 +194,9 @@ argparse 默认值 < YAML 配置 < 显式 CLI 参数。
 
 输出目录按内容类型分子文件夹。每个输入音频默认输出：
 
-- `rttm/*.raw.rttm`（两后端的 raw 级文件名后缀均为 `raw`）
+- `rttm/*.raw.rttm`（各后端的 raw 级文件名后缀均为 `raw`）
 - `rttm/*.refined.rttm`（经过后处理的最终输出）
-- `rttm/*.speakers.json`（两后端通用；refined 级 sidecar）
+- `rttm/*.speakers.json`（各后端通用；refined 级 sidecar）
 - `embeddings/*.chunks.npz`（仅提取阶段 `python3 -m diarization.extract.app` 产出）
 - `logs/run.log`
 
@@ -203,7 +210,7 @@ refined RTTM，详见 `separation/README.md`）。
 
 #### `rttm/{uri}.raw.rttm` + `rttm/{uri}.refined.rttm`
 
-- raw 级（`.raw.rttm`，两后端统一）：append-only 零重写，行写出即最终；refined：整体重生成（原子替换），merge 历史修正（仅 streaming 有流式 merge）+ EOF 小样本合并后的最终输出，**下游应消费 refined**；
+- raw 级（`.raw.rttm`，各后端统一）：append-only 零重写，行写出即最终；refined：整体重生成（原子替换），merge 历史修正（streaming / fastdiar 有流式 merge）+ EOF 小样本合并后的最终输出，**下游应消费 refined**；
 - 行格式（标准 RTTM）：`SPEAKER <uri> 0 <start> <dur> <NA> <NA> <speaker global id> <NA> <NA>`。
 
 #### `rttm/{uri}.speakers.json`（refined 级 sidecar）
@@ -224,7 +231,7 @@ refined RTTM，详见 `separation/README.md`）。
 
 - `speakers[].id` = global id（与 RTTM 行内的 speaker 字段同源）；
 - `duration`：总发声时长（秒，展示用）；被并 speaker 置 `null`（时长已计入幸存者）；
-- `count`：样本计数（streaming 为有效 centroid 更新次数）；被并 speaker 置 `null`；
+- `count`：样本计数（streaming 为有效 centroid 更新次数，fastdiar 为 anchor 数）；被并 speaker 置 `null`；
 - `uncertain`：`post_merge_min_count > 0` 且未合并、计数未达标；
 - `merged_into`：最终幸存 global id（含流式 merge 链 + post-merge 两级），未并时为 `null`；
 - `merge_events[].kind`：`merge`（流式期间）/ `post_merge`（EOF 小样本强制合并）；
