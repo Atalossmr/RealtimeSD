@@ -1,7 +1,10 @@
 """diarization 执行器：extract + cluster + RTTM 的组合核心。
 
-DiarizationRunner 持有 ChunkExtractor（模型只加载一次，可连续处理多条
-音频），每条音频独立构建 clusterer / writer（状态不跨文件）。
+DiarizationRunner 持有提取侧模型（只加载一次，可连续处理多条音频），
+每条音频独立构建 clusterer / writer（状态不跨文件）。
+
+oracle 模式（--oracle）：用 ref RTTM 驱动的 OracleFrontend 替代
+segmentation 前端，不加载 segmentation 模型，用于上限实验。
 """
 
 from __future__ import annotations
@@ -15,12 +18,16 @@ from common.speakerlab.utils.fileio import load_audio
 
 from common.config import ChunkPipelineConfig
 from common.contracts import ChunkArtifacts, ChunkDebugInfo, ChunkObservation
+from common.models.embedding_infer import build_region_embedder
 from common.utils import log_structured
+from common.utils.audio import prepare_mono_waveform
 from diarization.cluster.backends import build_clusterer
 from diarization.cluster.post_process import RefinedRTTMWriter
 from diarization.cluster.rttm_writer import AppendOnlyRTTMWriter
 from diarization.cluster.runner import run_clustering
 from diarization.extract.extractor import ChunkExtractor
+from diarization.extract.oracle import oracle_chunk_artifacts
+from diarization.frontend import ChunkTrackBuilder, OracleFrontend
 
 logger = logging.getLogger(__name__)
 
@@ -87,34 +94,75 @@ def _log_debug_chunk(
 class DiarizationRunner:
     """可复用的 diarization 执行器：模型加载一次，可连续处理多条音频。
 
-    每条音频独立构建 clusterer / writer（状态不跨文件），仅 extractor
-    持有的模型（segmentation + embedding）跨文件复用。
+    每条音频独立构建 clusterer / writer（状态不跨文件），仅提取侧持有的
+    模型跨文件复用（正常模式：segmentation + embedding；oracle 模式：仅
+    embedding）。
 
     Attributes:
         config: 管线配置。
-        extractor: 持有模型的 chunk 提取器，跨文件复用。
+        oracle: 是否 oracle 模式（ref RTTM 替代 segmentation 前端）。
+        extractor: 正常模式的 chunk 提取器（oracle 模式为 None）。
     """
 
     def __init__(
         self,
         config: ChunkPipelineConfig,
         model_path: Optional[str] = None,
+        oracle: bool = False,
     ):
         """加载模型并初始化执行器。
 
         Args:
             config: 管线配置。
             model_path: 显式模型路径覆盖。
+            oracle: True 时用 OracleFrontend（无 segmentation 模型）+
+                RegionEmbedder 组合替代 ChunkExtractor。
         """
-        self.config = config
-        self.extractor = ChunkExtractor(config, model_path)
 
-    def process_file(self, audio_path: str, exp_dir: Path) -> str:
+        self.config = config
+        self.oracle = oracle
+        if oracle:
+            self.extractor = None
+            self.oracle_frontend = OracleFrontend(config)
+            self.region_embedder = build_region_embedder(config, model_path)
+            self.track_builder = ChunkTrackBuilder(config)
+        else:
+            self.extractor = ChunkExtractor(config, model_path)
+
+    @staticmethod
+    def _resolve_ref_rttm(ref: Optional[str], audio_path: str) -> str:
+        """解析当前音频对应的参考 RTTM 路径。
+
+        Args:
+            ref: --ref 传入的路径（RTTM 文件或含 {uri}.rttm 的目录）。
+            audio_path: 当前音频路径（uri 取其文件名主干）。
+
+        Returns:
+            参考 RTTM 路径。
+
+        Raises:
+            ValueError: oracle 模式未提供 --ref，或按目录解析的 RTTM 不存在。
+        """
+
+        if ref is None:
+            raise ValueError("oracle 模式需要 --ref 指定参考 RTTM（文件或目录）")
+        ref_path = Path(ref)
+        if ref_path.is_dir():
+            candidate = ref_path / f"{Path(audio_path).stem}.rttm"
+            if not candidate.is_file():
+                raise ValueError(f"参考 RTTM 不存在: {candidate}")
+            return str(candidate)
+        return str(ref_path)
+
+    def process_file(
+        self, audio_path: str, exp_dir: Path, ref: Optional[str] = None
+    ) -> str:
         """处理单条音频，输出 RTTM。
 
         Args:
             audio_path: 音频文件路径；uri 取其文件名主干。
             exp_dir: 本次 run 的输出目录。
+            ref: oracle 模式的参考 RTTM（文件或目录）；正常模式忽略。
 
         Returns:
             raw RTTM 路径。
@@ -126,7 +174,20 @@ class DiarizationRunner:
         clusterer = build_clusterer(config)
 
         waveform = load_audio(audio_path, obj_fs=config.sample_rate)
-        waveform = self.extractor.prepare_waveform(waveform, config.sample_rate)
+        if self.oracle:
+            ref_rttm = self._resolve_ref_rttm(ref, audio_path)
+            waveform = prepare_mono_waveform(
+                waveform, config.sample_rate, config.sample_rate
+            )
+            artifacts = oracle_chunk_artifacts(
+                self.oracle_frontend.iter_prepared_chunks(waveform, ref_rttm),
+                waveform,
+                self.region_embedder,
+                self.track_builder,
+            )
+        else:
+            waveform = self.extractor.prepare_waveform(waveform, config.sample_rate)
+            artifacts = self.extractor.iter_chunk_artifacts(waveform)
 
         uri = Path(audio_path).stem
         raw_rttm_path = str(exp_dir / "rttm" / f"{uri}.{clusterer.output_tag}.rttm")
@@ -203,7 +264,7 @@ class DiarizationRunner:
         # 生成器惰性生产 chunk：streaming 后端下输出延迟 ≈ 一个 hop，
         # 不会因为组合成统一循环而引入额外的缓冲。
         run_clustering(
-            self.extractor.iter_chunk_artifacts(waveform),
+            artifacts,
             clusterer,
             writer,
             chunk_hook=chunk_log_hook,

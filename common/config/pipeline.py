@@ -103,18 +103,10 @@ class ChunkPipelineConfig:
     post_merge_min_count: int = 8
     post_merge_min_similarity: float = 0.0
 
-    # ---- 分段音频导出（separation 独立离线工具使用；不在管线内） ----
-    # TIGER 分离模型（Hugging Face，固定 2 路输出、16kHz）。
-    separation_model: str = "JusperLee/TIGER-speech"
-    # 离线工具的帧扫描步长（秒）。
-    separation_frame_step: float = 0.05
-    # 能量门控：音轨 RMS / 混合 RMS 低于该比值判伪源，整窗回退原始音频。
-    separation_energy_ratio: float = 0.05
-    # 2x2 匹配的最小余弦相似度，低于则回退原始音频（仅防分离崩溃，不宜调高）。
-    separation_min_match_similarity: float = 0.10
-    # 单个音频段的最长时长（秒）：达到即强制闭合并另开新段续接，
-    # 避免连续讲话时 open segment 无界增长（内存与输出延迟失去上界）。
-    max_segment_duration: float = 20.0
+    # ---- oracle 前端（--oracle 模式：ref RTTM 替代 segmentation） ----
+    # oracle 帧网格步长（秒）：ref RTTM 解析后按该步长生成全时间线逐帧活跃
+    # 记录，同时是 oracle seg_scores 的帧网格基准。
+    oracle_frame_step: float = 0.05
 
     # ---- RTTM 输出 ----
     min_segment_duration: float = 0.30
@@ -234,8 +226,8 @@ def _validate_and_normalize(config: ChunkPipelineConfig) -> ChunkPipelineConfig:
         校验并规范化后的同一配置实例（原地修改 hf_cache_dir）。
 
     Raises:
-        ValueError: chunk_duration / hop_duration / post_merge_* /
-            max_segment_duration 等数值约束不满足。
+        ValueError: chunk_duration / hop_duration / post_merge_* 等数值约束
+            不满足。
     """
 
     if config.chunk_duration <= 0.0:
@@ -246,8 +238,6 @@ def _validate_and_normalize(config: ChunkPipelineConfig) -> ChunkPipelineConfig:
         raise ValueError("post_merge_min_similarity must be >= 0")
     if config.hop_duration <= 0.0 or config.hop_duration > config.chunk_duration:
         raise ValueError("hop_duration must be in (0, chunk_duration]")
-    if config.max_segment_duration <= 0.0:
-        raise ValueError("max_segment_duration must be > 0")
     for name in (
         "fastdiar_assign_threshold",
         "fastdiar_confidence_threshold",

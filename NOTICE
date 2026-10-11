@@ -18,11 +18,6 @@ This product includes software and model assets from pyannote/pyannote-audio
 Copyright (c) 2023 CNRS
 Licensed under the MIT License.
 
-This product includes software and model assets from JusperLee/TIGER
-(<https://github.com/JusperLee/TIGER>), used in `common/look2hear`.
-Copyright 2024-2025 Tsinghua University & TIGER Authors (Mohan Xu, Kai Li, Guo Chen, Xiaolin Hu). All Rights Reserved.
-Licensed under the Apache License, Version 2.0.
-
 This product includes software from FunASR
 (<https://github.com/modelscope/FunASR>), used in `asr/` for speech transcription.
 

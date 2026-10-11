@@ -46,13 +46,8 @@ fastdiar_merge_threshold: 0.80
 post_merge_min_count: 8
 post_merge_min_similarity: 0.0
 
-# ---- 分段音频导出（separation 独立离线工具使用；不在管线内） ----
-separation_model: JusperLee/TIGER-speech
-# 离线工具的帧扫描步长（秒）
-separation_frame_step: 0.05
-separation_energy_ratio: 0.05
-separation_min_match_similarity: 0.10
-max_segment_duration: 20.0
+# ---- oracle 前端（--oracle 模式：ref RTTM 替代 segmentation） ----
+oracle_frame_step: 0.05
 
 # ---- RTTM 输出 ----
 min_segment_duration: 0.30

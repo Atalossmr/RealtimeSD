@@ -2,7 +2,7 @@
 """嵌入质量分析：复用 chunks.npz + 参考 RTTM，评估 embedding 的说话人可区分性。
 
 只读 npz 与 RTTM（纯 numpy，不加载任何模型；RTTM 解析复用权威实现
-separation.rttm.load_rttm，标准库级依赖），逐文件：
+common.utils.rttm.load_rttm，标准库级依赖），逐文件：
 
 1. 基础统计：observation 数量、embedding 维度、L2 范数、时长分布、
    与参考说话人映射的 ambiguous 比例
@@ -32,10 +32,10 @@ import numpy as np
 
 import matplotlib
 
-# 作为脚本直接运行时 sys.path[0] 是 tools/，补仓库根以 import separation。
+# 作为脚本直接运行时 sys.path[0] 是 tools/，补仓库根以 import common。
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from separation.rttm import load_rttm as _load_rttm_turns  # noqa: E402
+from common.utils.rttm import load_rttm as _load_rttm_turns  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -47,7 +47,7 @@ INSEPARABLE_SIM = 0.85
 
 
 def load_rttm(path: Path) -> tuple[list[tuple[float, float, str]], list[str]]:
-    """解析 RTTM 为语音段与说话人列表（separation.rttm.load_rttm 的薄封装）。
+    """解析 RTTM 为语音段与说话人列表（common.utils.rttm.load_rttm 的薄封装）。
 
     Args:
         path: RTTM 文件路径。

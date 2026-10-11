@@ -10,6 +10,7 @@
     HF_CACHE_DIR    → --hf_cache_dir  DEBUG=1      → --debug
     SHOW_RTTM=1     → --show_rttm     OUTPUT_ROOT  → --output_root
     RUN_NAME        → --run_name      CONFIG_PATH  → --config
+    ORACLE=1        → --oracle        REF          → --ref
 
 用法：
 
@@ -107,6 +108,8 @@ def main() -> int:
         run_name=args.run_name,
         test_name=_TEST_NAME,
         model_path=merged_args.model_path,
+        oracle=bool(args.oracle),
+        ref=args.ref,
         verbose=bool(merged_args.verbose or args.debug),
         header_fields={
             "audio_input": audio,

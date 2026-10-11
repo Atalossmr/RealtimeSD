@@ -43,6 +43,19 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--hf_cache_dir", default=os.environ.get("HF_CACHE_DIR") or None
     )
+    parser.add_argument(
+        "--oracle",
+        action="store_true",
+        default=env_flag("ORACLE", False),
+        help="oracle 模式：用 --ref 的参考 RTTM 替代 segmentation 前端"
+        "（不加载 segmentation 模型），用于上限实验",
+    )
+    parser.add_argument(
+        "--ref",
+        default=os.environ.get("REF") or None,
+        help="oracle 模式的参考 RTTM：单文件给 RTTM 路径，批量给含 "
+        "{uri}.rttm 的目录；--oracle 时必填",
+    )
 
 
 def check_input_paths(audio: Path, config_path: Path) -> None:

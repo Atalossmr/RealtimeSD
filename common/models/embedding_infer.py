@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import torch
@@ -14,8 +14,12 @@ import torch.nn.functional as F
 from .modelscope import resolve_modelscope_snapshot
 
 from ..constants import BASE_DIR
+from ..utils.device import resolve_device
 from common.speakerlab.models.eres2net.ERes2NetV2 import ERes2NetV2
 from common.speakerlab.process.processor import FBank
+
+if TYPE_CHECKING:
+    from ..config import ChunkPipelineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -269,3 +273,171 @@ class NativeERes2NetV2SegmentEmbedder:
             emb.detach().cpu().numpy().astype(np.float32, copy=False)
             for emb in embeddings
         ]
+
+
+class RegionEmbedder:
+    """整段波形 + 绝对秒区间 → 各区间组的 embedding。
+
+    在 NativeERes2NetV2SegmentEmbedder 之上补齐三件事：按绝对秒从整段
+    波形裁剪并拼接区间、按 batch_size 分批推理、退化 embedding（NaN/inf
+    或零范数）守卫。diarization 的实时前端与 oracle 前端
+    （diarization/frontend/oracle.py）共用这一层。
+    """
+
+    def __init__(
+        self,
+        embedder: NativeERes2NetV2SegmentEmbedder,
+        sample_rate: int,
+        batch_size: int = 4,
+    ):
+        """初始化区域 embedding 提取器。
+
+        Args:
+            embedder: 已构建的分段 embedding 提取器。
+            sample_rate: 波形采样率（区间秒数按它换算采样点下标）。
+            batch_size: 分批推理的批大小。
+        """
+
+        self.embedder = embedder
+        self.sample_rate = sample_rate
+        self.batch_size = max(1, int(batch_size))
+
+    def slice_regions(
+        self,
+        waveform: torch.Tensor,
+        regions: list[tuple[float, float]],
+    ) -> Optional[torch.Tensor]:
+        """按绝对时间从整段波形裁出各 region 并拼接。
+
+        Args:
+            waveform: 整段波形，形状 (channels, samples)。
+            regions: 绝对秒 (start, end) 区间列表，按时间升序。
+
+        Returns:
+            各 region 切片沿时间维首尾拼接的波形；全部为空（含越界截断后
+            为空）时返回 None。
+        """
+
+        total_samples = waveform.shape[1]
+        pieces: list[torch.Tensor] = []
+        for start, end in regions:
+            # region 为绝对秒数，换算成采样点下标并钳制到波形范围内；
+            # 越界（区间由帧网格推出，可能略超出实际音频）时截断。
+            start_sample = max(
+                0, min(int(round(start * self.sample_rate)), total_samples)
+            )
+            end_sample = max(
+                start_sample, min(int(round(end * self.sample_rate)), total_samples)
+            )
+            if end_sample > start_sample:
+                pieces.append(waveform[:, start_sample:end_sample])
+        if not pieces:
+            return None
+        # 同一区间组的多个段直接首尾拼接，作为一次 embedding 的输入。
+        return torch.cat(pieces, dim=1)
+
+    def embed_waveforms(
+        self, waveforms: list[torch.Tensor]
+    ) -> list[Optional[np.ndarray]]:
+        """分批为各段波形提 embedding，含退化 embedding 守卫。
+
+        NaN/inf 的 embedding 会让下游 Hungarian 指派直接抛错，零范数会造出
+        永远无法匹配/合并的幽灵质心；来源通常是分割误检出的数字静音段。
+        此处统一记为 None，交由调用方按"无 embedding"处理。
+
+        Args:
+            waveforms: 待提 embedding 的波形段列表。
+
+        Returns:
+            与输入一一对应的 embedding 列表；退化项为 None。
+        """
+
+        embeddings: list[Optional[np.ndarray]] = []
+        for start in range(0, len(waveforms), self.batch_size):
+            batch = self.embedder.embed_segments(waveforms[start : start + self.batch_size])
+            for embedding in batch:
+                if embedding is not None and (
+                    not np.isfinite(embedding).all()
+                    or float(np.linalg.norm(embedding)) <= 1e-12
+                ):
+                    logger.warning("degenerate embedding skipped")
+                    embedding = None
+                embeddings.append(embedding)
+        return embeddings
+
+    def embed_regions(
+        self,
+        waveform: torch.Tensor,
+        regions_per_group: list[list[tuple[float, float]]],
+    ) -> list[Optional[np.ndarray]]:
+        """整段波形上按区间组提 embedding（裁剪拼接 + 分批 + 守卫）。
+
+        Args:
+            waveform: 整段波形，形状 (channels, samples)。
+            regions_per_group: 每组一份绝对秒 (start, end) 区间列表，一组
+                产出一条 embedding。
+
+        Returns:
+            与 regions_per_group 一一对应的 embedding 列表；裁不出波形或
+            退化的组为 None。
+        """
+
+        segments: list[torch.Tensor] = []
+        index_map: list[int] = []
+        for group_idx, regions in enumerate(regions_per_group):
+            segment = self.slice_regions(waveform, regions)
+            if segment is None or segment.shape[1] <= 0:
+                continue
+            segments.append(segment)
+            index_map.append(group_idx)
+
+        embeddings: list[Optional[np.ndarray]] = [None] * len(regions_per_group)
+        for group_idx, embedding in zip(index_map, self.embed_waveforms(segments)):
+            embeddings[group_idx] = embedding
+        return embeddings
+
+
+def build_region_embedder(
+    config: "ChunkPipelineConfig",
+    model_path: Optional[str] = None,
+) -> RegionEmbedder:
+    """按管线配置构建 RegionEmbedder。
+
+    封装模型加载、FBank 与两层 embedder 的组装，供 diarization extract
+    与 pipeline 的 oracle 模式共用。
+
+    Args:
+        config: 管线配置（取 device/model_type/feat_dim/embedding_size/
+            m_channels/sample_rate/normalize_embeddings/segment_batch_size）。
+        model_path: 显式 checkpoint 路径覆盖；为 None 时按 config.model_type
+            解析默认路径。
+
+    Returns:
+        构建好的 RegionEmbedder。
+    """
+
+    device = resolve_device(config.device)
+    embedding_model = load_embedding_model(
+        model_path=model_path,
+        device=device,
+        model_type=config.model_type,
+        feat_dim=config.feat_dim,
+        embedding_size=config.embedding_size,
+        m_channels=config.m_channels,
+    )
+    feature_extractor = FBank(
+        n_mels=config.feat_dim,
+        sample_rate=config.sample_rate,
+        mean_nor=True,
+    )
+    embedder = NativeERes2NetV2SegmentEmbedder(
+        embedding_model=embedding_model,
+        feature_extractor=feature_extractor,
+        sample_rate=config.sample_rate,
+        normalize_embeddings=config.normalize_embeddings,
+    )
+    return RegionEmbedder(
+        embedder=embedder,
+        sample_rate=config.sample_rate,
+        batch_size=config.segment_batch_size,
+    )

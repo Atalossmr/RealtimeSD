@@ -58,8 +58,9 @@
     --input exp/experiments/task1-6_extract/embeddings --ref datasets/task1-6/rttm \
     --set global_match_threshold=... --output exp/experiments/e5_sweep_streaming.csv
 
-# E6 分离段重聚类（需先用 separation 离线工具跑出 segments：python -m separation.app
-#   --wav <音频> --rttm <refined RTTM> --output_dir exp/experiments/task1-6_sep；提嵌入需 GPU）
+# E6 分离段重聚类（消费 {uri}.segments.jsonl manifest 中 kind=solo 的段；
+#   manifest 为历史实验产物——产生它的 tools/separation 音频导出工具已移除，
+#   现有 exp/ 下的旧 manifest 仍可直接复用；提嵌入需 GPU）
 .venv/bin/python tools/experiments/separated_recluster.py \
     --segments exp/experiments/task1-6_sep --ref datasets/task1-6/rttm \
     --mixture-input exp/experiments/task1-6_extract/embeddings \

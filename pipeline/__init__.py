@@ -1,8 +1,7 @@
 """组合层：把 diarization 装配成完整管线（音频 → RTTM）。
 
-定位：common/ 是无业务语义的共享底座，diarization/、separation/ 是互不
-依赖的业务包（separation 为独立离线工具，不在管线内）；本包是
-唯一同时知道它们的层——
+定位：common/ 是无业务语义的共享底座，diarization/ 是业务包；
+本包是唯一同时知道多个模块协作语义的层——
 
 - `api`：一次完整运行的公开入口（`process(audio=...)` 统一支持单文件
   与批量），run.py 与 test_der.py 均为其薄 CLI 封装；

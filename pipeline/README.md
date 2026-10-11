@@ -1,17 +1,15 @@
 # pipeline：组合层
 
 把 `diarization/` 装配成完整管线（音频 → RTTM）的代码集中在这一层。
-`separation/` 是独立离线工具（`python -m separation.app`），不在管线内。
 分层规则：
 
 ```
-common ← diarization / separation ← pipeline ← run.py / test_der.py
+common ← diarization ← pipeline ← run.py / test_der.py
 ```
 
 - `common/` 是无业务语义的共享底座，不 import 任何业务包；
-- 两个业务包之间互不 import，共享契约（contracts / config / models / utils）
-  统一从 `common` 取；
-- pipeline 是唯一同时依赖多个业务包的层。
+- 共享契约（contracts / config / models / utils）统一从 `common` 取；
+- pipeline 是唯一同时依赖多个模块的层。
 
 例外：`diarization/app.py`（独立 CLI）复用 `pipeline.run_diarization`，
 构成入口脚本级的 diarization → pipeline 反向依赖——app 是 CLI 不是库代码，
@@ -31,7 +29,11 @@ diarization 的库代码（extract/cluster/utils）不依赖本包。
   不中断整批）。覆盖输出目录、diarization 执行、结果汇总；
   `resolve_run_dirs` 提供输出路径约定的单一口径。
 - `runner.py`：`DiarizationRunner` / `run_diarization`——extract + cluster
-  + RTTM 的组合执行；模型只加载一次，可连续处理多条音频。
+  + RTTM 的组合执行；模型只加载一次，可连续处理多条音频。oracle 模式
+  （`--oracle --ref <参考 RTTM 文件|目录>`）用
+  `diarization.frontend.OracleFrontend` 替代 segmentation 前端（不加载
+  segmentation 模型），与 `diarization.extract.oracle.oracle_chunk_artifacts`
+  组合后走同一聚类/输出路径，用于上限实验。
 - `eval.py`：`run_der_evaluation`——对管线产出的 refined RTTM 目录计算
   逐文件 + 拼接全局 DER（封装 tools/compute_der.py 子进程调用与结果回写，
   路径按仓库根锚定，与 cwd 无关）。

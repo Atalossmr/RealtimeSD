@@ -14,6 +14,7 @@
     DER_VERBOSE=0 → --no-der_verbose
     COLLAR=0.25   → --collar 0.25
     OUTPUT_ROOT → --output_root   RUN_NAME     → --run_name
+    ORACLE=1    → --oracle        REF          → --ref
 
 用法：
 
@@ -131,6 +132,8 @@ def main() -> int:
         run_name=args.run_name,
         test_name=_TEST_NAME,
         model_path=merged_args.model_path,
+        oracle=bool(args.oracle),
+        ref=args.ref,
         verbose=args.debug,
         header_title="DER test",
         header_fields={

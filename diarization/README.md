@@ -39,7 +39,7 @@
 - 若纯净区总长 < `min_segment_duration_for_embedding` → 回退全活跃区拼接 → `overlap_fallback`，embedding 可提取但不允许常规更新
 - 回退后仍不足 → 跳过
 
-相关代码见`diarization/extract/track_builder.py`
+相关代码见`diarization/frontend/track_builder.py`
 
 ### 2) Hungarian联合分配
 
@@ -87,14 +87,19 @@
 见 `pipeline/README.md`）：
 
 ```
-diarization/           # 嵌入提取 + 聚类 + RTTM 输出
+diarization/           # 前端 + 嵌入提取 + 聚类 + RTTM 输出
   app.py               # 端到端 CLI（python3 -m diarization.app，委托 pipeline.run_diarization）
   utils/               # chunk_io：两阶段中间文件 <stem>.chunks.npz 存取（通用工具已上提 common/utils）
-  extract/             # 子模块 1：嵌入提取
-    extractor.py       #   ChunkExtractor：模型加载、波形预处理、chunk 生成器（chunk 生产唯一来源）
+  frontend/            # 子模块 1：extract 前端（embedding 之前的一切，与 extract 平级）
+    frontend.py        #   ChunkFrontend：滑窗调度 + segmentation + track 构建，产 PreparedChunk
+    oracle.py          #   OracleFrontend：ref RTTM 驱动的 oracle 前端（无模型，--oracle 模式）
+    scheduling.py      #   iter_chunk_schedule：滑窗/commit 区几何（实时与 oracle 前端共用）
     track_builder.py   #   chunk 内 local track 构造：纯净区优先、overlap_fallback 回退、时长门控
+  extract/             # 子模块 2：嵌入提取
+    extractor.py       #   ChunkExtractor：前端 + RegionEmbedder 的组合 facade（chunk 生产唯一来源）
+    oracle.py          #   oracle_chunk_artifacts：oracle 前端 + RegionEmbedder -> ChunkArtifacts
     app.py             #   提取阶段 CLI（python3 -m diarization.extract.app）
-  cluster/             # 子模块 2：聚类与输出
+  cluster/             # 子模块 3：聚类与输出
     base.py            #   后端接口 BaseChunkClusterer
     backends/          #   内置后端与工厂 build_clusterer
       streaming.py     #     StreamingChunkClusterer：默认 streaming 后端（Hungarian + SMA，一次定案）
@@ -105,30 +110,19 @@ diarization/           # 嵌入提取 + 聚类 + RTTM 输出
     runner.py          #   run_clustering：聚类消费循环（pipeline 与 cluster/app 共用）
     app.py             #   聚类阶段 CLI（python3 -m diarization.cluster.app）
 
-separation/            # 独立离线工具：按 RTTM 拆分纯净段（不在管线内，见 separation/README.md）
-  app.py               #   离线 CLI（python -m separation.app --wav x.wav --rttm x.rttm --output_dir out/）
-  offline.py           #   separate_by_rttm：窗口归并、分离 dispatch、回退策略、段组装编排
-  rttm.py              #   RTTM 解析与帧级活跃生成
-  attribution.py       #   身份确认纯函数：overlap_regions / cosine /
-                       #     energy_gate / match_pair / best_match
-  assembler.py         #   SegmentAssembler：open-segment 拼接与闭合推出
-  sink.py              #   SegmentCallback / WavSegmentSink：wav 落盘 + manifest.jsonl
-  utils.py             #   切片/能量纯函数：AudioSource / slice_absolute / rms / rms_over_regions
-
 common/
   constants.py         # 路径常量（BASE_DIR）
   config/              # 配置体系：base（通用 YAML/CLI 合并机制）+ pipeline（ChunkPipelineConfig + 管线 CLI helper）
   contracts/           # chunk 管线共享数据契约：schema（ChunkObservation / ChunkArtifacts / 调试 TypedDict）+
                        #   frames（commit 区帧裁剪，RTTM writer 使用；oracle 实验脚本镜像同口径）
-  utils/               # 通用工具：log（setup_logger / log_structured）/ paths / numeric / device / audio（重采样）
-  models/              # 模型封装：embedding_infer（ERes2NetV2）/ segmentation_infer（pyannote）/
-                       #   hf_resolver / tiger（TigerSeparator：TIGER 2 路分离的惰性封装）
+  utils/               # 通用工具：log（setup_logger / log_structured）/ paths / numeric / device / audio（重采样）/ rttm（RTTM 解析）
+  models/              # 模型封装：embedding_infer（ERes2NetV2 + RegionEmbedder）/ segmentation_infer（pyannote）/
+                       #   hf_resolver / modelscope（模型缓存解析）
   speakerlab/          # vendored：3D-Speaker 依赖（ERes2NetV2 / FBank / fileio）+ md-eval.pl
-  look2hear/           # vendored：TIGER 分离模型
 ```
 
-- diarization 与 separation 两包互不 import，共享契约（contracts / config /
-  models / utils）统一从 `common` 取，由 `pipeline/` 组合层做接线。
+- 共享契约（contracts / config / models / utils）统一从 `common` 取，由
+  `pipeline/` 组合层做接线。
 - 若要新增聚类方法，则需在 `cluster/backends/` 下新建模块实现 `BaseChunkClusterer`（具体接口见 `cluster/base.py`）并在 `build_clusterer` 注册。
 
 ## 输入输出与调试
@@ -202,8 +196,8 @@ argparse 默认值 < YAML 配置 < 显式 CLI 参数。
 
 ### 文件交互接口
 
-diarization 的产物经输出目录的文件被下游消费（separation 离线工具消费
-refined RTTM，详见 `separation/README.md`）。
+diarization 的产物经输出目录的文件被下游消费（如 DER 评估与
+tools/ 下的分析/扫描工具消费 refined RTTM 与 chunks.npz）。
 **核心约定：所有对外文件里的 speaker id 都是 clusterer 的 global id**
 （含 RTTM 行内的 speaker 字段）。
 写读时序保证：追加在依赖之后、JSON/RTTM 重写均走临时文件 + 原子替换，保证消费者永远读不到半写文件。
@@ -242,12 +236,6 @@ refined RTTM，详见 `separation/README.md`）。
 逐 chunk 的 observations（含 embedding）+ 帧级输出参数，纯 numpy 无 pickle；
 字段布局见 `utils/chunk_io.py` 的模块 docstring。`diarization.cluster.app`
 消费它重放聚类（换后端/调参秒级完成）；离线分析需要的 embedding 也从这里取。
-
-#### 分段音频（separation 离线工具产物）
-
-`segments/{uri}.segments.jsonl` + `segments/{uri}/` 由 `separation.app` 按
-refined RTTM 离线产出（写在其自己的 `--output_dir` 下），字段契约见
-`separation/README.md`。
 
 ### 调试建议
 

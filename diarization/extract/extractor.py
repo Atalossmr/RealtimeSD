@@ -1,200 +1,103 @@
-"""嵌入提取阶段：音频 -> 逐 chunk 的 ChunkArtifacts（含 embedding）。
+"""嵌入提取阶段组合层：音频 -> 逐 chunk 的 ChunkArtifacts（含 embedding）。
 
 `ChunkExtractor` 是 chunk 生产的唯一来源：端到端组合层（pipeline 的
 `run_diarization`）与提取 CLI（diarization/extract/app.py）共用它，保证
 两个阶段的 chunk 切分、segmentation、track 聚合与 embedding 完全一致。
+
+内部为两层组合：
+- 前端 `ChunkFrontend`（diarization/frontend/，与 extract 平级）：
+  滑窗调度 + segmentation + track 构建；
+- 提取器 `RegionEmbedder`（common/models/embedding_infer.py）：
+  波形 + 区间 -> embedding，oracle 模式（pipeline --oracle）亦复用。
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
-import numpy as np
 import torch
-import torch.nn.functional as F
 
-from common.speakerlab.process.processor import FBank
 from common.speakerlab.utils.fileio import load_audio
 
-from common.models.embedding_infer import (
-    NativeERes2NetV2SegmentEmbedder,
-    load_embedding_model,
-)
-from common.models.segmentation_infer import PyannoteStreamingSegmentation
 from common.config import ChunkPipelineConfig
 from common.contracts import ChunkArtifacts, ChunkObservation
-from common.utils.audio import resample_waveform_if_needed
+from common.models.embedding_infer import RegionEmbedder, build_region_embedder
+from common.utils.audio import prepare_mono_waveform
 from common.utils.device import resolve_device
 
+from ..frontend import ChunkFrontend, LocalTrack
 from ..utils import save_chunks
-from .track_builder import ChunkTrackBuilder, LocalTrack
 
 
 logger = logging.getLogger(__name__)
 
 
+def embed_tracks(
+    region_embedder: RegionEmbedder,
+    track_builder,
+    waveform: torch.Tensor,
+    tracks: list[LocalTrack],
+) -> list[ChunkObservation]:
+    """批量为各 track 提 embedding 并组装 observation。
+
+    裁不出波形的 track 跳过（不产 observation）；退化 embedding 由
+    RegionEmbedder 记为 None（保留 observation，交由下游按"无
+    embedding"处理）。oracle 前端路径（diarization/extract/oracle.py）
+    与 ChunkExtractor 共用本函数，保证两条路径的 embedding 行为一致。
+
+    Args:
+        region_embedder: 区域 embedding 提取器。
+        track_builder: 提供 to_observation 的 track 构造器。
+        waveform: 整段波形（非当前 chunk），形状 (channels, samples)。
+        tracks: 当前 chunk 的 local track 列表。
+
+    Returns:
+        与有效 track 一一对应的 ChunkObservation 列表。
+    """
+
+    segments: list[torch.Tensor] = []
+    pending: list[LocalTrack] = []
+    for track in tracks:
+        # 从整段波形（而非当前 chunk）裁剪：track 区域可能落在提交区外的
+        # margin 里，但都在本 chunk 覆盖的时间范围内。
+        segment = region_embedder.slice_regions(waveform, track.regions)
+        if segment is None or segment.shape[1] <= 0:
+            continue
+        segments.append(segment)
+        pending.append(track)
+
+    return [
+        track_builder.to_observation(track, embedding)
+        for track, embedding in zip(
+            pending, region_embedder.embed_waveforms(segments)
+        )
+    ]
+
+
 class ChunkExtractor:
-    """chunk 级嵌入提取器：segmentation-3.0 局部识别 + ERes2NetV2 embedding。"""
+    """chunk 级嵌入提取器：前端 + RegionEmbedder 的组合 facade。"""
 
     def __init__(
         self,
         config: ChunkPipelineConfig,
         embedding_model_path: Optional[str],
     ):
-        """初始化 embedding 模型、特征提取、segmentation 与 track 构造器。
+        """初始化前端与区域 embedding 提取器。
 
         Args:
             config: chunk 管线配置。
             embedding_model_path: embedding 模型权重路径；为 None 时按
                 model_type 解析默认路径。
         """
+
         self.config = config
         self.device = resolve_device(config.device)
-
-        self.embedding_model = load_embedding_model(
-            model_path=embedding_model_path,
-            device=self.device,
-            model_type=config.model_type,
-            feat_dim=config.feat_dim,
-            embedding_size=config.embedding_size,
-            m_channels=config.m_channels,
+        self.frontend = ChunkFrontend(config)
+        self.region_embedder: RegionEmbedder = build_region_embedder(
+            config, embedding_model_path
         )
-        self.feature_extractor = FBank(
-            n_mels=config.feat_dim,
-            sample_rate=config.sample_rate,
-            mean_nor=True,
-        )
-        self.segmentation = PyannoteStreamingSegmentation(
-            model_name=config.segmentation_model,
-            duration=config.chunk_duration,
-            batch_size=config.segmentation_batch_size,
-            device=self.device,
-            cache_dir=config.hf_cache_dir,
-            use_auth_token=config.hf_token,
-        )
-        self.embedder = NativeERes2NetV2SegmentEmbedder(
-            embedding_model=self.embedding_model,
-            feature_extractor=self.feature_extractor,
-            sample_rate=config.sample_rate,
-            normalize_embeddings=config.normalize_embeddings,
-        )
-        self.track_builder = ChunkTrackBuilder(config)
-
-    # ------------------------------------------------------------------
-    # 内部工具
-    # ------------------------------------------------------------------
-
-    def _slice_region(
-        self,
-        waveform: torch.Tensor,
-        start: float,
-        end: float,
-    ) -> Optional[torch.Tensor]:
-        """按绝对时间从整段波形裁出单个 region；越界截断，空区间返回 None。
-
-        Args:
-            waveform: 整段波形，形状 (channels, samples)。
-            start: region 起点（绝对秒）。
-            end: region 终点（绝对秒）。
-
-        Returns:
-            裁剪后的波形切片；区间为空（含越界截断后为空）时返回 None。
-        """
-
-        sample_rate = self.config.sample_rate
-        total_samples = waveform.shape[1]
-        # region 为绝对秒数，换算成采样点下标并钳制到波形范围内；
-        # 首尾 region 越界（track 时间由帧网格推出，可能略超出实际音频）时截断。
-        start_sample = max(0, min(int(round(start * sample_rate)), total_samples))
-        end_sample = max(
-            start_sample, min(int(round(end * sample_rate)), total_samples)
-        )
-        if end_sample <= start_sample:
-            return None
-        return waveform[:, start_sample:end_sample]
-
-    def _slice_regions(
-        self,
-        waveform: torch.Tensor,
-        regions: list[tuple[float, float]],
-    ) -> Optional[torch.Tensor]:
-        """按绝对时间从整段波形裁出各 region 并拼接。
-
-        Args:
-            waveform: 整段波形，形状 (channels, samples)。
-            regions: 绝对秒 (start, end) 区间列表，按时间升序。
-
-        Returns:
-            各 region 切片沿时间维首尾拼接的波形；全部为空时返回 None。
-        """
-
-        pieces: list[torch.Tensor] = []
-        for start, end in regions:
-            piece = self._slice_region(waveform, start, end)
-            if piece is not None:
-                pieces.append(piece)
-        if not pieces:
-            return None
-        # 同一 track 的多个纯净段直接首尾拼接，作为一次 embedding 的输入。
-        return torch.cat(pieces, dim=1)
-
-    def _embed_tracks(
-        self,
-        waveform: torch.Tensor,
-        tracks: list[LocalTrack],
-    ) -> list[ChunkObservation]:
-        """批量为各 track 提 embedding 并组装 observation。
-
-        按 config.segment_batch_size 分批推理；NaN/inf 或零范数的退化
-        embedding 记为 None（保留 observation，交由下游按"无 embedding"处理）。
-
-        Args:
-            waveform: 整段波形（非当前 chunk），形状 (channels, samples)。
-            tracks: 当前 chunk 的 local track 列表。
-
-        Returns:
-            与有效 track 一一对应的 ChunkObservation 列表（裁不出波形的
-            track 会被跳过）。
-        """
-
-        waveforms: list[torch.Tensor] = []
-        pending: list[LocalTrack] = []
-        for track in tracks:
-            # 从整段波形（而非当前 chunk）裁剪：track 区域可能落在提交区外的
-            # margin 里，但都在本 chunk 覆盖的时间范围内。
-            segment = self._slice_regions(waveform, track.regions)
-            if segment is None or segment.shape[1] <= 0:
-                continue
-            waveforms.append(segment)
-            pending.append(track)
-
-        observations: list[ChunkObservation] = []
-        # 分批提 embedding，避免单批过大占爆显存。
-        batch_size = max(1, int(self.config.segment_batch_size))
-        for start in range(0, len(pending), batch_size):
-            batch_waveforms = waveforms[start : start + batch_size]
-            batch_embeddings = self.embedder.embed_segments(batch_waveforms)
-            for track, embedding in zip(
-                pending[start : start + batch_size], batch_embeddings
-            ):
-                # 退化 embedding 防护：NaN/inf 会让下游 Hungarian 指派直接抛错
-                # （整个文件中途失败），零范数会造出永远无法匹配/合并的幽灵
-                # 质心。来源通常是分割误检出的数字静音段。记 embedding=None
-                # 交给下游统一按"无 embedding"处理（不指派、帧丢弃），
-                # observation 本身保留进 npz 缓存（has_embedding=False）供排查。
-                if embedding is not None and (
-                    not np.isfinite(embedding).all()
-                    or float(np.linalg.norm(embedding)) <= 1e-12
-                ):
-                    logger.warning(
-                        "degenerate embedding skipped: chunk local_idx=%d "
-                        "regions=%s", track.local_idx, track.regions,
-                    )
-                    embedding = None
-                observations.append(self.track_builder.to_observation(track, embedding))
-        return observations
 
     # ------------------------------------------------------------------
     # 主流程
@@ -214,21 +117,12 @@ class ChunkExtractor:
             config.sample_rate。
         """
 
-        waveform = resample_waveform_if_needed(
-            waveform, sample_rate, self.config.sample_rate
-        )
-        if waveform.ndim == 1:
-            waveform = waveform.unsqueeze(0)
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
-        return waveform.to(torch.float32)
+        return prepare_mono_waveform(waveform, sample_rate, self.config.sample_rate)
 
-    def iter_chunk_artifacts(self, waveform: torch.Tensor):
+    def iter_chunk_artifacts(
+        self, waveform: torch.Tensor
+    ) -> Iterator[ChunkArtifacts]:
         """按 chunk 顺序生产 ChunkArtifacts。
-
-        滑窗按 hop_duration 步进，每个窗口只提交中段 hop 秒（两侧留
-        margin 作边界缓冲；首窗左 margin 一并提交，尾窗截到音频末尾），
-        尾段不足一个 chunk 时补零后推理。
 
         Args:
             waveform: 单声道波形，形状 (1, samples)，采样率为
@@ -238,71 +132,22 @@ class ChunkExtractor:
             ChunkArtifacts: 逐 chunk 的 segmentation 分数与 observation。
         """
 
-        total_samples = waveform.shape[1]
-        total_duration = total_samples / self.config.sample_rate
-        chunk_samples = max(
-            1, int(round(self.config.chunk_duration * self.config.sample_rate))
-        )
-        hop_samples = max(
-            1, int(round(self.config.hop_duration * self.config.sample_rate))
-        )
-        # 提交区为窗口中段 hop 秒，两侧各留 margin 作为边界缓冲；
-        # 第一个窗口没有左侧缓冲，直接从 0 开始提交。
-        margin_duration = 0.5 * (self.config.chunk_duration - self.config.hop_duration)
-
-        chunk_index = 0
-        chunk_start_sample = 0
-        while chunk_start_sample < total_samples:
-            # 尾段不足一个 chunk 时补零：segmentation 按固定 chunk_duration 输入推理。
-            chunk = waveform[:, chunk_start_sample : chunk_start_sample + chunk_samples]
-            if chunk.shape[1] < chunk_samples:
-                chunk = F.pad(chunk, (0, chunk_samples - chunk.shape[1]))
-
-            chunk_start = chunk_start_sample / self.config.sample_rate
-            # 提交区 = 窗口中段 hop 秒。首窗没有左邻窗，左侧 margin 也一并提交，
-            # 否则音频开头 (chunk-hop)/2 秒会永远没有输出。
-            commit_start = (
-                chunk_start if chunk_index == 0 else chunk_start + margin_duration
+        for prepared in self.frontend.iter_prepared_chunks(waveform):
+            observations = embed_tracks(
+                self.region_embedder,
+                self.frontend.track_builder,
+                waveform,
+                prepared.tracks,
             )
-            # 尾窗提交区截到实际音频末尾；相邻窗口的提交区无缝拼接、互不重叠。
-            commit_end = min(
-                chunk_start + margin_duration + self.config.hop_duration,
-                total_duration,
-            )
-            # 音频尾部剩余不足一个 margin 时，最后一个窗口的提交区为空，直接结束。
-            if commit_start >= commit_end - 1e-9:
-                break
-
-            # 1) 局部识别。
-            # 返回的 centers（帧中心时刻）当前不使用：
-            # 帧时间统一由 chunk_start + frame_idx * frame_step 推得。
-            seg_scores, _ = self.segmentation(chunk, self.config.sample_rate)
-            if seg_scores.size == 0:
-                chunk_index += 1
-                chunk_start_sample += hop_samples
-                continue
-            # chunk 已补零到 chunk_duration，帧在窗口内均匀分布；
-            # 帧数由模型输出决定，frame_step 由此反推（约 16.9ms）。
-            frame_step = self.config.chunk_duration / seg_scores.shape[0]
-
-            # 2) local track 聚合 + embedding。
-            tracks = self.track_builder.build_tracks(
-                seg_scores, frame_step, chunk_start, commit_start, commit_end
-            )
-            observations = self._embed_tracks(waveform, tracks)
-
             yield ChunkArtifacts(
-                chunk_index=chunk_index,
-                seg_scores=seg_scores,
-                frame_step=frame_step,
-                chunk_start=chunk_start,
-                commit_start=commit_start,
-                commit_end=commit_end,
+                chunk_index=prepared.chunk_index,
+                seg_scores=prepared.seg_scores,
+                frame_step=prepared.frame_step,
+                chunk_start=prepared.chunk_start,
+                commit_start=prepared.commit_start,
+                commit_end=prepared.commit_end,
                 observations=observations,
             )
-
-            chunk_index += 1
-            chunk_start_sample += hop_samples
 
     def extract_file(self, wav_path: str) -> str:
         """提取阶段入口：生产 chunk artifacts 并落盘为 <stem>.chunks.npz。
@@ -336,4 +181,4 @@ class ChunkExtractor:
         return chunks_path
 
 
-__all__ = ["ChunkExtractor"]
+__all__ = ["ChunkExtractor", "embed_tracks"]

@@ -28,10 +28,10 @@ from typing import Optional, TypedDict
 
 import numpy as np
 
-# 作为脚本/子进程运行时 sys.path[0] 是 tools/，补仓库根以 import separation。
+# 作为脚本/子进程运行时 sys.path[0] 是 tools/，补仓库根以 import common。
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from separation.rttm import load_rttm  # noqa: E402
+from common.utils.rttm import load_rttm  # noqa: E402
 
 # RTTM 解析正则
 SCORED_SPEAKER_TIME = re.compile(r"(?<=SCORED SPEAKER TIME =)[\d.]+")
@@ -195,7 +195,7 @@ def compute_der(
 def analyze_rttm(rttm_file: str) -> Optional[RTTMStats]:
     """分析 RTTM 文件并返回基础统计信息。
 
-    解析复用 separation.rttm.load_rttm（仅 SPEAKER 行参与统计）。
+    解析复用 common.utils.rttm.load_rttm（仅 SPEAKER 行参与统计）。
 
     Args:
         rttm_file: RTTM 文件路径。

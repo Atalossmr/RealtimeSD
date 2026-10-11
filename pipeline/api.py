@@ -136,6 +136,8 @@ def process(
     run_name: str = "default",
     test_name: str = "common",
     model_path: Optional[str] = None,
+    oracle: bool = False,
+    ref: Optional[str] = None,
     verbose: bool = False,
     header_fields: Optional[Mapping[str, object]] = None,
     header_title: str = "Online Speaker Diarization pipeline",
@@ -158,6 +160,10 @@ def process(
         run_name: 本次运行名（输出目录为 {output_root}/{test_name}/{run_name}）。
         test_name: 测试/批次名。
         model_path: 显式模型路径；优先级高于 YAML 的 model_path 运行时键。
+        oracle: True 时用 ref RTTM 驱动的 oracle 前端替代 segmentation
+            前端（不加载 segmentation 模型），用于上限实验。
+        ref: oracle 模式的参考 RTTM：单文件给 RTTM 路径，批量给含
+            {uri}.rttm 的目录；oracle=True 时必填。
         verbose: 提升日志级别。
         header_fields: results.txt 记录头字段；缺省为内置字段集，值为
             None 的键不写出。
@@ -228,12 +234,12 @@ def process(
         # Path(audio_path).stem，同批两个不同目录的同名文件（如
         # a/01.wav 与 b/01.wav）会共用 uri——raw RTTM 相互覆盖。
         # 调用方应避免同批传入 stem 相同的音频。
-        runner = DiarizationRunner(config, model_path)
+        runner = DiarizationRunner(config, model_path, oracle=oracle)
         for audio_path in audio_paths:
             logger.info("Processing %s", audio_path)
             print(f"Processing {audio_path} ...")
             try:
-                raw_rttms.append(runner.process_file(audio_path, dirs.exp_dir))
+                raw_rttms.append(runner.process_file(audio_path, dirs.exp_dir, ref))
             except Exception:
                 failed.append(audio_path)
                 rc = 1

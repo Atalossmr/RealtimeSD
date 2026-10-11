@@ -6,10 +6,10 @@
 ## 项目内容
 
 - 入口：`python3 run.py <音频文件|目录|清单文本>`（diarization 一键运行：音频 → RTTM；目录/清单为批量模式，模型只加载一次）、`python3 -m diarization.app`（diarization 独立 CLI）、`python3 -m diarization.extract.app`（嵌入提取阶段）、`python3 -m diarization.cluster.app`（聚类阶段）
-- 离线分离工具：`python3 -m separation.app --wav x.wav --rttm x.rttm --output_dir out/`（按 RTTM 把含混叠音频拆成各 speaker 纯净段，重叠区 TIGER 分离 + embedding 归属匹配；详见 `separation/README.md`）
-- 库式调用：`pipeline.process(audio="x.wav", run_name="demo")`、`separation.separate_by_rttm(...)`
-- 配置文件：`config/config.yaml`（diarization 管线 + separation 工具共用的调参项）
-- 管线实现：`diarization/`（extract + cluster）+ `pipeline/`（组合层）；`separation/` 为独立离线工具，与 diarization 互不 import。模型代码统一在 `common/models/`
+- oracle 模式：`python3 run.py <音频> --oracle --ref <参考 RTTM 文件|目录>`（用 ref RTTM 驱动的 oracle 前端替代 segmentation 前端，不加载 segmentation 模型，用于上限实验；test_der.py 同样支持）
+- 库式调用：`pipeline.process(audio="x.wav", run_name="demo")`
+- 配置文件：`config/config.yaml`（diarization 管线调参项的唯一来源）
+- 管线实现：`diarization/`（frontend + extract + cluster）+ `pipeline/`（组合层）。模型代码统一在 `common/models/`
 - 运行脚本：`run.py`（一键运行）、`test_der.py`（DER 评估）
 - DER 评估：`tools/compute_der.py`
 - 运行日志分析：`tools/analyze_log.py`
@@ -42,8 +42,7 @@ pip install -r requirements.txt
 默认运行依赖：
 
 - `ERes2NetV2`（说话人 embedding）
-- `pyannote/segmentation-3.0`（局部说话人识别）
-- `TIGER`（语音分离，仅 separation 离线工具使用）
+- `pyannote/segmentation-3.0`（局部说话人识别；oracle 模式不加载）
 
 默认行为：
 
@@ -88,13 +87,13 @@ diarization 独立 CLI（与 `run.py` 等价，直接指定输出目录）：
 python3 -m diarization.app --wav <音频.wav> --output_dir <dir> --config config/config.yaml
 ```
 
-离线分离（先跑 diarization 得到 RTTM，再按 RTTM 拆分纯净段）：
+oracle 模式（ref RTTM 替代 segmentation 前端，上限实验）：
 
 ```bash
-python3 -m separation.app \
-  --wav <音频.wav> \
-  --rttm <dir>/rttm/<音频>.refined.rttm \
-  --output_dir <分离输出目录>
+python3 run.py <音频.wav> \
+  --oracle \
+  --ref <参考 RTTM 文件；批量时给含 {uri}.rttm 的目录> \
+  --run_name oracle
 ```
 
 调试：
@@ -119,9 +118,6 @@ output_dir/
 
 每次 run 的汇总记录追加在 run 目录上一级的 `{output_root}/{test_name}/results.txt`；
 `test_der.py` 的 DER 明细另写在 run 目录的 `logs/der.log` 与 `der_summary.txt`。
-
-`separation.app` 的输出目录独立指定（`--output_dir`），产出
-`{uri}.segments.jsonl` manifest 与 `{uri}/spk{id}_{start}_{end}.wav` 分段音频。
 
 ## 脚本使用
 
@@ -176,17 +172,14 @@ python3 test_der.py datasets/task1-6 --ref_rttm datasets/task1-6/rttm --run_name
 
 ## 仓库结构
 
-分层规则：`common ← diarization / separation ← pipeline ← run.py / test_der.py`。
-common 不 import 业务包；diarization 与 separation 两个业务包互不 import
-（separation 是独立离线工具，不在管线内）；pipeline 是唯一同时依赖多个
-业务包的组合层（详见 `pipeline/README.md`）。
+分层规则：`common ← diarization ← pipeline ← run.py / test_der.py`。
+common 不 import 业务包；pipeline 是唯一同时依赖多个模块的组合层
+（详见 `pipeline/README.md`）。
 
-- `diarization/`：说话人识别（extract + cluster 两级，chunk 管线）
-- `separation/`：离线分离工具（RTTM 解析 + 重叠区 TIGER 分离 + embedding 归属匹配 + 分段导出）
+- `diarization/`：说话人识别（frontend + extract + cluster，chunk 管线；frontend 含 ref RTTM 驱动的 oracle 前端）
 - `pipeline/`：组合层（api：一次完整运行的公开入口 process（单/批量统一）；runner：diarization 组合执行；eval：DER 评估；cli：入口脚本公共 CLI 辅助）
-- `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志与设备/音频/路径/数值工具、`models/` 模型封装、路径常量、`speakerlab/` 与 `look2hear/` 两个 vendored 模型依赖）
+- `common/`：公共实现（`config/` 配置体系、`contracts/` 跨包契约、`utils/` 日志与设备/音频/路径/数值/RTTM 工具、`models/` 模型封装、路径常量、`speakerlab/` vendored 模型依赖）
 - `common/speakerlab/`：3D-Speaker相关依赖（vendored）与 `md-eval.pl`
-- `common/look2hear/`：TIGER相关依赖（vendored）
 - `tools`：常用工具，包括参数扫描，log分析等
 - `run.py`：diarization 一键运行脚本
 - `test_der.py`：DER 评估脚本

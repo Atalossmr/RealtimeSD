@@ -21,7 +21,8 @@
   不可直接相比（时间线不同）。
 - "唯一变量是音频来源"只是近似：分离段为整段 embedding（可能数十秒），
   而对照的混合短段是 ≤4s 纯净区截断，时长与选段策略同时不同。
-- 归属失败回退混合音频的段（含串音）无法从 manifest 区分，一并参与统计。
+- 未归属的重叠窗音轨（kind=overlap_track/overlap_raw）在 load_manifest 后
+  按 kind 过滤，不参与可分性统计。
 
 用法：
   .venv/bin/python tools/experiments/separated_recluster.py \
@@ -346,7 +347,13 @@ def main() -> None:
         if not rttm_path.is_file():
             log(f"skip {uri}: ref RTTM not found: {rttm_path}")
             continue
-        entries = load_manifest(segments_dir, uri)
+        entries = [
+            entry
+            for entry in load_manifest(segments_dir, uri)
+            # 未归属的重叠窗音轨（kind=overlap_track/overlap_raw）不参与
+            # 可分性统计；旧版 manifest 无 kind 字段时按 solo 处理。
+            if entry.get("kind", "solo") == "solo"
+        ]
         embeddings, starts, ends, n_skipped = embed_segments(
             entries, embedder, config.sample_rate
         )
